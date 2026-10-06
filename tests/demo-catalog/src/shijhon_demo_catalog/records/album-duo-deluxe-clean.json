@@ -1,0 +1,472 @@
+{
+ "name": "album-duo-deluxe-clean",
+ "path": "albums/900000355",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000355"
+  },
+  "title": "Bright Circuits (Deluxe Version)",
+  "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+  "kind": "album",
+  "release_date": "2004-09-29",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000357"
+    },
+    "title": "Electric Engines (feat. Cato Oakes)",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 272252,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000259",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000358"
+    },
+    "title": "Wild Letters (feat. Søren Ilić)",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 266430,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000260",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000359"
+    },
+    "title": "Faded Stones 2",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 218824,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000261",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000360"
+    },
+    "title": "Amber 2 (feat. Lumi Duval)",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 178570,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000262",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-10",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000361"
+    },
+    "title": "Last Satellites",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 140139,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000263",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000362"
+    },
+    "title": "Broken Pilots",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 272616,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000264",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000363"
+    },
+    "title": "Restless Stones",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 203410,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000265",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000364"
+    },
+    "title": "Wild Gardens",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 174276,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000266",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000365"
+    },
+    "title": "Quiet Meadow",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 256304,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000267",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000366"
+    },
+    "title": "Restless Voices",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 300345,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000268",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000367"
+    },
+    "title": "Winter Islands (feat. Cato Oakes)",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 291130,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000269",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000368"
+    },
+    "title": "Frozen Engines (feat. Bram Marek)",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 202307,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000270",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000369"
+    },
+    "title": "Early Mirrors",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 503497,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000271",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000370"
+    },
+    "title": "Salt 3",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 274932,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000272",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-03-04",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000371"
+    },
+    "title": "Restless 2",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 199503,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000273",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000372"
+    },
+    "title": "Lunar Motors (feat. Greta Ellery)",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 315153,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000274",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000355"
+    },
+    "album_title": "Bright Circuits (Deluxe Version)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Hardcore Rap",
+     "East Coast Rap",
+     "Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": true,
+  "genres": [
+   "Hip-Hop/Rap",
+   "Hardcore Rap",
+   "East Coast Rap",
+   "Rap"
+  ],
+  "label": "Paper Harbor Records",
+  "upc": "990000000016",
+  "track_count": 16,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000337"
+   },
+   {
+    "catalog": "demo",
+    "id": "900000338"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000356/{w}x{h}.png",
+  "incomplete": false
+ }
+}

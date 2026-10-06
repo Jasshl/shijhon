@@ -1,0 +1,1016 @@
+{
+ "name": "search-ep",
+ "path": "search",
+ "status": 200,
+ "params": {
+  "term": "northern horizon"
+ },
+ "body": {
+  "artists": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000832"
+    },
+    "name": "Zeno Brandt",
+    "artwork_template": "https://covers.demo.invalid/900000833/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000859"
+    },
+    "name": "BrokenIslands",
+    "artwork_template": "https://covers.demo.invalid/900000860/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000886"
+    },
+    "name": "Pia Moreau",
+    "artwork_template": "https://covers.demo.invalid/900000887/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000913"
+    },
+    "name": "Mara Merritt",
+    "artwork_template": "https://covers.demo.invalid/900000914/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000940"
+    },
+    "name": "Lumi Ellery 2",
+    "artwork_template": "https://covers.demo.invalid/900000941/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000967"
+    },
+    "name": "Viggo Carver",
+    "artwork_template": "https://covers.demo.invalid/900000968/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000994"
+    },
+    "name": "Rosa Carver",
+    "artwork_template": "https://covers.demo.invalid/900000995/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001021"
+    },
+    "name": "Neve Hale",
+    "artwork_template": "https://covers.demo.invalid/900001022/{w}x{h}.png"
+   }
+  ],
+  "albums": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "title": "wild stones",
+    "artist": "Jonah Fairbanks",
+    "kind": "album",
+    "release_date": "2010-10-03",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Alternative",
+     "Electronic",
+     "Rock"
+    ],
+    "label": "Bright Records",
+    "upc": "990000000007",
+    "track_count": 9,
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000803"
+    },
+    "title": "LOW BRIDGES. - Single",
+    "artist": "Oren Delacroix 2",
+    "kind": "single",
+    "release_date": "2015-07-11",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "label": "Iron Voices Records",
+    "upc": "990000000029",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000804/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000805"
+    },
+    "title": "Salt 4 - Single",
+    "artist": "Greta Tallis & Juno Merritt",
+    "kind": "single",
+    "release_date": "2013-09-29",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap",
+     "Rap"
+    ],
+    "label": "Paper Canyon Records",
+    "upc": "990000000030",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000806/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000807"
+    },
+    "title": "TENDER VOICES",
+    "artist": "Jonah Fairbanks",
+    "kind": "album",
+    "release_date": "2012-05-20",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Alternative",
+     "Electronic",
+     "Rock"
+    ],
+    "label": "Golden Towers Records",
+    "upc": "990000000031",
+    "track_count": 14,
+    "artwork_template": "https://covers.demo.invalid/900000808/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000809"
+    },
+    "title": "distant - Single",
+    "artist": "Jonah Fairbanks & CrimsonParade",
+    "kind": "single",
+    "release_date": "2011-06-11",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop"
+    ],
+    "label": "Bright Records",
+    "upc": "990000000032",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000810/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000811"
+    },
+    "title": "silent meadow - Single",
+    "artist": "Jonah Fairbanks",
+    "kind": "single",
+    "release_date": "2013-01-04",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Alternative"
+    ],
+    "label": "Wandering Motors Records",
+    "upc": "990000000033",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000812/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000813"
+    },
+    "title": "Golden Rivers - Single",
+    "artist": "Jonah Fairbanks",
+    "kind": "single",
+    "release_date": "2013-04-06",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Alternative"
+    ],
+    "label": "Golden Towers Records",
+    "upc": "990000000034",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000814/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000815"
+    },
+    "title": "Salt 4 - Single",
+    "artist": "Greta Tallis & Juno Merritt",
+    "kind": "single",
+    "release_date": "2013-09-29",
+    "explicit": false,
+    "clean": true,
+    "genres": [
+     "Hip-Hop/Rap",
+     "Rap"
+    ],
+    "label": "Paper Canyon Records",
+    "upc": "990000000035",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000816/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000495"
+    },
+    "title": "Amber Mirrors 2 - Single",
+    "artist": "Kasper Kinsley & Greta Tallis",
+    "kind": "single",
+    "release_date": "2012-08-17",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop"
+    ],
+    "label": "Velvet Summers 2 Records",
+    "upc": "990000000036",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000817/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000818"
+    },
+    "title": "Velvet Shadows",
+    "artist": "Juno Merritt",
+    "kind": "album",
+    "release_date": "2015-03-01",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "R&B/Soul"
+    ],
+    "label": "Early Colors Records",
+    "upc": "990000000037",
+    "track_count": 16,
+    "artwork_template": "https://covers.demo.invalid/900000819/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000820"
+    },
+    "title": "Electric Cities",
+    "artist": "Wren Hale",
+    "kind": "album",
+    "release_date": "2010-07-04",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop",
+     "Rock",
+     "Singer/Songwriter",
+     "Contemporary Singer/Songwriter",
+     "Pop/Rock",
+     "American Trad Rock"
+    ],
+    "label": "Hollow Records",
+    "upc": "990000000038",
+    "track_count": 10,
+    "artwork_template": "https://covers.demo.invalid/900000821/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000822"
+    },
+    "title": "Burning Islands",
+    "artist": "BrokenLanterns",
+    "kind": "album",
+    "release_date": "2009-03-22",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop",
+     "Rock",
+     "Pop/Rock",
+     "Adult Alternative"
+    ],
+    "label": "Violet Motors Records",
+    "upc": "990000000039",
+    "track_count": 12,
+    "artwork_template": "https://covers.demo.invalid/900000823/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000824"
+    },
+    "title": "PAPER (feat. Oren Merritt) - Single",
+    "artist": "Odile Prescott",
+    "kind": "single",
+    "release_date": "2010-08-03",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance"
+    ],
+    "label": "Restless 3 (Slow) Records",
+    "upc": "990000000040",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000825/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000826"
+    },
+    "title": "Slow 2 (Deluxe)",
+    "artist": "Nico Jessup",
+    "kind": "album",
+    "release_date": "2007-02-23",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Alternative",
+     "Rock",
+     "Adult Alternative"
+    ],
+    "label": "Velvet Summers 2 Records",
+    "upc": "990000000041",
+    "track_count": 15,
+    "artwork_template": "https://covers.demo.invalid/900000827/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000828"
+    },
+    "title": "wild - Single",
+    "artist": "Viggo Moreau 2 & Uma Holloway",
+    "kind": "single",
+    "release_date": "2012-09-23",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Pop"
+    ],
+    "label": "Frozen Pilots Records",
+    "upc": "990000000042",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000829/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000830"
+    },
+    "title": "Frozen 2 (feat. CrimsonParade) - Single",
+    "artist": "Nico Merritt",
+    "kind": "single",
+    "release_date": "2011-08-07",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance"
+    ],
+    "label": "Hidden Fields 2 Records",
+    "upc": "990000000043",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000831/{w}x{h}.png",
+    "incomplete": false
+   }
+  ],
+  "songs": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000142"
+    },
+    "title": "golden pilots",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 199818,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000093",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2009-07-10",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000138"
+    },
+    "title": "electric mirrors",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 170819,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000089",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000136"
+    },
+    "title": "FROZEN",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 194223,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000087",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000143"
+    },
+    "title": "silent",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 230148,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000094",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000140"
+    },
+    "title": "amber stones",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 205159,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000091",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000144"
+    },
+    "title": "velvet",
+    "artist": "Jonah Fairbanks & Cato Ashdown",
+    "duration_ms": 179286,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000095",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2011-02-06",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000141"
+    },
+    "title": "open",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 178452,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000092",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-04-18",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000139"
+    },
+    "title": "northern",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 177062,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000090",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-08-22",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000137"
+    },
+    "title": "violet",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 202757,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000088",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-09-11",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001048"
+    },
+    "title": "distant",
+    "artist": "Jonah Fairbanks & CrimsonParade",
+    "duration_ms": 200563,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000309",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000809"
+    },
+    "album_title": "distant - Single",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2011-06-11",
+    "artwork_template": "https://covers.demo.invalid/900000810/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001049"
+    },
+    "title": "silent meadow",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 245204,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000310",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000811"
+    },
+    "album_title": "silent meadow - Single",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2013-01-04",
+    "artwork_template": "https://covers.demo.invalid/900000812/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001050"
+    },
+    "title": "DISTANT 2",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 261116,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000311",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001052"
+    },
+    "album_title": "FADED HARBOR",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2017-07-09",
+    "artwork_template": "https://covers.demo.invalid/900001051/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001053"
+    },
+    "title": "electric meadow",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 195762,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000312",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000807"
+    },
+    "album_title": "TENDER VOICES",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2011-12-09",
+    "artwork_template": "https://covers.demo.invalid/900000808/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001054"
+    },
+    "title": "QUIET 2",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 180252,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000313",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001052"
+    },
+    "album_title": "FADED HARBOR",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2017-07-09",
+    "artwork_template": "https://covers.demo.invalid/900001051/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001055"
+    },
+    "title": "tender tides",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 292705,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000314",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000807"
+    },
+    "album_title": "TENDER VOICES",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2012-05-20",
+    "artwork_template": "https://covers.demo.invalid/900000808/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001056"
+    },
+    "title": "Golden Rivers",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 243229,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000315",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000813"
+    },
+    "album_title": "Golden Rivers - Single",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2013-04-06",
+    "artwork_template": "https://covers.demo.invalid/900000814/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001057"
+    },
+    "title": "low arcade",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 167923,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000316",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000807"
+    },
+    "album_title": "TENDER VOICES",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2012-05-20",
+    "artwork_template": "https://covers.demo.invalid/900000808/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001058"
+    },
+    "title": "Iron Motors",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 246854,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000317",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001060"
+    },
+    "album_title": "Distant Pilots 2",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2014-06-21",
+    "artwork_template": "https://covers.demo.invalid/900001059/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001061"
+    },
+    "title": "QUIET 3",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 281182,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000318",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001063"
+    },
+    "album_title": "Electric Meadow - Single",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2015-09-12",
+    "artwork_template": "https://covers.demo.invalid/900001062/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001064"
+    },
+    "title": "Quiet Signals",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 195535,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000319",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001060"
+    },
+    "album_title": "Distant Pilots 2",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2014-09-21",
+    "artwork_template": "https://covers.demo.invalid/900001059/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001065"
+    },
+    "title": "lunar circuits",
+    "artist": "Jonah Fairbanks & Oren Merritt",
+    "duration_ms": 194742,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000320",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001067"
+    },
+    "album_title": "lunar circuits - Single",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900001066/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001068"
+    },
+    "title": "low circuits",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 176818,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000321",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001070"
+    },
+    "album_title": "low circuits - Single",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2011-01-02",
+    "artwork_template": "https://covers.demo.invalid/900001069/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001071"
+    },
+    "title": "COPPER 2",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 150784,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000322",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001060"
+    },
+    "album_title": "Distant Pilots 2",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2014-09-21",
+    "artwork_template": "https://covers.demo.invalid/900001059/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001072"
+    },
+    "title": "paper voices",
+    "artist": "WanderingSignals, PaperGardens & BROKENMIRRORS",
+    "duration_ms": 163896,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000323",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001074"
+    },
+    "album_title": "WANDERING - EP",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2018-05-12",
+    "artwork_template": "https://covers.demo.invalid/900001073/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001075"
+    },
+    "title": "Restless 4",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 181585,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000324",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001077"
+    },
+    "album_title": "Copper Islands (Winter Pilots)",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-05-22",
+    "artwork_template": "https://covers.demo.invalid/900001076/{w}x{h}.png"
+   }
+  ]
+ }
+}

@@ -1,0 +1,44 @@
+{
+ "name": "song-feat-album-version",
+ "path": "songs/900000305",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000305"
+  },
+  "title": "Open Lanterns",
+  "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+  "duration_ms": 370356,
+  "disc": 1,
+  "number": 8,
+  "isrc": "ZZSHJ0000228",
+  "explicit": false,
+  "clean": false,
+  "album": {
+   "catalog": "demo",
+   "id": "900000296"
+  },
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000147"
+   },
+   {
+    "catalog": "demo",
+    "id": "900001276"
+   },
+   {
+    "catalog": "demo",
+    "id": "900001277"
+   }
+  ],
+  "album_title": "Iron Wolves",
+  "genres": [
+   "Pop",
+   "Electronic"
+  ],
+  "release_date": "2006-06-11",
+  "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+ }
+}

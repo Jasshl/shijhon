@@ -1,0 +1,1833 @@
+{
+ "name": "album-anniversary-super-deluxe",
+ "path": "albums/900000219",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000219"
+  },
+  "title": "Salt 2 (30th Anniversary Super Deluxe)",
+  "artist": "BrokenMeadow",
+  "kind": "album",
+  "release_date": "1984-11-15",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000221"
+    },
+    "title": "Burning Engines (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 301726,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000146",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000222"
+    },
+    "title": "Wild Cities (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 255481,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000147",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2014-12-28",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000223"
+    },
+    "title": "Frozen Rivers (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 219526,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000148",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000224"
+    },
+    "title": "Copper 2 (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 183508,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000149",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000225"
+    },
+    "title": "Distant (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 256620,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000150",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000226"
+    },
+    "title": "Open 3 (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 174276,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000151",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000227"
+    },
+    "title": "Velvet Letters (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 142370,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000152",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000228"
+    },
+    "title": "Iron Parade (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 223695,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000153",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000229"
+    },
+    "title": "Restless Pilots (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 157401,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000154",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000230"
+    },
+    "title": "Golden Colors (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 211405,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000155",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000231"
+    },
+    "title": "Golden Pilots (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 193568,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000156",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000232"
+    },
+    "title": "Frozen Shadows (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 232857,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000157",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000233"
+    },
+    "title": "Faded Horizon (Remastered)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 404386,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000158",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000234"
+    },
+    "title": "Iron Parade (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 247340,
+    "disc": 2,
+    "number": 1,
+    "isrc": "ZZSHJ0000159",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000235"
+    },
+    "title": "Pale (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 260524,
+    "disc": 2,
+    "number": 2,
+    "isrc": "ZZSHJ0000160",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000236"
+    },
+    "title": "Distant 2 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 164539,
+    "disc": 2,
+    "number": 3,
+    "isrc": "ZZSHJ0000161",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000237"
+    },
+    "title": "Early Fields (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 178794,
+    "disc": 2,
+    "number": 4,
+    "isrc": "ZZSHJ0000162",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000238"
+    },
+    "title": "Burning Engines (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 288874,
+    "disc": 2,
+    "number": 5,
+    "isrc": "ZZSHJ0000163",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000239"
+    },
+    "title": "Bright Satellites (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 166901,
+    "disc": 2,
+    "number": 6,
+    "isrc": "ZZSHJ0000164",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000240"
+    },
+    "title": "Open 3 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 170266,
+    "disc": 2,
+    "number": 7,
+    "isrc": "ZZSHJ0000165",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000241"
+    },
+    "title": "Distant (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 252427,
+    "disc": 2,
+    "number": 8,
+    "isrc": "ZZSHJ0000166",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000242"
+    },
+    "title": "Copper 3 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 134441,
+    "disc": 2,
+    "number": 9,
+    "isrc": "ZZSHJ0000167",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000243"
+    },
+    "title": "Copper 2 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 220651,
+    "disc": 2,
+    "number": 10,
+    "isrc": "ZZSHJ0000168",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2014-11-17",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000244"
+    },
+    "title": "Frozen Rivers (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 330489,
+    "disc": 2,
+    "number": 11,
+    "isrc": "ZZSHJ0000169",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000245"
+    },
+    "title": "Open Voices 2 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 125289,
+    "disc": 2,
+    "number": 12,
+    "isrc": "ZZSHJ0000170",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000246"
+    },
+    "title": "Tender Station 2 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 159074,
+    "disc": 2,
+    "number": 13,
+    "isrc": "ZZSHJ0000171",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000247"
+    },
+    "title": "Golden Pilots (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 186834,
+    "disc": 2,
+    "number": 14,
+    "isrc": "ZZSHJ0000172",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000248"
+    },
+    "title": "Pale 2 (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 213060,
+    "disc": 2,
+    "number": 15,
+    "isrc": "ZZSHJ0000173",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000249"
+    },
+    "title": "Sunken Satellites (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 207371,
+    "disc": 2,
+    "number": 16,
+    "isrc": "ZZSHJ0000174",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000250"
+    },
+    "title": "Velvet Letters (Violet Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 247392,
+    "disc": 2,
+    "number": 17,
+    "isrc": "ZZSHJ0000175",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000251"
+    },
+    "title": "Iron Parade (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 239167,
+    "disc": 3,
+    "number": 1,
+    "isrc": "ZZSHJ0000176",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000252"
+    },
+    "title": "Pale (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 262483,
+    "disc": 3,
+    "number": 2,
+    "isrc": "ZZSHJ0000177",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000253"
+    },
+    "title": "Distant 2 (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 150379,
+    "disc": 3,
+    "number": 3,
+    "isrc": "ZZSHJ0000178",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000254"
+    },
+    "title": "Early Fields (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 149106,
+    "disc": 3,
+    "number": 4,
+    "isrc": "ZZSHJ0000179",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000255"
+    },
+    "title": "Burning Engines (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 289826,
+    "disc": 3,
+    "number": 5,
+    "isrc": "ZZSHJ0000180",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000256"
+    },
+    "title": "Bright Satellites (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 178132,
+    "disc": 3,
+    "number": 6,
+    "isrc": "ZZSHJ0000181",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000257"
+    },
+    "title": "Open 3 (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 170297,
+    "disc": 3,
+    "number": 7,
+    "isrc": "ZZSHJ0000182",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000258"
+    },
+    "title": "Copper 3 (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 115801,
+    "disc": 3,
+    "number": 8,
+    "isrc": "ZZSHJ0000183",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000259"
+    },
+    "title": "Copper 2 (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 190851,
+    "disc": 3,
+    "number": 9,
+    "isrc": "ZZSHJ0000184",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000260"
+    },
+    "title": "Frozen Rivers (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 216278,
+    "disc": 3,
+    "number": 10,
+    "isrc": "ZZSHJ0000185",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000261"
+    },
+    "title": "Distant (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 279791,
+    "disc": 3,
+    "number": 11,
+    "isrc": "ZZSHJ0000186",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000262"
+    },
+    "title": "Velvet Letters (Glass Cities)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 252315,
+    "disc": 3,
+    "number": 12,
+    "isrc": "ZZSHJ0000187",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000263"
+    },
+    "title": "Pale (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 299077,
+    "disc": 4,
+    "number": 1,
+    "isrc": "ZZSHJ0000188",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000264"
+    },
+    "title": "Iron Parade (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 226024,
+    "disc": 4,
+    "number": 2,
+    "isrc": "ZZSHJ0000189",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000265"
+    },
+    "title": "Distant 2 (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 165655,
+    "disc": 4,
+    "number": 3,
+    "isrc": "ZZSHJ0000190",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000266"
+    },
+    "title": "Copper 3 (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 125534,
+    "disc": 4,
+    "number": 4,
+    "isrc": "ZZSHJ0000191",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000267"
+    },
+    "title": "Bright Satellites (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 173935,
+    "disc": 4,
+    "number": 5,
+    "isrc": "ZZSHJ0000192",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000268"
+    },
+    "title": "Frozen Rivers (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 215375,
+    "disc": 4,
+    "number": 6,
+    "isrc": "ZZSHJ0000193",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000269"
+    },
+    "title": "Distant (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 287233,
+    "disc": 4,
+    "number": 7,
+    "isrc": "ZZSHJ0000194",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2014-11-30",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000270"
+    },
+    "title": "Copper 2 (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 191983,
+    "disc": 4,
+    "number": 8,
+    "isrc": "ZZSHJ0000195",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000271"
+    },
+    "title": "Open 3 (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 165403,
+    "disc": 4,
+    "number": 9,
+    "isrc": "ZZSHJ0000196",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000272"
+    },
+    "title": "Restless Pilots (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 166339,
+    "disc": 4,
+    "number": 10,
+    "isrc": "ZZSHJ0000197",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000273"
+    },
+    "title": "Wild Cities (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 273262,
+    "disc": 4,
+    "number": 11,
+    "isrc": "ZZSHJ0000198",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000274"
+    },
+    "title": "Sunken Satellites (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 210281,
+    "disc": 4,
+    "number": 12,
+    "isrc": "ZZSHJ0000199",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000275"
+    },
+    "title": "Burning Engines (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 318786,
+    "disc": 4,
+    "number": 13,
+    "isrc": "ZZSHJ0000200",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000276"
+    },
+    "title": "Silent Colors (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 347185,
+    "disc": 4,
+    "number": 14,
+    "isrc": "ZZSHJ0000201",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000277"
+    },
+    "title": "Tender Station 2 (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 162756,
+    "disc": 4,
+    "number": 15,
+    "isrc": "ZZSHJ0000202",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000278"
+    },
+    "title": "Golden Pilots (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 187048,
+    "disc": 4,
+    "number": 16,
+    "isrc": "ZZSHJ0000203",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000279"
+    },
+    "title": "Pale 2 (Slow Bridges)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 234599,
+    "disc": 4,
+    "number": 17,
+    "isrc": "ZZSHJ0000204",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000280"
+    },
+    "title": "Tender Station 2 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 173565,
+    "disc": 5,
+    "number": 1,
+    "isrc": "ZZSHJ0000205",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000281"
+    },
+    "title": "Open Voices 2 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 138983,
+    "disc": 5,
+    "number": 2,
+    "isrc": "ZZSHJ0000206",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000282"
+    },
+    "title": "Golden Pilots (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 192836,
+    "disc": 5,
+    "number": 3,
+    "isrc": "ZZSHJ0000207",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2014-12-14",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000283"
+    },
+    "title": "Pale 2 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 199582,
+    "disc": 5,
+    "number": 4,
+    "isrc": "ZZSHJ0000208",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000284"
+    },
+    "title": "Frozen Rivers (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 226024,
+    "disc": 5,
+    "number": 5,
+    "isrc": "ZZSHJ0000209",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000285"
+    },
+    "title": "Distant (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 270583,
+    "disc": 5,
+    "number": 6,
+    "isrc": "ZZSHJ0000210",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000286"
+    },
+    "title": "Copper 2 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 172056,
+    "disc": 5,
+    "number": 7,
+    "isrc": "ZZSHJ0000211",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000287"
+    },
+    "title": "Copper 3 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 120216,
+    "disc": 5,
+    "number": 8,
+    "isrc": "ZZSHJ0000212",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000288"
+    },
+    "title": "Iron Parade (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 217827,
+    "disc": 5,
+    "number": 9,
+    "isrc": "ZZSHJ0000213",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000289"
+    },
+    "title": "Bright Satellites (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 224018,
+    "disc": 5,
+    "number": 10,
+    "isrc": "ZZSHJ0000214",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000290"
+    },
+    "title": "Distant 2 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 167592,
+    "disc": 5,
+    "number": 11,
+    "isrc": "ZZSHJ0000215",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000291"
+    },
+    "title": "Pale (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 263866,
+    "disc": 5,
+    "number": 12,
+    "isrc": "ZZSHJ0000216",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000292"
+    },
+    "title": "Sunken Satellites (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 254908,
+    "disc": 5,
+    "number": 13,
+    "isrc": "ZZSHJ0000217",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000293"
+    },
+    "title": "Open 3 (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 174500,
+    "disc": 5,
+    "number": 14,
+    "isrc": "ZZSHJ0000218",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000294"
+    },
+    "title": "Velvet Letters (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 240006,
+    "disc": 5,
+    "number": 15,
+    "isrc": "ZZSHJ0000219",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000295"
+    },
+    "title": "Burning Engines (Winter Fields)",
+    "artist": "BrokenMeadow",
+    "duration_ms": 483573,
+    "disc": 5,
+    "number": 16,
+    "isrc": "ZZSHJ0000220",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000219"
+    },
+    "album_title": "Salt 2 (30th Anniversary Super Deluxe)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png"
+   }
+  ],
+  "explicit": true,
+  "clean": false,
+  "genres": [
+   "Rock"
+  ],
+  "label": "Violet 2 Records",
+  "upc": "990000000012",
+  "track_count": 75,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000205"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000220/{w}x{h}.png",
+  "incomplete": false
+ }
+}

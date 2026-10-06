@@ -1,0 +1,754 @@
+{
+ "name": "album-soundtrack-expanded",
+ "path": "albums/900000149",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000149"
+  },
+  "title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+  "artist": "Uma Okafor",
+  "kind": "album",
+  "release_date": "2008-01-10",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000152"
+    },
+    "title": "Golden Bridges",
+    "artist": "Uma Okafor",
+    "duration_ms": 235062,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000097",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000153"
+    },
+    "title": "Last Rivers 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 126237,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000098",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000154"
+    },
+    "title": "Northern",
+    "artist": "Uma Okafor",
+    "duration_ms": 341465,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000099",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000155"
+    },
+    "title": "Copper Voices (Broken Letters)",
+    "artist": "Uma Okafor",
+    "duration_ms": 199597,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000100",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000156"
+    },
+    "title": "Faded 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 412565,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000101",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000157"
+    },
+    "title": "Hidden Engines",
+    "artist": "Uma Okafor",
+    "duration_ms": 100892,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000102",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000158"
+    },
+    "title": "Frozen Stones",
+    "artist": "Uma Okafor",
+    "duration_ms": 90044,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000103",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000159"
+    },
+    "title": "Lunar",
+    "artist": "Uma Okafor",
+    "duration_ms": 219945,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000104",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000160"
+    },
+    "title": "Last Canyon",
+    "artist": "Uma Okafor",
+    "duration_ms": 151704,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000105",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000161"
+    },
+    "title": "Last Pilots",
+    "artist": "Uma Okafor",
+    "duration_ms": 207330,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000106",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000162"
+    },
+    "title": "Open Pilots",
+    "artist": "Uma Okafor",
+    "duration_ms": 116689,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000107",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000163"
+    },
+    "title": "Faded Stones",
+    "artist": "Uma Okafor",
+    "duration_ms": 349525,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000108",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000164"
+    },
+    "title": "Glass",
+    "artist": "Uma Okafor",
+    "duration_ms": 507577,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000109",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000165"
+    },
+    "title": "Echoing",
+    "artist": "Uma Okafor",
+    "duration_ms": 402940,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000110",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000166"
+    },
+    "title": "DISTANT.",
+    "artist": "Uma Okafor",
+    "duration_ms": 382743,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000111",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000167"
+    },
+    "title": "Pale Cities",
+    "artist": "Uma Okafor",
+    "duration_ms": 461942,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000112",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000168"
+    },
+    "title": "Hidden Cities",
+    "artist": "Uma Okafor",
+    "duration_ms": 107925,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000113",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000169"
+    },
+    "title": "Open Voices",
+    "artist": "Uma Okafor",
+    "duration_ms": 114128,
+    "disc": 1,
+    "number": 18,
+    "isrc": "ZZSHJ0000114",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000170"
+    },
+    "title": "Northern Meadow",
+    "artist": "Uma Okafor",
+    "duration_ms": 101985,
+    "disc": 1,
+    "number": 19,
+    "isrc": "ZZSHJ0000115",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000171"
+    },
+    "title": "Low Motors",
+    "artist": "Uma Okafor",
+    "duration_ms": 272528,
+    "disc": 1,
+    "number": 20,
+    "isrc": "ZZSHJ0000116",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000172"
+    },
+    "title": "Lunar Pilots",
+    "artist": "Uma Okafor",
+    "duration_ms": 415718,
+    "disc": 1,
+    "number": 21,
+    "isrc": "ZZSHJ0000117",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000173"
+    },
+    "title": "Wild Fields",
+    "artist": "Uma Okafor",
+    "duration_ms": 246815,
+    "disc": 1,
+    "number": 22,
+    "isrc": "ZZSHJ0000118",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000174"
+    },
+    "title": "Violet Canyon",
+    "artist": "Uma Okafor",
+    "duration_ms": 145791,
+    "disc": 1,
+    "number": 23,
+    "isrc": "ZZSHJ0000119",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000175"
+    },
+    "title": "Faded Summers",
+    "artist": "Uma Okafor",
+    "duration_ms": 437715,
+    "disc": 1,
+    "number": 24,
+    "isrc": "ZZSHJ0000120",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000176"
+    },
+    "title": "Restless",
+    "artist": "Uma Okafor",
+    "duration_ms": 680562,
+    "disc": 1,
+    "number": 25,
+    "isrc": "ZZSHJ0000121",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000177"
+    },
+    "title": "Early Stones",
+    "artist": "Uma Okafor",
+    "duration_ms": 290942,
+    "disc": 1,
+    "number": 26,
+    "isrc": "ZZSHJ0000122",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000178"
+    },
+    "title": "Sunken",
+    "artist": "Uma Okafor",
+    "duration_ms": 499702,
+    "disc": 1,
+    "number": 27,
+    "isrc": "ZZSHJ0000123",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000179"
+    },
+    "title": "Copper Voices (Original Demo)",
+    "artist": "Uma Okafor",
+    "duration_ms": 228184,
+    "disc": 1,
+    "number": 28,
+    "isrc": "ZZSHJ0000124",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000180"
+    },
+    "title": "Tender Station",
+    "artist": "Uma Okafor",
+    "duration_ms": 416471,
+    "disc": 1,
+    "number": 29,
+    "isrc": "ZZSHJ0000125",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000181"
+    },
+    "title": "Restless Arcade",
+    "artist": "Uma Okafor, Leon Ingram, Lumi Quill, Mara Nyberg, Hugo Hale, Pia Carver & Jonah Vance",
+    "duration_ms": 98276,
+    "disc": 1,
+    "number": 30,
+    "isrc": "ZZSHJ0000126",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": false,
+  "genres": [
+   "Soundtrack",
+   "Classical"
+  ],
+  "label": "Iron Towers Records",
+  "upc": "990000000009",
+  "track_count": 30,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000151"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png",
+  "incomplete": false
+ }
+}

@@ -1,0 +1,35 @@
+{
+ "name": "song-twins-explicit",
+ "path": "songs/900000126",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000126"
+  },
+  "title": "IRON.",
+  "artist": "Esme Ashdown",
+  "duration_ms": 177846,
+  "disc": 1,
+  "number": 8,
+  "isrc": "ZZSHJ0000080",
+  "explicit": true,
+  "clean": false,
+  "album": {
+   "catalog": "demo",
+   "id": "900000117"
+  },
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000086"
+   }
+  ],
+  "album_title": "CRIMSON.",
+  "genres": [
+   "Hip-Hop/Rap"
+  ],
+  "release_date": "2010-05-22",
+  "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+ }
+}

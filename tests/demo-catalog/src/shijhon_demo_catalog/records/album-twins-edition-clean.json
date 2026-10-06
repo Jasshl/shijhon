@@ -1,0 +1,371 @@
+{
+ "name": "album-twins-edition-clean",
+ "path": "albums/900000101",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000101"
+  },
+  "title": "PALE RIVERS.",
+  "artist": "Esme Ashdown",
+  "kind": "album",
+  "release_date": "2010-06-06",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000103"
+    },
+    "title": "COPPER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 247718,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000072",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000104"
+    },
+    "title": "PAPER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 248129,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000071",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000105"
+    },
+    "title": "SILENT. 2",
+    "artist": "Esme Ashdown",
+    "duration_ms": 460740,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000070",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000106"
+    },
+    "title": "WANDERING. (FEAT. IRONGARDENS.)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 254377,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000069",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000107"
+    },
+    "title": "LAST. (FEAT. ELECTRICSATELLITES.)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 212485,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000068",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000108"
+    },
+    "title": "SILENT.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 308808,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000067",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000109"
+    },
+    "title": "IRON.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 177846,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000066",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-05-22",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000110"
+    },
+    "title": "GOLDEN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 275072,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000065",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000111"
+    },
+    "title": "RESTLESS. 2 (FEAT. SALTHARBOR.)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 227292,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000064",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000112"
+    },
+    "title": "ECHOING.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 215156,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000063",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000113"
+    },
+    "title": "RESTLESS.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 208691,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000062",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000114"
+    },
+    "title": "AMBER. 2",
+    "artist": "Esme Ashdown",
+    "duration_ms": 160173,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000061",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000115"
+    },
+    "title": "AMBER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 186818,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000060",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000116"
+    },
+    "title": "NORTHERN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 117976,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000059",
+    "explicit": false,
+    "clean": true,
+    "album": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": true,
+  "genres": [
+   "Hip-Hop/Rap",
+   "West Coast Rap",
+   "Rap"
+  ],
+  "label": "Quiet Records",
+  "upc": "990000000005",
+  "track_count": 14,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000086"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png",
+  "incomplete": false
+ }
+}

@@ -1,0 +1,27 @@
+# The made-up catalog of Shijhon's tests and development tools, as a catalog adapter:
+# a package of its own that Shijhon finds by its entry point, like any adapter. It is
+# installed in the development environment only (the "dev" dependency group of the
+# pyproject.toml two folders up), never with Shijhon itself.
+[project]
+name = "shijhon-demo-catalog"
+version = "0.1.0b1"
+description = "A made-up catalog for Shijhon's tests and development: invented artists, albums and songs"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+authors = [{ name = "Jasshl" }]
+dependencies = ["shijhon"]
+
+# Shijhon finds the adapter here: [catalog] kind = "demo".
+[project.entry-points."shijhon.catalogs"]
+demo = "shijhon_demo_catalog:adapter"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shijhon_demo_catalog"]
+
+# Shijhon itself: the checkout this folder is in.
+[tool.uv.sources]
+shijhon = { path = "../..", editable = true }

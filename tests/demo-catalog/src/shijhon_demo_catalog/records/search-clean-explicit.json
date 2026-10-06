@@ -1,0 +1,781 @@
+{
+ "name": "search-clean-explicit",
+ "path": "search",
+ "status": 200,
+ "params": {
+  "term": "bright canyon"
+ },
+ "body": {
+  "albums": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "title": "CRIMSON.",
+    "artist": "Esme Ashdown",
+    "kind": "album",
+    "release_date": "2010-06-06",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "label": "Quiet Records",
+    "upc": "990000000006",
+    "track_count": 14,
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000101"
+    },
+    "title": "PALE RIVERS.",
+    "artist": "Esme Ashdown",
+    "kind": "album",
+    "release_date": "2010-06-06",
+    "explicit": false,
+    "clean": true,
+    "genres": [
+     "Hip-Hop/Rap",
+     "West Coast Rap",
+     "Rap"
+    ],
+    "label": "Quiet Records",
+    "upc": "990000000005",
+    "track_count": 14,
+    "artwork_template": "https://covers.demo.invalid/900000102/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000084"
+    },
+    "title": "CRIMSON.",
+    "artist": "Esme Ashdown",
+    "kind": "album",
+    "release_date": "2010-06-06",
+    "explicit": false,
+    "clean": true,
+    "genres": [
+     "Hip-Hop/Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "label": "Quiet Records",
+    "upc": "990000000004",
+    "track_count": 14,
+    "artwork_template": "https://covers.demo.invalid/900000085/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000776"
+    },
+    "title": "Copper Pilots",
+    "artist": "Esme Ashdown",
+    "kind": "album",
+    "release_date": "2015-07-05",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "label": "Salt Rivers Records",
+    "upc": "990000000025",
+    "track_count": 18,
+    "artwork_template": "https://covers.demo.invalid/900000777/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000778"
+    },
+    "title": "glass - Single",
+    "artist": "Esme Ashdown",
+    "kind": "single",
+    "release_date": "2017-06-22",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "label": "Silent Rivers Records",
+    "upc": "990000000026",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000779/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000780"
+    },
+    "title": "Northern Circuits (Deluxe)",
+    "artist": "Esme Ashdown",
+    "kind": "album",
+    "release_date": "2005-12-14",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap",
+     "Gangsta Rap",
+     "Hardcore Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "label": "Quiet Records",
+    "upc": "990000000027",
+    "track_count": 19,
+    "artwork_template": "https://covers.demo.invalid/900000781/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000782"
+    },
+    "title": "Iron Colors (feat. Esme Ashdown) [Glass Towers] - Single",
+    "artist": "Remy Ferro",
+    "kind": "single",
+    "release_date": "2010-02-28",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop",
+     "Rock"
+    ],
+    "label": "Distant Towers 2 Records",
+    "upc": "990000000028",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000783/{w}x{h}.png",
+    "incomplete": false
+   }
+  ],
+  "songs": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000125"
+    },
+    "title": "GOLDEN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 275072,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000079",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000122"
+    },
+    "title": "RESTLESS.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 208691,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000076",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000784"
+    },
+    "title": "IRON.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 177846,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000080",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000786"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-05-22",
+    "artwork_template": "https://covers.demo.invalid/900000785/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000121"
+    },
+    "title": "AMBER. 2",
+    "artist": "Esme Ashdown",
+    "duration_ms": 160173,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000075",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000787"
+    },
+    "title": "AMBER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 186818,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000074",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000786"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000785/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000120"
+    },
+    "title": "AMBER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 186818,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000074",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000126"
+    },
+    "title": "IRON.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 177846,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000080",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-05-22",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000128"
+    },
+    "title": "LAST. (feat. ElectricSatellites)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 212485,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000082",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000124"
+    },
+    "title": "RESTLESS. 2 (feat. SaltHarbor)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 227292,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000078",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000788"
+    },
+    "title": "Wild Motors (Pale 3)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 247981,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000302",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000780"
+    },
+    "album_title": "Northern Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Gangsta Rap",
+     "Hardcore Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "release_date": "2005-09-22",
+    "artwork_template": "https://covers.demo.invalid/900000781/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000789"
+    },
+    "title": "Tender Meadow (feat. Talia Ingram)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 350319,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000303",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000780"
+    },
+    "album_title": "Northern Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Gangsta Rap",
+     "Hardcore Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "release_date": "2005-12-14",
+    "artwork_template": "https://covers.demo.invalid/900000781/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000790"
+    },
+    "title": "Hidden Pilots (feat. RestlessTowers, Bram Ellery & Esme Ashdown)",
+    "artist": "Quinn Jessup",
+    "duration_ms": 234423,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000304",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000792"
+    },
+    "album_title": "COPPER (Deluxe Edition)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2005-12-16",
+    "artwork_template": "https://covers.demo.invalid/900000791/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000793"
+    },
+    "title": "Broken Lanterns (feat. Yara Castell)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 387358,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000305",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000780"
+    },
+    "album_title": "Northern Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Gangsta Rap",
+     "Hardcore Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "release_date": "2005-12-14",
+    "artwork_template": "https://covers.demo.invalid/900000781/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000129"
+    },
+    "title": "WANDERING. (feat. IRONGARDENS)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 254377,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000083",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000127"
+    },
+    "title": "SILENT.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 308808,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000081",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000123"
+    },
+    "title": "ECHOING.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 215156,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000077",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000794"
+    },
+    "title": "Amber 3 (feat. Esme Ashdown)",
+    "artist": "Juno Merritt",
+    "duration_ms": 231606,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000306",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000796"
+    },
+    "album_title": "Frozen",
+    "genres": [
+     "R&B/Soul"
+    ],
+    "release_date": "2010-01-17",
+    "artwork_template": "https://covers.demo.invalid/900000795/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000797"
+    },
+    "title": "Slow Islands",
+    "artist": "Esme Ashdown",
+    "duration_ms": 311597,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000307",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000780"
+    },
+    "album_title": "Northern Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap",
+     "Gangsta Rap",
+     "Hardcore Rap",
+     "Rap",
+     "West Coast Rap"
+    ],
+    "release_date": "2005-12-14",
+    "artwork_template": "https://covers.demo.invalid/900000781/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000130"
+    },
+    "title": "SILENT. 2",
+    "artist": "Esme Ashdown",
+    "duration_ms": 460740,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000084",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000119"
+    },
+    "title": "NORTHERN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 117976,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000073",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000132"
+    },
+    "title": "COPPER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 247718,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000086",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000798"
+    },
+    "title": "QUIET",
+    "artist": "Greta Ashdown",
+    "duration_ms": 122408,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000308",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000800"
+    },
+    "album_title": "VIOLET 2",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2019-05-20",
+    "artwork_template": "https://covers.demo.invalid/900000799/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000801"
+    },
+    "title": "RESTLESS. 2 (FEAT. SALTHARBOR.)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 227292,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000078",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000786"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000785/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000802"
+    },
+    "title": "GOLDEN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 275072,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000079",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000786"
+    },
+    "album_title": "PALE RIVERS.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000785/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000131"
+    },
+    "title": "PAPER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 248129,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000085",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   }
+  ]
+ }
+}

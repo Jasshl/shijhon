@@ -1,0 +1,421 @@
+{
+ "name": "album-duo-deluxe-explicit",
+ "path": "albums/900000335",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000335"
+  },
+  "title": "Bright Circuits (Deluxe)",
+  "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+  "kind": "album",
+  "release_date": "2004-09-29",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000339"
+    },
+    "title": "Electric Engines (feat. Cato Oakes & DistantColors)",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 272775,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000243",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000340"
+    },
+    "title": "Wild Letters (feat. Søren Ilić)",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 265797,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000244",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000341"
+    },
+    "title": "Faded Stones 2",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 218483,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000245",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000342"
+    },
+    "title": "Amber 2 (feat. Lumi Duval)",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 177594,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000246",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-10",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000343"
+    },
+    "title": "Last Satellites",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 140779,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000247",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000344"
+    },
+    "title": "Broken Pilots",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 273095,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000248",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000345"
+    },
+    "title": "Restless Stones",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 201895,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000249",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000346"
+    },
+    "title": "Wild Gardens",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 174891,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000250",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000347"
+    },
+    "title": "Quiet Meadow",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 256162,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000251",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000348"
+    },
+    "title": "Restless Voices",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 300472,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000252",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000349"
+    },
+    "title": "Winter Islands (feat. Cato Oakes)",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 291130,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000253",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000350"
+    },
+    "title": "Frozen Engines (feat. Bram Marek)",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 199451,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000254",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000351"
+    },
+    "title": "Restless Satellites",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 323779,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000255",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000352"
+    },
+    "title": "Salt 3",
+    "artist": "Greta Ashdown & ÉMILE BRØNN 2",
+    "duration_ms": 275004,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000256",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-03-04",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000353"
+    },
+    "title": "Restless 2",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 198630,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000257",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000354"
+    },
+    "title": "Lunar Motors (feat. Greta Ellery)",
+    "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+    "duration_ms": 314619,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000258",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000335"
+    },
+    "album_title": "Bright Circuits (Deluxe)",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2004-09-29",
+    "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+   }
+  ],
+  "explicit": true,
+  "clean": false,
+  "genres": [
+   "Hip-Hop/Rap"
+  ],
+  "label": "Paper Harbor Records",
+  "upc": "990000000015",
+  "track_count": 16,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000337"
+   },
+   {
+    "catalog": "demo",
+    "id": "900000338"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png",
+  "incomplete": false
+ }
+}

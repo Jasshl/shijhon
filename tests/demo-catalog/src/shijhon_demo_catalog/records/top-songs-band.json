@@ -1,0 +1,259 @@
+{
+ "name": "top-songs-band",
+ "path": "artists/900000205/top-songs",
+ "status": 200,
+ "body": [
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000206"
+   },
+   "title": "Burning Engines",
+   "artist": "BrokenMeadow",
+   "duration_ms": 300931,
+   "disc": 1,
+   "number": 1,
+   "isrc": "ZZSHJ0000146",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "album_title": "Salt 2",
+   "genres": [
+    "Rock"
+   ],
+   "release_date": "1984-11-01",
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000208"
+   },
+   "title": "Frozen Rivers",
+   "artist": "BrokenMeadow",
+   "duration_ms": 218547,
+   "disc": 1,
+   "number": 3,
+   "isrc": "ZZSHJ0000148",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "album_title": "Salt 2",
+   "genres": [
+    "Rock"
+   ],
+   "release_date": "1984-11-15",
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000210"
+   },
+   "title": "Distant",
+   "artist": "BrokenMeadow",
+   "duration_ms": 257675,
+   "disc": 1,
+   "number": 5,
+   "isrc": "ZZSHJ0000150",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "album_title": "Salt 2",
+   "genres": [
+    "Rock"
+   ],
+   "release_date": "1984-11-15",
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001479"
+   },
+   "title": "Paper Islands",
+   "artist": "BrokenMeadow",
+   "duration_ms": 280204,
+   "disc": 1,
+   "number": 3,
+   "isrc": "ZZSHJ0000364",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000447"
+   },
+   "album_title": "Quiet Towers (20th Anniversary Edition)",
+   "genres": [
+    "Alternative",
+    "Rock",
+    "Adult Alternative",
+    "Grunge"
+   ],
+   "release_date": "1986-10-22",
+   "artwork_template": "https://covers.demo.invalid/900001477/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001480"
+   },
+   "title": "Salt Islands",
+   "artist": "BrokenMeadow",
+   "duration_ms": 168595,
+   "disc": 1,
+   "number": 3,
+   "isrc": "ZZSHJ0000365",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000448"
+   },
+   "album_title": "Lunar 6 (Deluxe Edition)",
+   "genres": [
+    "Alternative",
+    "Rock",
+    "Grunge",
+    "Adult Alternative"
+   ],
+   "release_date": "1982-08-07",
+   "artwork_template": "https://covers.demo.invalid/900001478/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000207"
+   },
+   "title": "Wild Cities",
+   "artist": "BrokenMeadow",
+   "duration_ms": 255780,
+   "disc": 1,
+   "number": 2,
+   "isrc": "ZZSHJ0000147",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "album_title": "Salt 2",
+   "genres": [
+    "Rock"
+   ],
+   "release_date": "1984-11-15",
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000217"
+   },
+   "title": "Frozen Shadows",
+   "artist": "BrokenMeadow",
+   "duration_ms": 232361,
+   "disc": 1,
+   "number": 12,
+   "isrc": "ZZSHJ0000157",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "album_title": "Salt 2",
+   "genres": [
+    "Rock"
+   ],
+   "release_date": "1984-11-15",
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001481"
+   },
+   "title": "Silent Gardens 2",
+   "artist": "BrokenMeadow",
+   "duration_ms": 170991,
+   "disc": 1,
+   "number": 4,
+   "isrc": "ZZSHJ0000366",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000447"
+   },
+   "album_title": "Quiet Towers (20th Anniversary Edition)",
+   "genres": [
+    "Alternative",
+    "Rock",
+    "Adult Alternative",
+    "Grunge"
+   ],
+   "release_date": "1986-11-13",
+   "artwork_template": "https://covers.demo.invalid/900001477/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000212"
+   },
+   "title": "Velvet Letters",
+   "artist": "BrokenMeadow",
+   "duration_ms": 142368,
+   "disc": 1,
+   "number": 7,
+   "isrc": "ZZSHJ0000152",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "album_title": "Salt 2",
+   "genres": [
+    "Rock"
+   ],
+   "release_date": "1984-11-15",
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001482"
+   },
+   "title": "Low Letters",
+   "artist": "BrokenMeadow",
+   "duration_ms": 236577,
+   "disc": 1,
+   "number": 12,
+   "isrc": "ZZSHJ0000367",
+   "explicit": false,
+   "clean": false,
+   "album": {
+    "catalog": "demo",
+    "id": "900000447"
+   },
+   "album_title": "Quiet Towers (20th Anniversary Edition)",
+   "genres": [
+    "Alternative",
+    "Rock",
+    "Adult Alternative",
+    "Grunge"
+   ],
+   "release_date": "1986-11-13",
+   "artwork_template": "https://covers.demo.invalid/900001477/{w}x{h}.png"
+  }
+ ]
+}

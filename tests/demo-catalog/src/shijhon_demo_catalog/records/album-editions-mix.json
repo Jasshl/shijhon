@@ -1,0 +1,450 @@
+{
+ "name": "album-editions-mix",
+ "path": "albums/900000001",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000001"
+  },
+  "title": "Northern Letters (2019 Mix)",
+  "artist": "Neve Ashdown",
+  "kind": "album",
+  "release_date": "1962-11-18",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000004"
+    },
+    "title": "Crimson Mirrors (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 260397,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000001",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000005"
+    },
+    "title": "Open (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 183107,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000002",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000006"
+    },
+    "title": "Faded Wolves (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 207143,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000003",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000007"
+    },
+    "title": "Open Mirrors (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 207815,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000004",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2012-10-28",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000008"
+    },
+    "title": "Pale Islands (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 171179,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000005",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000009"
+    },
+    "title": "Silent Meadow (Winter Rivers) [2019 Mix]",
+    "artist": "Neve Ashdown",
+    "duration_ms": 467370,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000006",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000010"
+    },
+    "title": "Frozen Motors (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 186087,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000007",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000011"
+    },
+    "title": "Amber (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 164831,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000008",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000012"
+    },
+    "title": "Copper Station (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 241738,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000009",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000013"
+    },
+    "title": "Hidden Bridges (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 147044,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000010",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000014"
+    },
+    "title": "Velvet Tides (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 65938,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000011",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000015"
+    },
+    "title": "Low Horizon (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 73143,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000012",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000016"
+    },
+    "title": "Wandering Towers (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 119529,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000013",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000017"
+    },
+    "title": "Paper Circuits (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 90494,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000014",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000018"
+    },
+    "title": "Slow Engines (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 95645,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000015",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000019"
+    },
+    "title": "Copper Orchard (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 142151,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000016",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000020"
+    },
+    "title": "Crimson Canyon (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 24668,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000017",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000001"
+    },
+    "album_title": "Northern Letters (2019 Mix)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": false,
+  "genres": [
+   "Rock",
+   "Rock & Roll",
+   "Pop",
+   "Pop/Rock",
+   "Prog-Rock/Art Rock",
+   "Adult Contemporary",
+   "Hard Rock",
+   "Soft Rock",
+   "Psychedelic",
+   "Arena Rock"
+  ],
+  "label": "DISTANT (Golden Arcade) Records",
+  "upc": "990000000001",
+  "track_count": 17,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000003"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000002/{w}x{h}.png",
+  "incomplete": false
+ }
+}

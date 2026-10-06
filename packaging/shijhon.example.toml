@@ -1,0 +1,80 @@
+# Shijhon's configuration (docs/configuration.md and docs/reference/settings.md have every
+# setting). Keep the filled-in copy private (mode 0600). Every value can also come from the
+# environment, e.g. SHIJHON_NAVIDROME__URL.
+
+state_dir = "/data"          # Shijhon's database, downloads under way and the cover cache
+log_level = "INFO"
+
+[server]
+host = "0.0.0.0"             # inside a container; "127.0.0.1" on a host network
+port = 8765
+# Outside a container, under a service manager that starts Shijhon again after it exits:
+# the dashboard then offers "Restart Shijhon" (docs/deployment.md, "Restarting").
+# restart_by_supervisor = true
+# With a reverse proxy in front (docs/deployment.md, "Network and reverse proxy"): the
+# proxy's address, nothing else. With compose.yaml a proxy on this host arrives from the
+# Compose network's gateway: uncomment the line, and set SHIJHON_BIND=127.0.0.1 in .env.
+# Never list an address apps connect from directly.
+# trusted_proxies = ["127.0.0.0/8", "::1/128", "172.30.99.1/32"]
+# A proxy in front that signs users in and names them in a header
+# (docs/reference/advanced-deployment.md, "Sign-in by the reverse proxy"):
+# reverse_proxy_user_header = "Remote-User"
+# reverse_proxy_auth = false
+
+[navidrome]
+url = "http://navidrome:4533"
+# A Navidrome admin account for Shijhon alone, not a person's.
+user = "shijhon"
+password_file = "/config/navidrome-password"
+library_id = 1               # the library that holds your music (getMusicFolders lists them)
+library_path = "/music"      # where Shijhon sees that library: read-only, except the
+                             # placeholder folder inside it
+# The usage export, written by the "usage-export" service: what the cleanup reads. To
+# read Navidrome's database directly instead, use database_path
+# (docs/reference/advanced-deployment.md).
+usage_export_path = "/usage/usage.sqlite3"
+# purge_missing = "never"    # only if Navidrome hides its configuration
+                             # (ND_DEVUISHOWCONFIG=false)
+
+[placeholders]
+folder = "_shijhon"          # inside the library
+
+# Add-ons (docs/add-ons.md): add them on the dashboard's Add-ons page, or here. A list
+# here is applied at every start, until you change the add-ons on the dashboard.
+# [[addons]]
+# name = "First add-on"
+# base_url = "https://addon.example.invalid/your-configuration"
+# reach = "public"           # "loopback": Shijhon's own machine - in a container, the
+#                            # container itself; "private": also your network, the Docker
+#                            # host and other containers
+# settings = {}
+# budget_seconds = 45        # its own time to first audio, e.g. for a slow one
+# Its own limits, for an add-on you run yourself:
+# requests_per_second = 10   # API requests a second (0: no limit)
+# request_burst = 20         # of which this many at once after a quiet moment
+# audio_openings = 8         # audio requests being opened at once (0: no limit)
+
+# [delivery]
+# routing = "primary_first"  # or "ordered" (the default), "ready_first"
+# primary_source = "First add-on"
+# reliable_source = "First add-on"
+# The limits per add-on, for all users together (the defaults):
+# addon_requests_per_second = 2
+# addon_request_burst = 4
+# addon_audio_openings = 4
+
+# A catalog (docs/catalogs.md): the name of a catalog adapter installed in the
+# image, and the adapter's own settings.
+# [catalog]
+# kind = "example"
+# Or the catalog of one of your add-ons, when it has one:
+# kind = "addon"
+# addon = "First add-on"     # its name, as in [[addons]]
+
+# The cleanup takes releases with no recorded use out of the library again, `unused_days`
+# after they were added. `shijhon cleanup` lists what it would take out.
+# [cleanup]
+# mode = "off"               # "dry_run": logged daily; "on": taken out daily
+# unused_days = 30
+# catalog_albums = true      # catalog albums added to the library
+# fills = true               # songs added to partly owned albums

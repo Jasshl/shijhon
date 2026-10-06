@@ -1,0 +1,13 @@
+{
+ "name": "artist-band",
+ "path": "artists/900000205",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000205"
+  },
+  "name": "BrokenMeadow",
+  "artwork_template": "https://covers.demo.invalid/900000445/{w}x{h}.png"
+ }
+}

@@ -1,0 +1,115 @@
+Shijhon
+Copyright (C) 2026 Jasshl
+
+This program is free software: you can redistribute it and/or modify it under the terms
+of the GNU Affero General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along with this
+program (the file LICENSE). If not, see <https://www.gnu.org/licenses/>.
+
+Source code: https://github.com/Jasshl/shijhon
+
+
+Additional term under section 7(b) of the GNU Affero General Public License, version 3
+--------------------------------------------------------------------------------------
+
+Shijhon's dashboard shows, in the footer of every page (the sign-in page too), the
+program's name and version, the author attribution "© 2026 Jasshl", the license's name
+and a link to the source code: a legal notice and an author attribution in the sense of
+section 7(b).
+
+A modified version must preserve them: the author attribution as it is, and the source
+notice - the license's name with a working link to the source code. In a modified version
+that link leads to the Corresponding Source of that version (as section 13 of the license
+requires for a version offered over a network), and the notice may add the modifier's own
+attribution next to the original one, which stays.
+
+
+Additional permission under section 7 of the GNU Affero General Public License, version 3
+-----------------------------------------------------------------------------------------
+
+Catalog adapters. Shijhon loads catalog adapters as plugins, through the entry point
+group "shijhon.catalogs". An "independent adapter" is such a plugin that contains no
+code copied from Shijhon. Importing Shijhon's modules and implementing its catalog
+interface does not make an adapter less independent.
+
+As an additional permission under section 7, the copyright holders of Shijhon permit you
+to combine Shijhon with independent adapters, and to run, copy and convey the combination,
+whatever the license terms of those adapters. The requirements of the license, those of
+section 13 included, do not extend to an independent adapter: it may be under any terms
+its author chooses, and its source need not be offered. Shijhon itself, changed or
+unchanged, stays under the license.
+
+If you modify Shijhon, you may extend this permission to your version, but you are not
+obliged to. This permission speaks for Shijhon's own code; the third-party components
+below keep their own licenses.
+
+Add-ons. An add-on is a separate program that Shijhon talks to over HTTP. It is not part
+of Shijhon, and the license places no requirement on it.
+
+
+Third-party components
+----------------------
+
+This repository contains Shijhon's own code and one third-party component:
+
+- Atkinson Hyperlegible Mono (the dashboard's font), in
+  src/shijhon/dashboard/static/fonts/ - Copyright 2020-2024 The Atkinson Hyperlegible
+  Mono Project Authors (https://github.com/googlefonts/atkinson-hyperlegible-next-mono),
+  under the SIL Open Font License, Version 1.1. The license is the file OFL.txt in that
+  folder. The font stays under the OFL.
+
+Shijhon's runtime dependencies are not in this repository; they are installed from PyPI at
+the versions uv.lock names. Two of them are under licenses other than permissive ones:
+
+- mutagen (https://github.com/quodlibet/mutagen), the tagging library - GNU General
+  Public License, version 2 or (at your option) any later version (GPL-2.0-or-later).
+  Shijhon uses it under version 3, which section 13 of both licenses lets be combined
+  with a program under the GNU Affero General Public License, version 3.
+- certifi (https://github.com/certifi/python-certifi), the CA bundle - Mozilla Public
+  License 2.0 (MPL-2.0). Used unmodified.
+
+The others are under permissive licenses, each with its license text in its own package:
+aiolimiter, aiosqlite, annotated-types, anyio, async-lru, h11, pydantic, pydantic-core,
+pydantic-settings and typing-inspection (MIT); click, httpcore, httpx, idna, Jinja2,
+MarkupSafe, python-dotenv, Starlette and uvicorn (BSD-3-Clause); defusedxml and
+typing-extensions (PSF-2.0).
+
+Shijhon contains no code of Navidrome (GPL-3.0). It talks to an unmodified Navidrome over
+HTTP and reads its database's contents; the Compose file names Navidrome's own image, which
+this project does not distribute.
+
+
+For whoever publishes a built image
+-----------------------------------
+
+This project publishes the Dockerfile, not an image. An image built from it holds, besides
+Shijhon:
+
+- the Python packages above, mutagen included: the image as a whole is then a work that
+  combines Shijhon (AGPL-3.0-or-later) with mutagen (GPL), to be passed on under those
+  licenses with its Corresponding Source: this repository at the commit that was built,
+  with any changes (the Dockerfile and uv.lock, which the build follows, are in it), and
+  the source of the Python packages in the image, mutagen's among them - each is on PyPI
+  as a source distribution at the exact version uv.lock names;
+- the base image python:3.12-slim-bookworm, at the digest the Dockerfile pins: CPython
+  (PSF-2.0) and Debian 12 packages under their own licenses, GPL and LGPL ones among them
+  (each package's terms are in the image under /usr/share/doc/<package>/copyright). The
+  image's definition is at https://github.com/docker-library/python; Debian's source
+  packages for the exact versions are at https://snapshot.debian.org/ and
+  https://sources.debian.org/;
+- Debian 12's ffmpeg and the libraries it needs, which the Dockerfile installs from
+  Debian's archive (Shijhon runs it as a separate program to copy the audio of DASH
+  links): Debian builds it under the GPL, and its libraries are under their own licenses,
+  each in the image under /usr/share/doc/<package>/copyright; their source packages are at
+  the same addresses.
+
+Whoever distributes such an image names the base image and its digest, says where those
+sources are, and keeps this file and LICENSE with it. The uv binary is used in the build
+stage only and is not in the final image. docs/development.md ("Publishing an image") has
+the commands that list the packages and fetch their sources.

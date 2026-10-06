@@ -1,0 +1,371 @@
+{
+ "name": "album-twins-explicit",
+ "path": "albums/900000117",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000117"
+  },
+  "title": "CRIMSON.",
+  "artist": "Esme Ashdown",
+  "kind": "album",
+  "release_date": "2010-06-06",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000119"
+    },
+    "title": "NORTHERN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 117976,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000073",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000120"
+    },
+    "title": "AMBER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 186818,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000074",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000121"
+    },
+    "title": "AMBER. 2",
+    "artist": "Esme Ashdown",
+    "duration_ms": 160173,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000075",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000122"
+    },
+    "title": "RESTLESS.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 208691,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000076",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000123"
+    },
+    "title": "ECHOING.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 215156,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000077",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000124"
+    },
+    "title": "RESTLESS. 2 (feat. SaltHarbor)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 227292,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000078",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000125"
+    },
+    "title": "GOLDEN.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 275072,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000079",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000126"
+    },
+    "title": "IRON.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 177846,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000080",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-05-22",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000127"
+    },
+    "title": "SILENT.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 308808,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000081",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000128"
+    },
+    "title": "LAST. (feat. ElectricSatellites)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 212485,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000082",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000129"
+    },
+    "title": "WANDERING. (feat. IRONGARDENS)",
+    "artist": "Esme Ashdown",
+    "duration_ms": 254377,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000083",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000130"
+    },
+    "title": "SILENT. 2",
+    "artist": "Esme Ashdown",
+    "duration_ms": 460740,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000084",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000131"
+    },
+    "title": "PAPER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 248129,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000085",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000132"
+    },
+    "title": "COPPER.",
+    "artist": "Esme Ashdown",
+    "duration_ms": 247718,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000086",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000117"
+    },
+    "album_title": "CRIMSON.",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2010-06-06",
+    "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png"
+   }
+  ],
+  "explicit": true,
+  "clean": false,
+  "genres": [
+   "Hip-Hop/Rap",
+   "Rap",
+   "West Coast Rap"
+  ],
+  "label": "Quiet Records",
+  "upc": "990000000006",
+  "track_count": 14,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000086"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000118/{w}x{h}.png",
+  "incomplete": false
+ }
+}

@@ -1,0 +1,96 @@
+[project]
+name = "shijhon"
+version = "0.1.0b1"
+description = "Blend your own music library with a music catalog, for Subsonic clients"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE", "src/shijhon/dashboard/static/fonts/OFL.txt"]
+authors = [{ name = "Jasshl" }]
+dependencies = [
+    "aiolimiter>=1.3.0",
+    "aiosqlite>=0.22.1",
+    "async-lru>=2.3.0",
+    "defusedxml>=0.7.1",
+    "httpx>=0.28.1",
+    "jinja2>=3.1",
+    "mutagen>=1.48.1",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "starlette>=1.7.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.urls]
+Repository = "https://github.com/Jasshl/shijhon"
+Changelog = "https://github.com/Jasshl/shijhon/blob/main/CHANGELOG.md"
+
+[project.scripts]
+shijhon = "shijhon.cli:main"
+
+# Catalog adapters are plugins: packages that register an entry point in this group,
+# which "[catalog] kind" names (docs/development.md). Shijhon's own entry is the kind that
+# takes the catalog from an add-on; every other adapter is a separate package.
+[project.entry-points."shijhon.catalogs"]
+addon = "shijhon.catalog.addon:adapter"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shijhon"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "tests/demo-catalog/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "S", "RUF"]
+ignore = [
+    "S101",  # assert is fine in tests and for invariants
+    "S603",  # subprocess with trusted, list-form arguments (ffmpeg, navidrome)
+    "S607",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S311"]
+# httpcore's network-backend interface takes timeout parameters.
+"src/shijhon/delivery/netpolicy.py" = ["ASYNC109"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests/demo-catalog/src"]
+
+[[tool.mypy.overrides]]
+# mutagen's inline types are partial; treat it as untyped.
+module = ["mutagen", "mutagen.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not live'"
+markers = [
+    "canary: suite P - D, E, C, the entry contract (SHIJHON_NAVIDROME_VERSION: a candidate)",
+    "live: opt-in tests against real add-ons or catalogs (private config)",
+    "client: headless client checks (AVFoundation on macOS)",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.16.9",
+    # The tests' made-up catalog: an adapter package of its own (tests/demo-catalog),
+    # in the development environment only.
+    "shijhon-demo-catalog",
+    "types-defusedxml>=0.7.0.20260504",
+    "xmlschema>=4.3.2",
+]
+
+[tool.uv.sources]
+shijhon-demo-catalog = { path = "tests/demo-catalog", editable = true }

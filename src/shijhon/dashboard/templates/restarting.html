@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en" data-accent="{{ accent }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }} – Shijhon</title>
+<link rel="stylesheet" href="{{ prefix }}/static/shijhon.css">
+{% if not refused %}
+<noscript><meta http-equiv="refresh" content="20; url={{ prefix }}/restarting?boot={{ boot }}&amp;next={{ next|urlencode }}"></noscript>
+{% endif %}
+</head>
+<body>
+<main class="signin" id="main">
+  <p class="wordmark">Shijhon</p>
+{% if refused %}
+  <div class="signin-panel">
+    <h1>Shijhon was not restarted</h1>
+    <div class="notice notice-error" role="alert">
+      <p>{{ refused }}</p>
+      <p><a href="{{ next }}">Back</a></p>
+    </div>
+  </div>
+</main>
+{% else %}
+  <div class="signin-panel" id="restarting" data-boot="{{ boot }}" data-alive="{{ prefix }}/alive" data-next="{{ next }}">
+    <h1>Shijhon is restarting</h1>
+    <div class="notice" role="status">
+      <p>It stops, and Docker or your service manager starts it again with the saved settings. A track being added to the library is given time to finish first.</p>
+      <p>This page goes back to where you were once Shijhon answers again. <a href="{{ next }}">Go there now</a></p>
+    </div>
+    <div class="notice notice-error" role="alert" id="restart-late" hidden>
+      <p class="notice-title">Shijhon is not answering yet</p>
+      <p>If it stays so, look where Shijhon is run: whether it was started again (a container without a restart policy stays stopped), and its log, where a start that fails says why.</p>
+    </div>
+  </div>
+</main>
+<script src="{{ prefix }}/static/restart.js"></script>
+{% endif %}
+</body>
+</html>

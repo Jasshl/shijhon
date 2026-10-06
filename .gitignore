@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local state, caches and test artifacts
+.cache/
+/var/
+*.sqlite3
+*.log
+
+# Local configuration and secrets
+packaging/config/
+.env
+*.local.toml
+secrets/

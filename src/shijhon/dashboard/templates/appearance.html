@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% set title = "Appearance" %}
+{% block main %}
+<div class="page-head">
+  <h1>Appearance</h1>
+  <p class="page-summary">The accent color applies to everyone who signs in. Light or dark follows each device's own setting.</p>
+</div>
+{% if saved_now %}
+<div class="notice notice-ok" role="status"><p>Accent color saved.</p></div>
+{% endif %}
+<form method="post" action="{{ prefix }}/appearance">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <section class="group" aria-labelledby="accent-title">
+    <div class="group-head">
+      <h2 id="accent-title">Accent color</h2>
+      <p class="group-help">Each color is a whole palette. Status lights and notices keep their own colors.</p>
+    </div>
+    <fieldset class="accent-picker">
+      <legend class="visually-hidden">Accent color</legend>
+{% for value, name in accents %}
+      <label class="accent-option" data-accent="{{ value }}">
+        <span class="accent-preview" aria-hidden="true">
+          <span class="accent-preview-tab">Library</span>
+          <span class="accent-preview-row"><span class="accent-preview-button">Save</span><span class="switch-track"></span></span>
+        </span>
+        <span class="accent-name"><input type="radio" name="accent" value="{{ value }}"{% if value == chosen %} checked{% endif %}> {{ name }}{% if loop.first %} <span class="tag">Default</span>{% endif %}</span>
+      </label>
+{% endfor %}
+    </fieldset>
+  </section>
+  <div class="form-actions">
+    <button class="btn-primary">Save appearance</button>
+  </div>
+</form>
+{% endblock %}

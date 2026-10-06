@@ -1,0 +1,883 @@
+{
+ "name": "search-covers",
+ "path": "search",
+ "status": 200,
+ "params": {
+  "term": "hollow islands"
+ },
+ "body": {
+  "artists": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000542"
+    },
+    "name": "Leon Loring 2",
+    "artwork_template": "https://covers.demo.invalid/900000543/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000569"
+    },
+    "name": "FrozenPilots",
+    "artwork_template": "https://covers.demo.invalid/900000570/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000591"
+    },
+    "name": "Felix Fairbanks",
+    "artwork_template": "https://covers.demo.invalid/900000592/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000618"
+    },
+    "name": "Wren Norrell",
+    "artwork_template": "https://covers.demo.invalid/900000619/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000636"
+    },
+    "name": "Otto Holloway",
+    "artwork_template": "https://covers.demo.invalid/900000637/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000663"
+    },
+    "name": "Wren Loring",
+    "artwork_template": "https://covers.demo.invalid/900000664/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000690"
+    },
+    "name": "Felix Delacroix 2",
+    "artwork_template": "https://covers.demo.invalid/900000691/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000717"
+    },
+    "name": "BurningVoices",
+    "artwork_template": "https://covers.demo.invalid/900000718/{w}x{h}.png"
+   }
+  ],
+  "albums": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "title": "Winter Parade",
+    "artist": "Silas Prescott",
+    "kind": "album",
+    "release_date": "2014-10-12",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "label": "Bright Letters Records",
+    "upc": "990000000017",
+    "track_count": 12,
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000528"
+    },
+    "title": "Winter Parade",
+    "artist": "Viggo Moreau",
+    "kind": "album",
+    "release_date": "2016-04-17",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Rock",
+     "Disney"
+    ],
+    "label": "Golden Lanterns Records",
+    "upc": "990000000018",
+    "track_count": 12,
+    "artwork_template": "https://covers.demo.invalid/900000529/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000530"
+    },
+    "title": "Distant Pilots",
+    "artist": "Ilse Castell",
+    "kind": "album",
+    "release_date": "2016-04-17",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Disney"
+    ],
+    "label": "Burning Tides Records",
+    "upc": "990000000019",
+    "track_count": 12,
+    "artwork_template": "https://covers.demo.invalid/900000531/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000532"
+    },
+    "title": "Amber Canyon - Single",
+    "artist": "SunkenCanyon",
+    "kind": "single",
+    "release_date": "1966-12-24",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Rock",
+     "Rock & Roll",
+     "Pop",
+     "Pop/Rock",
+     "Arena Rock",
+     "Blues-Rock",
+     "Soft Rock"
+    ],
+    "label": "Electric Records",
+    "upc": "990000000020",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000533/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000534"
+    },
+    "title": "Golden Stones",
+    "artist": "Silas Prescott",
+    "kind": "album",
+    "release_date": "2016-07-03",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "label": "Bright Letters Records",
+    "upc": "990000000021",
+    "track_count": 17,
+    "artwork_template": "https://covers.demo.invalid/900000535/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000536"
+    },
+    "title": "Burning Summers - Single",
+    "artist": "Petra Sorel",
+    "kind": "single",
+    "release_date": "2010-07-29",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Soundtrack"
+    ],
+    "label": "Restless Orchard Records",
+    "upc": "990000000022",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000537/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000538"
+    },
+    "title": "Crimson Circuits - Single",
+    "artist": "Tess Duval & Lúcia Hüber",
+    "kind": "single",
+    "release_date": "1967-01-23",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop",
+     "Pop/Rock",
+     "Soft Rock"
+    ],
+    "label": "Burning Canyon Records",
+    "upc": "990000000023",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000539/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000540"
+    },
+    "title": "Hollow Parade (feat. Sable Norrell 2) - Single",
+    "artist": "ElectricCircuits",
+    "kind": "single",
+    "release_date": "2013-07-14",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "label": "Violet Circuits 2 Records",
+    "upc": "990000000024",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000541/{w}x{h}.png",
+    "incomplete": false
+   }
+  ],
+  "songs": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000744"
+    },
+    "title": "Glass Stones",
+    "artist": "Silas Prescott",
+    "duration_ms": 199562,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000277",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000745"
+    },
+    "title": "Golden Tides",
+    "artist": "Silas Prescott",
+    "duration_ms": 177377,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000278",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000746"
+    },
+    "title": "Pale Lanterns",
+    "artist": "Silas Prescott",
+    "duration_ms": 149362,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000279",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000747"
+    },
+    "title": "Amber Canyon",
+    "artist": "Silas Prescott",
+    "duration_ms": 163828,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000280",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000748"
+    },
+    "title": "Wandering (Distant Stones)",
+    "artist": "Silas Prescott",
+    "duration_ms": 186872,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000281",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000749"
+    },
+    "title": "Salt Engines",
+    "artist": "Viggo Moreau",
+    "duration_ms": 177080,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000282",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000528"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Rock",
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000529/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000750"
+    },
+    "title": "Quiet Voices",
+    "artist": "Silas Prescott",
+    "duration_ms": 220678,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000283",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000751"
+    },
+    "title": "Velvet Summers",
+    "artist": "Silas Prescott",
+    "duration_ms": 168472,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000284",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000752"
+    },
+    "title": "Salt Engines",
+    "artist": "Silas Prescott",
+    "duration_ms": 164168,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000285",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-05",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000753"
+    },
+    "title": "Bright Wolves 3",
+    "artist": "Silas Prescott",
+    "duration_ms": 195291,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000286",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000754"
+    },
+    "title": "Tender Horizon",
+    "artist": "Silas Prescott",
+    "duration_ms": 184792,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000287",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000755"
+    },
+    "title": "Violet Mirrors",
+    "artist": "Silas Prescott",
+    "duration_ms": 182256,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000288",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000756"
+    },
+    "title": "Wandering Orchard",
+    "artist": "Silas Prescott",
+    "duration_ms": 156658,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000289",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000526"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Pop/Rock",
+     "Pop",
+     "Disney"
+    ],
+    "release_date": "2014-10-12",
+    "artwork_template": "https://covers.demo.invalid/900000527/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000757"
+    },
+    "title": "Distant Orchard",
+    "artist": "EchoingOrchard",
+    "duration_ms": 139242,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000290",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000759"
+    },
+    "album_title": "Low Mirrors",
+    "genres": [
+     "Rock",
+     "Metal"
+    ],
+    "release_date": "2010-07-03",
+    "artwork_template": "https://covers.demo.invalid/900000758/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000760"
+    },
+    "title": "Glass Stones",
+    "artist": "Viggo Moreau",
+    "duration_ms": 239240,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000291",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000528"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Rock",
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000529/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000761"
+    },
+    "title": "Salt Engines",
+    "artist": "Ilse Castell",
+    "duration_ms": 158798,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000292",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000530"
+    },
+    "album_title": "Distant Pilots",
+    "genres": [
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000531/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000762"
+    },
+    "title": "Lunar 3",
+    "artist": "BrokenShadows, FrozenColors & ElectricMachines",
+    "duration_ms": 215528,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000293",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000764"
+    },
+    "album_title": "Hollow Parade 2",
+    "genres": [
+     "R&B/Soul",
+     "Pop"
+    ],
+    "release_date": "1972-01-10",
+    "artwork_template": "https://covers.demo.invalid/900000763/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000765"
+    },
+    "title": "Amber Canyon",
+    "artist": "SunkenCanyon",
+    "duration_ms": 206769,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000294",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000532"
+    },
+    "album_title": "Amber Canyon - Single",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1966-12-24",
+    "artwork_template": "https://covers.demo.invalid/900000533/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000766"
+    },
+    "title": "Wandering Orchard",
+    "artist": "Viggo Moreau",
+    "duration_ms": 229210,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000295",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000528"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Rock",
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000529/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000767"
+    },
+    "title": "Restless Pilots 2 (feat. WanderingSummers)",
+    "artist": "Iris Garrow",
+    "duration_ms": 245564,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000296",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000769"
+    },
+    "album_title": "Restless Pilots 2",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "1999-02-23",
+    "artwork_template": "https://covers.demo.invalid/900000768/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000770"
+    },
+    "title": "Quiet Mirrors",
+    "artist": "Wren Loring",
+    "duration_ms": 304642,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000297",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000669"
+    },
+    "album_title": "Lunar Summers",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1970-11-25",
+    "artwork_template": "https://covers.demo.invalid/900000771/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000772"
+    },
+    "title": "Wandering",
+    "artist": "Ilse Castell",
+    "duration_ms": 250260,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000298",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000530"
+    },
+    "album_title": "Distant Pilots",
+    "genres": [
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000531/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000773"
+    },
+    "title": "Amber Canyon",
+    "artist": "Viggo Moreau",
+    "duration_ms": 226535,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000299",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000528"
+    },
+    "album_title": "Winter Parade",
+    "genres": [
+     "Rock",
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000529/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000774"
+    },
+    "title": "Quiet Voices",
+    "artist": "Ilse Castell",
+    "duration_ms": 202536,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000300",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000530"
+    },
+    "album_title": "Distant Pilots",
+    "genres": [
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000531/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000775"
+    },
+    "title": "Quiet Pilots",
+    "artist": "Ilse Castell",
+    "duration_ms": 177339,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000301",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000530"
+    },
+    "album_title": "Distant Pilots",
+    "genres": [
+     "Disney"
+    ],
+    "release_date": "2016-04-17",
+    "artwork_template": "https://covers.demo.invalid/900000531/{w}x{h}.png"
+   }
+  ]
+ }
+}

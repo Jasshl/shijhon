@@ -1,0 +1,246 @@
+{% extends "base.html" %}
+{% set title = "Library" %}
+{% from "_macros.html" import setting, settings_group, more_summary, error_notice %}
+{% macro form_status(part) %}
+{% if flash and flash.part == part and flash.status %}
+    <p class="form-status is-saved" role="status">{{ flash.status }}</p>
+{% elif form_for == part and notices %}
+    <p class="form-status">Not saved</p>
+{% endif %}
+{% endmacro %}
+{% block main %}
+<div class="page-head">
+  <h1>Library</h1>
+  <p class="page-summary">A partly owned album with a matching release in the catalog is shown complete: the missing songs appear as catalog songs. The library pass looks for each album's match.</p>
+</div>
+{% if notices %}
+{{ error_notice(notices) }}
+{% endif %}
+{% for job in jobs %}
+<div class="notice {{ 'notice-ok' if job.ok else 'notice-error' }}" role="{{ 'status' if job.ok else 'alert' }}"><p>{{ job.message }}</p></div>
+{% endfor %}
+{% if flash and flash.words %}
+<div class="notice notice-{{ flash.tone }}" role="{{ 'alert' if flash.tone == 'error' else 'status' }}"><p>{{ flash.words }}</p></div>
+{% endif %}
+{% if problem %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">Saved settings not in use</p>
+  <p>The values saved here don't fit the configuration's, so the configuration's apply: {{ problem }} Save the forms below to replace them.</p>
+</div>
+{% endif %}
+{% if not fills_on %}
+<div class="notice notice-info" role="status">
+  <p class="notice-title">Albums are not matched now</p>
+  <p>No catalog is connected, or “Fill partly owned albums” is off under More settings. The policy and the library pass apply once it runs.</p>
+</div>
+{% endif %}
+
+<form method="post" action="{{ prefix }}/library/policy" novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="form" value="policy">
+  <section class="group" aria-labelledby="policy-title">
+    <div class="group-head"><h2 id="policy-title">Fill policy</h2></div>
+    <div class="rows">
+{% if songs.locked or share.locked %}
+{{ setting(songs) }}
+{{ setting(share) }}
+{% else %}
+{% set invalid = songs.problem or share.problem %}
+      <div class="setting{% if invalid %} is-invalid{% elif songs.modified or share.modified %} is-modified{% endif %}" role="group" aria-labelledby="policy-label">
+        <div class="setting-text">
+          <p class="setting-label" id="policy-label">Fill automatically when you own</p>
+{% if songs.saved or share.saved %}
+          <span class="tag tag-saved">Saved</span>
+{% endif %}
+          <p class="setting-help" id="policy-help">Either condition is enough. Other albums are shown complete too, and filled when one of their songs is played, starred or added to a playlist.</p>
+        </div>
+        <div class="setting-control">
+          <div class="control-pair">
+            <label class="visually-hidden" for="{{ songs.id }}">At least this many songs</label>
+            <span class="unit-field"><input id="{{ songs.id }}" name="auto_min_songs" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" value="{{ songs.text }}" aria-describedby="policy-help{% if songs.problem %} policy-songs-error{% endif %} policy-default"{% if songs.problem %} aria-invalid="true"{% endif %}><span class="unit" aria-hidden="true">songs</span></span>
+            <span>or</span>
+            <label class="visually-hidden" for="{{ share.id }}">At least this share of the album, in percent</label>
+            <span class="unit-field"><input id="{{ share.id }}" name="auto_min_share" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" value="{{ share.text }}" aria-describedby="policy-help{% if share.problem %} policy-share-error{% endif %} policy-default"{% if share.problem %} aria-invalid="true"{% endif %}><span class="unit" aria-hidden="true">%</span></span>
+          </div>
+{% if songs.problem %}
+          <p class="field-error" id="policy-songs-error">Songs: {{ songs.problem }}</p>
+{% endif %}
+{% if share.problem %}
+          <p class="field-error" id="policy-share-error">Share: {{ share.problem }}</p>
+{% endif %}
+          <p class="setting-default" id="policy-default">{{ policy_default }}</p>
+        </div>
+      </div>
+{% endif %}
+    </div>
+    <div class="form-actions">
+      <button class="btn-primary">Save policy</button>
+{{ form_status("policy") }}
+    </div>
+  </section>
+</form>
+
+<section class="group" aria-labelledby="pass-title">
+  <div class="group-head">
+    <h2 id="pass-title">Library pass</h2>
+    <p class="group-help">Matches every album against the catalog. <strong>Dry run</strong> fills nothing automatically and lists what it would fill, <strong>On</strong> fills the albums that meet the policy, and <strong>Off</strong> stops the pass: such albums are filled once viewed or shown. A change to or from off applies after a restart (until then, off means dry runs).</p>
+  </div>
+  <div class="rows">
+{% if mode.locked %}
+    <form method="post" action="{{ prefix }}/library/pass">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="form" value="pass">
+{{ setting(mode) }}
+{% if mode.hidden %}
+      <div class="row form-actions"><button>Apply</button>{{ form_status("pass") }}</div>
+{% endif %}
+    </form>
+{% else %}
+    <form class="row pass-mode" method="post" action="{{ prefix }}/library/pass">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="form" value="pass">
+      <fieldset class="segmented">
+        <legend class="visually-hidden">Library pass</legend>
+{% for value, label in mode.options %}
+        <label><input type="radio" name="library_pass" value="{{ value }}"{% if value == mode.chosen %} checked{% endif %}><span>{{ label }}</span></label>
+{% endfor %}
+      </fieldset>
+      <button>Apply</button>
+{{ form_status("pass") }}
+    </form>
+{% endif %}
+{% if fills_on %}
+    <div class="row">
+      <div class="meter">
+        <div class="meter-head">
+          <p><span class="meter-value">{{ counts.checked|count }}{% if albums %} of {{ albums|count }}{% endif %}</span> albums checked</p>
+{% if running and running.moving %}
+          <p class="muted">Running: {{ running.done|count }} of {{ running.todo|count }} albums in this run, about {{ running.minutes|count }} minute{{ "s" if running.minutes != 1 }} left</p>
+{% elif running %}
+          <p class="muted">The pass's current or last run is at {{ running.done|count }} of {{ running.todo|count }} albums</p>
+{% elif resting %}
+          <p class="muted">Waiting: the catalog is resting after errors until {{ resting|when }}</p>
+{% elif pass_mode == "off" %}
+          <p class="muted">Off: albums are matched when they are viewed or shown, and those that meet the policy are filled then{% if counts.would_fill %} ({{ counts.would_fill|count }} would be){% endif %}</p>
+{% elif pass_mode %}
+          <p class="muted">{{ "Dry run" if pass_mode == "dry_run" else "On" }}: it looks for new albums every {{ interval|number }} hour{{ "s" if interval != 1 }}</p>
+{% endif %}
+        </div>
+{% if albums %}
+        <progress max="{{ albums }}" value="{{ [counts.checked, albums]|min }}">{{ (100 * [counts.checked, albums]|min / albums)|round|int }} %</progress>
+{% endif %}
+        <dl class="counts">
+{% if counts.would_fill or pass_mode == "dry_run" %}
+          <div><dt>Would fill</dt><dd>{{ counts.would_fill|count }}</dd></div>
+{% endif %}
+          <div><dt>Filled</dt><dd>{{ counts.filled|count }}</dd></div>
+          <div><dt>To fill when used</dt><dd>{{ counts.deferred|count }}</dd></div>
+          <div><dt>Complete already</dt><dd>{{ counts.complete|count }}</dd></div>
+          <div><dt>No match</dt><dd>{{ counts.none|count }}</dd></div>
+          <div><dt>To review</dt><dd>{{ counts.review|count }}</dd></div>
+{% if counts.failed %}
+          <div><dt>Failed</dt><dd>{{ counts.failed|count }}</dd></div>
+{% endif %}
+{% if counts.kept %}
+          <div><dt>Kept as they are</dt><dd>{{ counts.kept|count }}</dd></div>
+{% endif %}
+        </dl>
+      </div>
+    </div>
+{% endif %}
+  </div>
+</section>
+
+{% if fills_on %}
+<section class="group" aria-labelledby="review-title" id="review">
+  <div class="group-head">
+    <h2 id="review-title">Review</h2>
+{% if total %}
+    <p class="group-meta">{{ total|count }} album{{ "s" if total != 1 }}</p>
+{% endif %}
+    <p class="group-help">Albums without a confident match. Nothing is filled until you decide.</p>
+  </div>
+{% if review %}
+  <div class="table-wrap">
+    <table class="table table-stack review">
+      <thead>
+        <tr><th scope="col" class="col-album">Album</th><th scope="col" class="num">Owned</th><th scope="col" class="col-reason">Reason</th><th scope="col">Action</th></tr>
+      </thead>
+      <tbody>
+{% for item in review %}
+{% set row = item.row %}
+        <tr>
+          <td><span class="cell-title">{{ row.title }}</span><span class="cell-sub">{{ row.artist }}</span></td>
+          <td class="num" data-label="Owned">{% if row.tracks %}{{ row.owned|count }} of {{ row.tracks|count }}{% else %}{{ row.owned|count }} song{{ "s" if row.owned != 1 }}{% endif %}</td>
+          <td data-label="Reason">{{ row.headline }}{% if row.sentence or row.planned %}<span class="cell-sub">{{ row.sentence }}{% if row.planned %} Found by the dry run.{% endif %}</span>{% endif %}</td>
+          <td>
+{% if item.job %}
+            <p class="small muted">{{ "Filling" if item.job.action == "fill" else "Matching again" }} since {{ item.job.started|when }}…</p>
+{% else %}
+            <form class="review-actions" method="post" action="{{ prefix }}/library/review/{{ row.album_id|urlencode }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="page" value="{{ page }}">
+{% if not row.part and item.options %}
+              <div class="inline-form">
+                <label class="visually-hidden" for="r{{ loop.index }}-release">Release to fill {{ row.title }} from</label>
+                <select id="r{{ loop.index }}-release" name="release" class="select-small">
+{% for ref, label in item.options %}
+                  <option value="{{ ref }}">{{ label }}</option>
+{% endfor %}
+                </select>
+                <button class="btn-small" name="action" value="fill">Fill</button>
+              </div>
+{% endif %}
+              <div class="actions">
+                <button class="btn-quiet btn-small" name="action" value="keep">Keep as is</button>
+                <button class="btn-quiet btn-small" name="action" value="rematch">Match again</button>
+              </div>
+            </form>
+{% endif %}
+          </td>
+        </tr>
+{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% if pages > 1 %}
+  <nav class="pager" aria-label="Review pages">
+    <p class="pager-status">Albums {{ first|count }}–{{ last|count }} of {{ total|count }}</p>
+    <div class="actions">
+{% if page > 1 %}
+      <a class="btn btn-small" href="?page={{ page - 1 }}#review">Previous</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Previous</a>
+{% endif %}
+{% if page < pages %}
+      <a class="btn btn-small" href="?page={{ page + 1 }}#review">Next</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Next</a>
+{% endif %}
+    </div>
+  </nav>
+{% endif %}
+{% else %}
+  <div class="empty">
+    <p class="empty-title">Nothing to review</p>
+    <p>Albums without a confident match appear here, with the releases considered.</p>
+  </div>
+{% endif %}
+</section>
+{% endif %}
+
+<details class="more-settings"{% if fold.open %} open{% endif %}>
+  {{ more_summary(fold) }}
+  <form method="post" action="{{ prefix }}/library/settings" novalidate>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="form" value="advanced">
+{% for group, rows in fold.groups %}
+{{ settings_group(group, rows) }}
+{% endfor %}
+    <div class="form-actions">
+      <button class="btn-primary">Save changes</button>
+{{ form_status("advanced") }}
+    </div>
+  </form>
+</details>
+{% endblock %}

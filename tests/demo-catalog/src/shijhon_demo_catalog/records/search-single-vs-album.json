@@ -1,0 +1,821 @@
+{
+ "name": "search-single-vs-album",
+ "path": "search",
+ "status": 200,
+ "params": {
+  "term": "crimson towers"
+ },
+ "body": {
+  "artists": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000147"
+    },
+    "name": "Oren Garrow",
+    "artwork_template": "https://covers.demo.invalid/900000373/{w}x{h}.png"
+   }
+  ],
+  "albums": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000145"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2) [Radio Edit] - Single",
+    "artist": "Oren Garrow",
+    "kind": "single",
+    "release_date": "2006-06-11",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop"
+    ],
+    "label": "Hollow Records",
+    "upc": "990000000008",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900000146/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000386"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Distant Colors]",
+    "artist": "Oren Garrow",
+    "kind": "single",
+    "release_date": "2006-08-25",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop"
+    ],
+    "label": "Hollow Records",
+    "upc": "990000000044",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001078/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001079"
+    },
+    "title": "Broken Letters 2 - Single",
+    "artist": "OpenPilots & Yara Prescott",
+    "kind": "single",
+    "release_date": "2006-11-30",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Electronic",
+     "Alternative"
+    ],
+    "label": "Hidden Motors Records",
+    "upc": "990000000045",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001080/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "title": "Iron Wolves",
+    "artist": "Oren Garrow",
+    "kind": "album",
+    "release_date": "2006-07-09",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop",
+     "Electronic",
+     "Electronica",
+     "Dance",
+     "House"
+    ],
+    "label": "Hollow Records",
+    "upc": "990000000013",
+    "track_count": 13,
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001081"
+    },
+    "title": "Open Lanterns - Single",
+    "artist": "Sable Blackwood 2",
+    "kind": "single",
+    "release_date": "2014-03-07",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance"
+    ],
+    "label": "Crimson Letters Records",
+    "upc": "990000000046",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001082/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001083"
+    },
+    "title": "Open Lanterns (Bonus Track Edition)",
+    "artist": "Uma Kestrel",
+    "kind": "album",
+    "release_date": "2002-11-03",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Rock",
+     "Singer/Songwriter",
+     "Contemporary Singer/Songwriter"
+    ],
+    "label": "BURNING Records",
+    "upc": "990000000047",
+    "track_count": 12,
+    "artwork_template": "https://covers.demo.invalid/900001084/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000374"
+    },
+    "title": "Hollow 2",
+    "artist": "Oren Garrow",
+    "kind": "album",
+    "release_date": "1994-05-04",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance",
+     "House",
+     "Rock",
+     "Electronic",
+     "Electronica"
+    ],
+    "label": "Violet Parade Records",
+    "upc": "990000000048",
+    "track_count": 14,
+    "artwork_template": "https://covers.demo.invalid/900001085/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001086"
+    },
+    "title": "Open Lanterns (Silent Parade) [Open Motors] - Single",
+    "artist": "Ilse Delacroix",
+    "kind": "single",
+    "release_date": "2007-03-26",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Karaoke"
+    ],
+    "label": "Salt Colors Records",
+    "upc": "990000000049",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001087/{w}x{h}.png",
+    "incomplete": false
+   }
+  ],
+  "songs": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000320"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 370094,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000148"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2) [Radio Edit]",
+    "artist": "Oren Garrow",
+    "duration_ms": 246772,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000096",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000145"
+    },
+    "album_title": "Open Lanterns (feat. Kasper Merritt 2) [Radio Edit] - Single",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900000146/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001088"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Radio Edit]",
+    "artist": "Oren Garrow",
+    "duration_ms": 249118,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000096",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001090"
+    },
+    "album_title": "Iron Motors 2",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900001089/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001091"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Distant Colors]",
+    "artist": "Oren Garrow",
+    "duration_ms": 632041,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000325",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000386"
+    },
+    "album_title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Distant Colors]",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2006-08-25",
+    "artwork_template": "https://covers.demo.invalid/900001078/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001092"
+    },
+    "title": "Open Lanterns (Radio Edit)",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 248516,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000096",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001094"
+    },
+    "album_title": "Frozen Orchard",
+    "genres": [
+     "Electronica",
+     "Electronic"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900001093/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001095"
+    },
+    "title": "Open Lanterns (Broken Satellites 2) (feat. Kasper Merritt 2 and Esme Tallis)",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 369967,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000326",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000383"
+    },
+    "album_title": "Iron Wolves (Broken Satellites 2)",
+    "genres": [
+     "Dance",
+     "Electronic"
+    ],
+    "release_date": "2017-01-08",
+    "artwork_template": "https://covers.demo.invalid/900001096/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001097"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 369027,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001099"
+    },
+    "album_title": "Frozen Pilots 2",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900001098/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001100"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Radio Edit]",
+    "artist": "Oren Garrow",
+    "duration_ms": 248930,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000096",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001102"
+    },
+    "album_title": "Salt Rivers 2",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900001101/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000305"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 370356,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001103"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 369027,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001105"
+    },
+    "album_title": "Restless Stones 2",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900001104/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001106"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 369027,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001108"
+    },
+    "album_title": "Open Arcade",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900001107/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001109"
+    },
+    "title": "Open Lanterns (Faded 3)",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 117577,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000327",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001111"
+    },
+    "album_title": "Last Colors (Wandering Station)",
+    "genres": [
+     "Dance",
+     "Electronic"
+    ],
+    "release_date": "2016-08-24",
+    "artwork_template": "https://covers.demo.invalid/900001110/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001112"
+    },
+    "title": "Open Lanterns (Burning Stones) [Faded 3]",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 203583,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000328",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001114"
+    },
+    "album_title": "Wild Bridges (Wandering Station)",
+    "genres": [
+     "Dance",
+     "House"
+    ],
+    "release_date": "2018-09-09",
+    "artwork_template": "https://covers.demo.invalid/900001113/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001115"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Burning Bridges 2] [Faded 3]",
+    "artist": "Oren Garrow",
+    "duration_ms": 152413,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000329",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001117"
+    },
+    "album_title": "Silent Gardens (Wandering Station)",
+    "genres": [
+     "Dance",
+     "Trance"
+    ],
+    "release_date": "2015-04-19",
+    "artwork_template": "https://covers.demo.invalid/900001116/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001118"
+    },
+    "title": "Open Lanterns (Faded 3)",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 90835,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000330",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001120"
+    },
+    "album_title": "Hollow Bridges (Wandering Station)",
+    "genres": [
+     "Dance",
+     "Pop"
+    ],
+    "release_date": "2016-09-18",
+    "artwork_template": "https://covers.demo.invalid/900001119/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001121"
+    },
+    "title": "Open Lanterns (feat. Kasper Merritt 2) [Faded 3]",
+    "artist": "Oren Garrow",
+    "duration_ms": 162680,
+    "disc": 1,
+    "number": 20,
+    "isrc": "ZZSHJ0000331",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001123"
+    },
+    "album_title": "Lunar Machines (Wandering Station)",
+    "genres": [
+     "Pop",
+     "Dance"
+    ],
+    "release_date": "2018-10-14",
+    "artwork_template": "https://covers.demo.invalid/900001122/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001124"
+    },
+    "title": "Winter Circuits",
+    "artist": "BurningStation",
+    "duration_ms": 248405,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000332",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001126"
+    },
+    "album_title": "Hollow Cities - EP",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2006-12-28",
+    "artwork_template": "https://covers.demo.invalid/900001125/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001127"
+    },
+    "title": "Open Lanterns (Faded 3)",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 118797,
+    "disc": 1,
+    "number": 22,
+    "isrc": "ZZSHJ0000333",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001129"
+    },
+    "album_title": "Northern Parade (Wandering Station)",
+    "genres": [
+     "Pop",
+     "Dance"
+    ],
+    "release_date": "2017-03-05",
+    "artwork_template": "https://covers.demo.invalid/900001128/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001130"
+    },
+    "title": "Open Lanterns (Velvet Tides 2)",
+    "artist": "Oren Hale",
+    "duration_ms": 189971,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000334",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001132"
+    },
+    "album_title": "Wild Tides - Single",
+    "genres": [
+     "Jazz",
+     "R&B/Soul",
+     "Neo-Soul",
+     "Rock",
+     "Bop",
+     "Pop",
+     "Pop/Rock"
+    ],
+    "release_date": "2006-07-27",
+    "artwork_template": "https://covers.demo.invalid/900001131/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001133"
+    },
+    "title": "Open Lanterns",
+    "artist": "Juno Garrow",
+    "duration_ms": 292580,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000335",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001135"
+    },
+    "album_title": "Hidden Voices",
+    "genres": [
+     "Electronica",
+     "Electronic",
+     "Alternative"
+    ],
+    "release_date": "2006-09-07",
+    "artwork_template": "https://covers.demo.invalid/900001134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001136"
+    },
+    "title": "Open Lanterns (Burning Stones) (Frozen Canyon) [Faded 3]",
+    "artist": "Oren Garrow, Kasper Merritt 2, Esme Tallis, SilentHarbor & Oren Sorel",
+    "duration_ms": 107542,
+    "disc": 1,
+    "number": 23,
+    "isrc": "ZZSHJ0000336",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001138"
+    },
+    "album_title": "Low Stones (Wandering Station)",
+    "genres": [
+     "Dance",
+     "House"
+    ],
+    "release_date": "2018-09-29",
+    "artwork_template": "https://covers.demo.invalid/900001137/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001139"
+    },
+    "title": "Open Lanterns",
+    "artist": "Petra Ingram",
+    "duration_ms": 187123,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000337",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001141"
+    },
+    "album_title": "Velvet Gardens",
+    "genres": [
+     "Children’s Music",
+     "Lullabies"
+    ],
+    "release_date": "2018-09-02",
+    "artwork_template": "https://covers.demo.invalid/900001140/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001142"
+    },
+    "title": "Open Lanterns",
+    "artist": "Mara Carver",
+    "duration_ms": 197384,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000338",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001144"
+    },
+    "album_title": "Tender Islands - EP",
+    "genres": [
+     "Tribute",
+     "Pop",
+     "R&B/Soul",
+     "Jazz"
+    ],
+    "release_date": "2006-10-12",
+    "artwork_template": "https://covers.demo.invalid/900001143/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001145"
+    },
+    "title": "Winter Circuits",
+    "artist": "BurningStation",
+    "duration_ms": 247294,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000332",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001147"
+    },
+    "album_title": "SILENT",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2007-11-11",
+    "artwork_template": "https://covers.demo.invalid/900001146/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001148"
+    },
+    "title": "Open Lanterns (Burning Stones) [Faded 3]",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 108299,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000339",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001150"
+    },
+    "album_title": "Bright Orchard (Wandering Station)",
+    "genres": [
+     "Dance"
+    ],
+    "release_date": "2017-09-11",
+    "artwork_template": "https://covers.demo.invalid/900001149/{w}x{h}.png"
+   }
+  ]
+ }
+}

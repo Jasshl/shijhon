@@ -1,0 +1,769 @@
+{
+ "name": "search-soundtrack",
+ "path": "search",
+ "status": 200,
+ "params": {
+  "term": "restless voices"
+ },
+ "body": {
+  "artists": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000151"
+    },
+    "name": "Uma Okafor",
+    "artwork_template": "https://covers.demo.invalid/900000396/{w}x{h}.png"
+   }
+  ],
+  "albums": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "artist": "Uma Okafor",
+    "kind": "album",
+    "release_date": "2008-01-10",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Soundtrack",
+     "Classical"
+    ],
+    "label": "Iron Towers Records",
+    "upc": "990000000009",
+    "track_count": 30,
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001151"
+    },
+    "title": "Open 2 (Original Score) - Single",
+    "artist": "Lumi Jessup & Uma Okafor",
+    "kind": "single",
+    "release_date": "2019-04-14",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Soundtrack"
+    ],
+    "label": "Iron Records",
+    "upc": "990000000050",
+    "track_count": 2,
+    "artwork_template": "https://covers.demo.invalid/900001152/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001153"
+    },
+    "title": "Open 2 (Electric Arcade) [Quiet 3] - Single",
+    "artist": "CrimsonStones & PaperCities",
+    "kind": "single",
+    "release_date": "2015-01-25",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Soundtrack",
+     "Instrumental"
+    ],
+    "label": "Crimson Meadow Records",
+    "upc": "990000000051",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001154/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "artist": "Uma Okafor",
+    "kind": "compilation",
+    "release_date": "2012-09-01",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "label": "Low Signals Records",
+    "upc": "990000000010",
+    "track_count": 19,
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000417"
+    },
+    "title": "HOLLOW ORCHARD",
+    "artist": "Uma Okafor & Arlo Holloway",
+    "kind": "album",
+    "release_date": "2016-04-24",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Classical Crossover",
+     "Classical"
+    ],
+    "label": "Restless Voices 2 Records",
+    "upc": "990000000052",
+    "track_count": 31,
+    "artwork_template": "https://covers.demo.invalid/900001155/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001156"
+    },
+    "title": "Open 2 (Original Score) - Single",
+    "artist": "Kira Duval",
+    "kind": "single",
+    "release_date": "2015-10-02",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Soundtrack"
+    ],
+    "label": "Amber Summers Records",
+    "upc": "990000000053",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001157/{w}x{h}.png",
+    "incomplete": false
+   }
+  ],
+  "songs": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000153"
+    },
+    "title": "Last Rivers 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 126237,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000098",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000155"
+    },
+    "title": "Copper Voices (Broken Letters)",
+    "artist": "Uma Okafor",
+    "duration_ms": 199597,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000100",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000173"
+    },
+    "title": "Wild Fields",
+    "artist": "Uma Okafor",
+    "duration_ms": 246815,
+    "disc": 1,
+    "number": 22,
+    "isrc": "ZZSHJ0000118",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001158"
+    },
+    "title": "Open 2 (Last Rivers 2)",
+    "artist": "Zeno Quill",
+    "duration_ms": 131205,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000340",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001160"
+    },
+    "album_title": "Violet Cities 2 - EP",
+    "genres": [
+     "Classical Crossover",
+     "Classical",
+     "Instrumental"
+    ],
+    "release_date": "2016-04-03",
+    "artwork_template": "https://covers.demo.invalid/900001159/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000159"
+    },
+    "title": "Lunar",
+    "artist": "Uma Okafor",
+    "duration_ms": 219945,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000104",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000166"
+    },
+    "title": "DISTANT.",
+    "artist": "Uma Okafor",
+    "duration_ms": 382743,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000111",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001161"
+    },
+    "title": "Open 2 (Wild Fields)",
+    "artist": "Zeno Quill",
+    "duration_ms": 237530,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000341",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001160"
+    },
+    "album_title": "Violet Cities 2 - EP",
+    "genres": [
+     "Classical Crossover",
+     "Classical",
+     "Instrumental"
+    ],
+    "release_date": "2016-06-12",
+    "artwork_template": "https://covers.demo.invalid/900001159/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001162"
+    },
+    "title": "Bright 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 276301,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000342",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000409"
+    },
+    "album_title": "Paper (Music from the Motion Picture)",
+    "genres": [
+     "Soundtrack",
+     "Soundtrack",
+     "Original Score",
+     "Classical"
+    ],
+    "release_date": "2003-08-31",
+    "artwork_template": "https://covers.demo.invalid/900001163/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001164"
+    },
+    "title": "Silent Satellites",
+    "artist": "Leon Prescott, Mila Vance, Otto Fairbanks, Kasper Tallis, Remy Ingram, Bram Quill, Yara Carver, Juno Quill, Talia Quill & Uma Okafor",
+    "duration_ms": 253520,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000343",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000399"
+    },
+    "album_title": "Wild (Soundtrack from the Motion Picture)",
+    "genres": [
+     "Soundtrack",
+     "Classical",
+     "Original Score"
+    ],
+    "release_date": "1993-06-17",
+    "artwork_template": "https://covers.demo.invalid/900001165/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001166"
+    },
+    "title": "Open 2 (Lunar Lanterns)",
+    "artist": "Hugo Sorel",
+    "duration_ms": 272434,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000344",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001168"
+    },
+    "album_title": "Northern Circuits 2",
+    "genres": [
+     "Classical Crossover",
+     "Classical",
+     "Alternative"
+    ],
+    "release_date": "2013-06-15",
+    "artwork_template": "https://covers.demo.invalid/900001167/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001169"
+    },
+    "title": "Open 2 (Electric Arcade) [Quiet 3]",
+    "artist": "CrimsonStones & PaperCities",
+    "duration_ms": 240937,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000345",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001153"
+    },
+    "album_title": "Open 2 (Electric Arcade) [Quiet 3] - Single",
+    "genres": [
+     "Soundtrack",
+     "Instrumental"
+    ],
+    "release_date": "2015-01-25",
+    "artwork_template": "https://covers.demo.invalid/900001154/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001170"
+    },
+    "title": "Open 2",
+    "artist": "Oren Castell",
+    "duration_ms": 204797,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000346",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001172"
+    },
+    "album_title": "Open 2 - Single",
+    "genres": [
+     "House",
+     "Dance"
+    ],
+    "release_date": "2013-10-13",
+    "artwork_template": "https://covers.demo.invalid/900001171/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000154"
+    },
+    "title": "Northern",
+    "artist": "Uma Okafor",
+    "duration_ms": 341465,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000099",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001173"
+    },
+    "title": "Electric Rivers",
+    "artist": "Uma Okafor & Kira Kinsley",
+    "duration_ms": 247614,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000347",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001175"
+    },
+    "album_title": "Silent Pilots (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Original Score",
+     "Classical"
+    ],
+    "release_date": "1999-07-01",
+    "artwork_template": "https://covers.demo.invalid/900001174/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000156"
+    },
+    "title": "Faded 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 412565,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000101",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001176"
+    },
+    "title": "Winter",
+    "artist": "Uma Okafor",
+    "duration_ms": 219220,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000348",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000407"
+    },
+    "album_title": "Golden Pilots 2",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "1994-07-14",
+    "artwork_template": "https://covers.demo.invalid/900001177/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001178"
+    },
+    "title": "Open 2 (Original Score)",
+    "artist": "Kira Duval",
+    "duration_ms": 414104,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000349",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001156"
+    },
+    "album_title": "Open 2 (Original Score) - Single",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2015-10-02",
+    "artwork_template": "https://covers.demo.invalid/900001157/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001179"
+    },
+    "title": "Open 2 (Lunar Lanterns) [Faded Machines]",
+    "artist": "Greta Quill",
+    "duration_ms": 411469,
+    "disc": 1,
+    "number": 22,
+    "isrc": "ZZSHJ0000350",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001181"
+    },
+    "album_title": "Golden Parade",
+    "genres": [
+     "Piano",
+     "Classical"
+    ],
+    "release_date": "2017-05-07",
+    "artwork_template": "https://covers.demo.invalid/900001180/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000152"
+    },
+    "title": "Golden Bridges",
+    "artist": "Uma Okafor",
+    "duration_ms": 235062,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000097",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001182"
+    },
+    "title": "Open 2",
+    "artist": "OREN DELACROIX 3",
+    "duration_ms": 466002,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000351",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001184"
+    },
+    "album_title": "Open 2",
+    "genres": [
+     "Electronic",
+     "Dance",
+     "House"
+    ],
+    "release_date": "2014-10-08",
+    "artwork_template": "https://covers.demo.invalid/900001183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001185"
+    },
+    "title": "Open 2",
+    "artist": "BrokenTides & IronMotors",
+    "duration_ms": 164357,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000352",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001187"
+    },
+    "album_title": "Open 2 - Single",
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "release_date": "2012-03-07",
+    "artwork_template": "https://covers.demo.invalid/900001186/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001188"
+    },
+    "title": "Early Letters",
+    "artist": "Uma Okafor & Silas Sorel",
+    "duration_ms": 974848,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000353",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000405"
+    },
+    "album_title": "Electric Harbor (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Soundtrack",
+     "Classical",
+     "Original Score"
+    ],
+    "release_date": "2001-09-06",
+    "artwork_template": "https://covers.demo.invalid/900001189/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001190"
+    },
+    "title": "Amber Colors. (feat. Uma Okafor)",
+    "artist": "QUIETMOTORS",
+    "duration_ms": 300898,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000354",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900001192"
+    },
+    "album_title": "AMBER CIRCUITS.",
+    "genres": [
+     "Pop"
+    ],
+    "release_date": "2019-05-19",
+    "artwork_template": "https://covers.demo.invalid/900001191/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000160"
+    },
+    "title": "Last Canyon",
+    "artist": "Uma Okafor",
+    "duration_ms": 151704,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000105",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000168"
+    },
+    "title": "Hidden Cities",
+    "artist": "Uma Okafor",
+    "duration_ms": 107925,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000113",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000149"
+    },
+    "album_title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+    "genres": [
+     "Soundtrack"
+    ],
+    "release_date": "2008-01-09",
+    "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png"
+   }
+  ]
+ }
+}

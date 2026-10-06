@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-accent="{{ accent }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }} – Shijhon</title>
+<link rel="stylesheet" href="{{ prefix }}/static/shijhon.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="wordmark" href="{{ prefix }}/addons">Shijhon</a>
+    <nav class="sections" aria-label="Sections">
+      <ul>
+{% for key, label in nav %}
+        <li><a href="{{ prefix }}/{{ key }}"{% if key == current %} aria-current="page"{% endif %}>{{ label }}</a></li>
+{% endfor %}
+      </ul>
+    </nav>
+    <form class="signout" method="post" action="{{ prefix }}/sign-out">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <span class="signout-user">Signed in as {{ user }}</span>
+      <button class="btn-small">Sign out</button>
+    </form>
+  </div>
+</header>
+{% if pending %}
+<div class="banner" role="status">
+  <div class="banner-inner">
+    <p><strong>Restart needed.</strong> {{ pending|length }} saved setting{{ "s apply" if pending|length != 1 else " applies" }} after Shijhon restarts: {{ pending|map(attribute="label")|map("lower")|join(", ") }}.</p>
+{% if can_restart %}
+    <form method="post" action="{{ prefix }}/restart">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="next" value="{{ prefix }}/{{ current or 'diagnostics' }}">
+      <button class="btn-small" title="Songs that are playing may stop">Restart Shijhon</button>
+    </form>
+{% else %}
+    <a href="{{ prefix }}/diagnostics#restart">How to restart</a>
+{% endif %}
+  </div>
+</div>
+{% endif %}
+<main class="page" id="main">
+{% block main %}{% endblock %}
+</main>
+{% from "_macros.html" import legal %}
+<footer class="footer">
+  <div class="footer-inner">
+    {{ legal(version, copyright, license, source_url) }}
+    <a href="{{ prefix }}/appearance"{% if current == "appearance" %} aria-current="page"{% endif %}>Appearance</a>
+  </div>
+</footer>
+</body>
+</html>

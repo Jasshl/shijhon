@@ -1,0 +1,518 @@
+{
+ "name": "releases-duo",
+ "path": "artists/900000147/releases",
+ "status": 200,
+ "body": [
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000383"
+   },
+   "title": "Iron Wolves (Broken Satellites 2)",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "2017-01-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "Electronic"
+   ],
+   "label": "Hollow Wolves Records",
+   "upc": "990000000061",
+   "track_count": 13,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001096/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000296"
+   },
+   "title": "Iron Wolves",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "2006-07-09",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Pop",
+    "Electronic",
+    "Electronica",
+    "Dance",
+    "House"
+   ],
+   "label": "Hollow Records",
+   "upc": "990000000013",
+   "track_count": 13,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000311"
+   },
+   "title": "Iron Wolves (10th Anniversary Edition)",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "2006-07-09",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "Electronic",
+    "Pop"
+   ],
+   "label": "Velvet Records",
+   "upc": "990000000014",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000381"
+   },
+   "title": "Salt Harbor",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "2004-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Electronic",
+    "Rock",
+    "Electronica",
+    "Dance",
+    "House",
+    "Soundtrack",
+    "Children’s Music"
+   ],
+   "label": "Low Signals Records",
+   "upc": "990000000079",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001278/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000376"
+   },
+   "title": "Velvet Station (Original Motion Picture Soundtrack)",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "2004-01-25",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Original Score",
+    "Soundtrack",
+    "Electronic",
+    "Children’s Music"
+   ],
+   "label": "Low Signals Records",
+   "upc": "990000000080",
+   "track_count": 31,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001279/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000374"
+   },
+   "title": "Hollow 2",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "1994-05-04",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "House",
+    "Rock",
+    "Electronic",
+    "Electronica"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000048",
+   "track_count": 14,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001085/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000380"
+   },
+   "title": "Restless 5 (25th Anniversary Edition)",
+   "artist": "Oren Garrow",
+   "kind": "album",
+   "release_date": "1990-03-14",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000081",
+   "track_count": 31,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001280/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000387"
+   },
+   "title": "RESTLESS (Pale Mirrors 3) [Edit] - Single",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "2016-06-11",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance"
+   ],
+   "label": "Velvet Records",
+   "upc": "990000000082",
+   "track_count": 1,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001281/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000386"
+   },
+   "title": "Open Lanterns (feat. Kasper Merritt 2 & Esme Tallis) [Distant Colors]",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "2006-08-25",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Pop"
+   ],
+   "label": "Hollow Records",
+   "upc": "990000000044",
+   "track_count": 1,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001078/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000145"
+   },
+   "title": "Open Lanterns (feat. Kasper Merritt 2) [Radio Edit] - Single",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "2006-06-11",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Pop"
+   ],
+   "label": "Hollow Records",
+   "upc": "990000000008",
+   "track_count": 1,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900000146/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000392"
+   },
+   "title": "Bright Colors (Last Signals) - Single",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "2001-02-07",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "House",
+    "Electronic",
+    "Electronica"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000083",
+   "track_count": 2,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001282/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000389"
+   },
+   "title": "Paper 2 (Radio Edit) - Single",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "1998-08-06",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Electronic",
+    "Dance",
+    "House",
+    "Electronica"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000084",
+   "track_count": 1,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001283/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000391"
+   },
+   "title": "Violet Station 2 (Echoing Mirrors) - EP",
+   "artist": "Oren Garrow",
+   "kind": "ep",
+   "release_date": "1997-01-05",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "Electronic",
+    "Electronica",
+    "House",
+    "Soundtrack"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000085",
+   "track_count": 4,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001284/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001285"
+   },
+   "title": "Bright Colors - EP",
+   "artist": "Oren Garrow",
+   "kind": "ep",
+   "release_date": "1994-12-14",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "Electronic",
+    "Electronica",
+    "House"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000086",
+   "track_count": 4,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001286/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001287"
+   },
+   "title": "Golden Station - Single",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "1994-05-04",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "House",
+    "Electronic",
+    "Electronica"
+   ],
+   "label": "Slow Wolves. Records",
+   "upc": "990000000087",
+   "track_count": 2,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001288/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001289"
+   },
+   "title": "Paper Motors - EP",
+   "artist": "Oren Garrow",
+   "kind": "ep",
+   "release_date": "1991-04-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "House",
+    "Electronic",
+    "Electronica"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000088",
+   "track_count": 4,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001290/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001291"
+   },
+   "title": "Glass Arcade - EP",
+   "artist": "Oren Garrow",
+   "kind": "ep",
+   "release_date": "1990-05-09",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance",
+    "Electronic",
+    "Electronica",
+    "House"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000089",
+   "track_count": 4,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001292/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001293"
+   },
+   "title": "Bright Shadows - Single",
+   "artist": "Oren Garrow",
+   "kind": "single",
+   "release_date": "1990-03-04",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Dance"
+   ],
+   "label": "Violet Parade Records",
+   "upc": "990000000090",
+   "track_count": 3,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000147"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001294/{w}x{h}.png",
+   "incomplete": false
+  }
+ ]
+}

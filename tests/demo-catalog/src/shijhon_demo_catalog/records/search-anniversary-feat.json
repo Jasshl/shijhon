@@ -1,0 +1,997 @@
+{
+ "name": "search-anniversary-feat",
+ "path": "search",
+ "status": 200,
+ "params": {
+  "term": "paper circuits"
+ },
+ "body": {
+  "albums": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "title": "Iron Wolves",
+    "artist": "Oren Garrow",
+    "kind": "album",
+    "release_date": "2006-07-09",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Pop",
+     "Electronic",
+     "Electronica",
+     "Dance",
+     "House"
+    ],
+    "label": "Hollow Records",
+    "upc": "990000000013",
+    "track_count": 13,
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000383"
+    },
+    "title": "Iron Wolves (Broken Satellites 2)",
+    "artist": "Oren Garrow",
+    "kind": "album",
+    "release_date": "2017-01-08",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance",
+     "Electronic"
+    ],
+    "label": "Hollow Wolves Records",
+    "upc": "990000000061",
+    "track_count": 13,
+    "artwork_template": "https://covers.demo.invalid/900001096/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "title": "Iron Wolves (10th Anniversary Edition)",
+    "artist": "Oren Garrow",
+    "kind": "album",
+    "release_date": "2006-07-09",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance",
+     "Electronic",
+     "Pop"
+    ],
+    "label": "Velvet Records",
+    "upc": "990000000014",
+    "track_count": 22,
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001232"
+    },
+    "title": "Wild Tides 2",
+    "artist": "Kasper Lindqvist",
+    "kind": "compilation",
+    "release_date": "2006-07-29",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance"
+    ],
+    "label": "slow Records",
+    "upc": "990000000062",
+    "track_count": 50,
+    "artwork_template": "https://covers.demo.invalid/900001233/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001234"
+    },
+    "title": "Iron Wolves (NORTHERN) - EP",
+    "artist": "Quinn Jessup 2",
+    "kind": "ep",
+    "release_date": "2014-09-13",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Blues",
+     "Rock"
+    ],
+    "label": "Tender Tides Records",
+    "upc": "990000000063",
+    "track_count": 4,
+    "artwork_template": "https://covers.demo.invalid/900001235/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001236"
+    },
+    "title": "Iron Wolves",
+    "artist": "Kira Blackwood",
+    "kind": "album",
+    "release_date": "2016-01-31",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "label": "Early Meadow Records",
+    "upc": "990000000064",
+    "track_count": 8,
+    "artwork_template": "https://covers.demo.invalid/900001237/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001238"
+    },
+    "title": "Iron Wolves - Single",
+    "artist": "BrightRivers",
+    "kind": "single",
+    "release_date": "2016-06-04",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Pop"
+    ],
+    "label": "Northern Tides Records",
+    "upc": "990000000065",
+    "track_count": 3,
+    "artwork_template": "https://covers.demo.invalid/900001239/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001240"
+    },
+    "title": "Iron Wolves - Single",
+    "artist": "Wren Sorel",
+    "kind": "single",
+    "release_date": "2017-07-23",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Electronic",
+     "New Age"
+    ],
+    "label": "Bright Motors Records",
+    "upc": "990000000066",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001241/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001242"
+    },
+    "title": "Iron Wolves",
+    "artist": "KIRA JESSUP 2",
+    "kind": "album",
+    "release_date": "2019-02-24",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap",
+     "African",
+     "Afro-Beat"
+    ],
+    "label": "Wandering Meadow Records",
+    "upc": "990000000067",
+    "track_count": 10,
+    "artwork_template": "https://covers.demo.invalid/900001243/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001244"
+    },
+    "title": "Iron Wolves (Last)",
+    "artist": "Ada Oakes",
+    "kind": "album",
+    "release_date": "2019-02-22",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "House",
+     "Dance"
+    ],
+    "label": "Velvet Letters 2 Records",
+    "upc": "990000000068",
+    "track_count": 9,
+    "artwork_template": "https://covers.demo.invalid/900001245/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001246"
+    },
+    "title": "Iron Wolves",
+    "artist": "LowMirrors",
+    "kind": "album",
+    "release_date": "2019-06-03",
+    "explicit": true,
+    "clean": false,
+    "genres": [
+     "Hip-Hop/Rap"
+    ],
+    "label": "last Records",
+    "upc": "990000000069",
+    "track_count": 9,
+    "artwork_template": "https://covers.demo.invalid/900001247/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001248"
+    },
+    "title": "Iron Wolves",
+    "artist": "RestlessEngines",
+    "kind": "album",
+    "release_date": "2001-10-19",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Electronic",
+     "Pop"
+    ],
+    "label": "Sunken Station Records",
+    "upc": "990000000070",
+    "track_count": 12,
+    "artwork_template": "https://covers.demo.invalid/900001249/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001250"
+    },
+    "title": "Iron Wolves",
+    "artist": "Ada Garrow",
+    "kind": "album",
+    "release_date": "2004-08-11",
+    "explicit": false,
+    "clean": true,
+    "genres": [
+     "Electronic",
+     "Alternative"
+    ],
+    "label": "Echoing Towers Records",
+    "upc": "990000000071",
+    "track_count": 11,
+    "artwork_template": "https://covers.demo.invalid/900001251/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001252"
+    },
+    "title": "Iron Wolves - Single",
+    "artist": "GLASSSTATION",
+    "kind": "single",
+    "release_date": "2019-08-24",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "House",
+     "Dance"
+    ],
+    "label": "Burning Parade Records",
+    "upc": "990000000072",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001253/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001254"
+    },
+    "title": "Iron Wolves",
+    "artist": "Sable Castell",
+    "kind": "album",
+    "release_date": "2019-08-29",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Alternative",
+     "Rock"
+    ],
+    "label": "Violet 3 Records",
+    "upc": "990000000073",
+    "track_count": 10,
+    "artwork_template": "https://covers.demo.invalid/900001255/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001256"
+    },
+    "title": "Iron Wolves (Northern Wolves) - Single",
+    "artist": "GLASSSTATION",
+    "kind": "single",
+    "release_date": "2019-10-09",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "House",
+     "Dance"
+    ],
+    "label": "Burning Parade Records",
+    "upc": "990000000074",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001257/{w}x{h}.png",
+    "incomplete": false
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900001258"
+    },
+    "title": "Iron Wolves - Single",
+    "artist": "Odile Ingram 3",
+    "kind": "single",
+    "release_date": "2019-11-06",
+    "explicit": false,
+    "clean": false,
+    "genres": [
+     "Dance",
+     "Electronic"
+    ],
+    "label": "Amber Motors Records",
+    "upc": "990000000075",
+    "track_count": 1,
+    "artwork_template": "https://covers.demo.invalid/900001259/{w}x{h}.png",
+    "incomplete": false
+   }
+  ],
+  "songs": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000302"
+    },
+    "title": "Paper Tides",
+    "artist": "Oren Garrow & Juno Okafor",
+    "duration_ms": 338460,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000225",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000303"
+    },
+    "title": "Crimson Harbor",
+    "artist": "Oren Garrow & Kasper Merritt 2",
+    "duration_ms": 353119,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000226",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000300"
+    },
+    "title": "Pale Fields",
+    "artist": "Oren Garrow",
+    "duration_ms": 544001,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000223",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000298"
+    },
+    "title": "Distant Towers",
+    "artist": "Oren Garrow",
+    "duration_ms": 274299,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000221",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000309"
+    },
+    "title": "Burning Harbor",
+    "artist": "Oren Garrow & Zeno Carver",
+    "duration_ms": 251202,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000232",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000305"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 370356,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-06-11",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000301"
+    },
+    "title": "Sunken 2",
+    "artist": "Oren Garrow",
+    "duration_ms": 228448,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000224",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000299"
+    },
+    "title": "Slow Voices",
+    "artist": "Oren Garrow",
+    "duration_ms": 321302,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000222",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000304"
+    },
+    "title": "Early",
+    "artist": "Oren Garrow & Tobin Okafor",
+    "duration_ms": 499120,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000227",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000320"
+    },
+    "title": "Open Lanterns",
+    "artist": "Oren Garrow, Kasper Merritt 2 & Esme Tallis",
+    "duration_ms": 370094,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000228",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000308"
+    },
+    "title": "Sunken Bridges",
+    "artist": "Oren Garrow & Kira Loring",
+    "duration_ms": 280305,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000231",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000310"
+    },
+    "title": "Northern 2",
+    "artist": "Oren Garrow",
+    "duration_ms": 382105,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000233",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000306"
+    },
+    "title": "Echoing 2",
+    "artist": "Oren Garrow",
+    "duration_ms": 290745,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000229",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000307"
+    },
+    "title": "Low",
+    "artist": "Oren Garrow",
+    "duration_ms": 342234,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000230",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000296"
+    },
+    "album_title": "Iron Wolves",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000297/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000317"
+    },
+    "title": "Paper Tides",
+    "artist": "Oren Garrow & Juno Okafor",
+    "duration_ms": 338051,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000225",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000318"
+    },
+    "title": "Crimson Harbor",
+    "artist": "Oren Garrow & Kasper Merritt 2",
+    "duration_ms": 354310,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000226",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000315"
+    },
+    "title": "Pale Fields",
+    "artist": "Oren Garrow",
+    "duration_ms": 544653,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000223",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000313"
+    },
+    "title": "Distant Towers",
+    "artist": "Oren Garrow",
+    "duration_ms": 274946,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000221",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000316"
+    },
+    "title": "Sunken 2",
+    "artist": "Oren Garrow",
+    "duration_ms": 227976,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000224",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000314"
+    },
+    "title": "Slow Voices",
+    "artist": "Oren Garrow",
+    "duration_ms": 321553,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000222",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000319"
+    },
+    "title": "Early",
+    "artist": "Oren Garrow & Tobin Okafor",
+    "duration_ms": 499444,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000227",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000324"
+    },
+    "title": "Burning Harbor",
+    "artist": "Oren Garrow & Zeno Carver",
+    "duration_ms": 251253,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000232",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000321"
+    },
+    "title": "Echoing 2",
+    "artist": "Oren Garrow",
+    "duration_ms": 289359,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000229",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000323"
+    },
+    "title": "Sunken Bridges",
+    "artist": "Oren Garrow & Kira Loring",
+    "duration_ms": 279135,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000231",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Pop",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000329"
+    },
+    "title": "Burning Bridges (2013 Demo)",
+    "artist": "Oren Garrow, Juno Okafor & Nico Delacroix",
+    "duration_ms": 238979,
+    "disc": 2,
+    "number": 4,
+    "isrc": "ZZSHJ0000237",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000311"
+    },
+    "album_title": "Iron Wolves (10th Anniversary Edition)",
+    "genres": [
+     "Dance",
+     "Electronic"
+    ],
+    "release_date": "2006-07-09",
+    "artwork_template": "https://covers.demo.invalid/900000312/{w}x{h}.png"
+   }
+  ]
+ }
+}

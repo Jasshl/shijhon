@@ -1,0 +1,13 @@
+{
+ "name": "artist-duo",
+ "path": "artists/900000147",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000147"
+  },
+  "name": "Oren Garrow",
+  "artwork_template": "https://covers.demo.invalid/900000373/{w}x{h}.png"
+ }
+}

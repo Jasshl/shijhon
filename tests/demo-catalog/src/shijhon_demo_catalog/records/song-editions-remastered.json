@@ -1,0 +1,35 @@
+{
+ "name": "song-editions-remastered",
+ "path": "songs/900000023",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000023"
+  },
+  "title": "Crimson Mirrors",
+  "artist": "Neve Ashdown",
+  "duration_ms": 259649,
+  "disc": 1,
+  "number": 1,
+  "isrc": "ZZSHJ0000018",
+  "explicit": false,
+  "clean": false,
+  "album": {
+   "catalog": "demo",
+   "id": "900000021"
+  },
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000003"
+   }
+  ],
+  "album_title": "Northern Letters (Remastered)",
+  "genres": [
+   "Rock"
+  ],
+  "release_date": "1962-11-18",
+  "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+ }
+}

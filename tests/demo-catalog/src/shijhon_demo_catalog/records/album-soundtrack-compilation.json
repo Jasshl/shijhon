@@ -1,0 +1,509 @@
+{
+ "name": "album-soundtrack-compilation",
+ "path": "albums/900000182",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000182"
+  },
+  "title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+  "artist": "Uma Okafor",
+  "kind": "compilation",
+  "release_date": "2012-09-01",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000184"
+    },
+    "title": "Hidden Summers",
+    "artist": "Sable Okafor & Lior Hale",
+    "duration_ms": 241383,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000127",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000185"
+    },
+    "title": "Slow Canyon",
+    "artist": "Uma Okafor",
+    "duration_ms": 103054,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000128",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000186"
+    },
+    "title": "Restless Bridges",
+    "artist": "Uma Okafor",
+    "duration_ms": 112172,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000129",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000187"
+    },
+    "title": "Wandering Arcade",
+    "artist": "Quinn Merritt, Oren Oakes & Leon Jessup",
+    "duration_ms": 202670,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000130",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000188"
+    },
+    "title": "Last Canyon 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 397911,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000131",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000189"
+    },
+    "title": "Early Motors (2019)",
+    "artist": "Lumi Lindqvist",
+    "duration_ms": 122833,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000132",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000190"
+    },
+    "title": "Salt",
+    "artist": "Uma Okafor",
+    "duration_ms": 467740,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000133",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000191"
+    },
+    "title": "Pale Mirrors 2",
+    "artist": "Uma Okafor",
+    "duration_ms": 169970,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000134",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000192"
+    },
+    "title": "Copper Cities",
+    "artist": "Mara Moreau, Talia Jessup, Quinn Merritt & Yara Delacroix",
+    "duration_ms": 250690,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000135",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000193"
+    },
+    "title": "Violet Arcade",
+    "artist": "Uma Okafor",
+    "duration_ms": 217565,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000136",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000194"
+    },
+    "title": "Northern Machines",
+    "artist": "Mara Moreau & Talia Jessup",
+    "duration_ms": 83822,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000137",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000195"
+    },
+    "title": "Violet Voices",
+    "artist": "Søren Ilić, Yara Delacroix, Mara Moreau & Talia Jessup",
+    "duration_ms": 182255,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000138",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000196"
+    },
+    "title": "Copper Satellites",
+    "artist": "Uma Okafor",
+    "duration_ms": 309661,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000139",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000197"
+    },
+    "title": "Crimson",
+    "artist": "Søren Ilić",
+    "duration_ms": 273514,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000140",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-08-31",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000198"
+    },
+    "title": "Faded Islands",
+    "artist": "Uma Okafor",
+    "duration_ms": 660426,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000141",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000199"
+    },
+    "title": "Copper",
+    "artist": "Uma Okafor",
+    "duration_ms": 189912,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000142",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000200"
+    },
+    "title": "Amber Letters",
+    "artist": "Mila Loring",
+    "duration_ms": 249994,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000143",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000201"
+    },
+    "title": "Quiet Arcade",
+    "artist": "Lior Hale",
+    "duration_ms": 304922,
+    "disc": 1,
+    "number": 18,
+    "isrc": "ZZSHJ0000144",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000202"
+    },
+    "title": "Lunar 2",
+    "artist": "Lior Hale",
+    "duration_ms": 116135,
+    "disc": 1,
+    "number": 19,
+    "isrc": "ZZSHJ0000145",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000182"
+    },
+    "album_title": "Bright Wolves 2 (Original Motion Picture Soundtrack)",
+    "genres": [
+     "Soundtrack",
+     "Children’s Music"
+    ],
+    "release_date": "2012-09-01",
+    "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": false,
+  "genres": [
+   "Soundtrack",
+   "Children’s Music"
+  ],
+  "label": "Low Signals Records",
+  "upc": "990000000010",
+  "track_count": 19,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000151"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000183/{w}x{h}.png",
+  "incomplete": false
+ }
+}

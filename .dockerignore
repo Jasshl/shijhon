@@ -1,0 +1,14 @@
+# Only the application enters the build context: never local state, music, configuration
+# files, test recordings or anything next to the repository.
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!NOTICE
+!src/
+!src/**
+**/__pycache__/
+**/*.pyc

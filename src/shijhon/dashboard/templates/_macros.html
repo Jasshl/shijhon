@@ -1,0 +1,152 @@
+{# The legal notices, in the footer of every page, the sign-in page too: the version, the
+   author attribution, the license and a link to the source. A modified version keeps them
+   (NOTICE: the additional term under section 7(b) of the license). #}
+{% macro legal(version, copyright, license, source_url) %}
+<p class="legal">Shijhon <code>{{ version }}</code> · {{ copyright }} · {{ license }} · <a href="{{ source_url }}" rel="noreferrer">Source</a></p>
+{% endmacro %}
+
+{# One setting row. row: id, name, kind (decimal | whole | text |
+   path | numbers | select | switch | secret | mapping | locked), label, help, unit, spoken, default,
+   problem, modified, restart, saved; per kind: text, options/chosen, checked, state/clear_label;
+   a select's pair (another select's row, shown after the word joiner: a range's two ends);
+   locked (set by the environment): text (its value), locked (the variable), hidden (a value
+   saved here that it hides). A switch sends a hidden "false" first, so a checkbox left off
+   is told apart from a missing one. form: the id of the form its controls belong to, when
+   that is not the form it is in. #}
+{% macro setting(row, form="") %}
+{% set pair = row.pair if row.pair is defined else None %}
+{% set owner %}{% if form %} form="{{ form }}"{% endif %}{% endset %}
+{% set described = [] %}
+{% if row.help %}{% set _ = described.append(row.id ~ "-help") %}{% endif %}
+{% if row.problem %}{% set _ = described.append(row.id ~ "-error") %}{% endif %}
+{% if row.default %}{% set _ = described.append(row.id ~ "-default") %}{% endif %}
+<div class="setting{% if row.problem or pair and pair.problem %} is-invalid{% elif row.modified %} is-modified{% endif %}">
+  <div class="setting-text">
+{% if row.kind in ("mapping", "locked") %}
+    <p class="setting-label" id="{{ row.id }}">{{ row.label }}</p>
+{% else %}
+{% set spoken = row.label|spoken_unit(row.spoken) %}
+    <label class="setting-label" for="{{ row.id }}">{{ row.label }}{% if spoken %}<span class="visually-hidden"> ({{ spoken }})</span>{% endif %}</label>
+{% endif %}
+{% if row.locked %}
+    <span class="tag">Set by the environment</span>
+{% endif %}
+{% if row.restart %}
+    <span class="tag tag-restart">Applies after restart</span>
+{% endif %}
+{% if row.saved %}
+    <span class="tag tag-saved">Saved</span>
+{% endif %}
+{% if row.help %}
+    <p class="setting-help" id="{{ row.id }}-help">{{ row.help }}</p>
+{% endif %}
+  </div>
+  <div class="setting-control">
+{% if row.kind == "locked" %}
+    <p>{{ row.text }}</p>
+    <p class="setting-default" id="{{ row.id }}-env">Set by <code>{{ row.locked }}</code>; change it there.{% if row.hidden %} A value saved here is kept but not used while it is set.{% endif %}</p>
+{% if row.hidden %}
+    <label class="small"><input type="checkbox" name="{{ row.name }}-clear" value="true"{{ owner }}> Remove the saved value</label>
+{% endif %}
+{% elif row.kind in ("decimal", "whole") and row.unit %}
+    <span class="unit-field"><input{{ owner }} id="{{ row.id }}" name="{{ row.name }}" type="text" inputmode="{{ 'numeric' if row.kind == 'whole' else 'decimal' }}" autocomplete="off" spellcheck="false" value="{{ row.text }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}><span class="unit" aria-hidden="true">{{ row.unit }}</span></span>
+{% elif row.kind in ("decimal", "whole") %}
+    <input{{ owner }} id="{{ row.id }}" name="{{ row.name }}" type="text" inputmode="{{ 'numeric' if row.kind == 'whole' else 'decimal' }}" autocomplete="off" spellcheck="false" value="{{ row.text }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}>
+{% elif row.kind in ("text", "path", "numbers") %}
+    <input{{ owner }}{% if row.short %} class="input-short" autocapitalize="none"{% endif %}{% if row.max_length is defined and row.max_length %} maxlength="{{ row.max_length }}"{% endif %} id="{{ row.id }}" name="{{ row.name }}" type="text" autocomplete="off" spellcheck="false" value="{{ row.text }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}>
+{% elif row.kind == "select" %}
+{% if pair %}
+    <div class="control-pair">
+{% endif %}
+    <select{{ owner }} id="{{ row.id }}" name="{{ row.name }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}>
+{% for value, label in row.options %}
+      <option value="{{ value }}"{% if value == row.chosen %} selected{% endif %}>{{ label }}</option>
+{% endfor %}
+    </select>
+{% if pair %}
+    <span aria-hidden="true">{{ row.joiner }}</span>
+    <label class="visually-hidden" for="{{ pair.id }}">{{ pair.label }}</label>
+    <select{{ owner }} id="{{ pair.id }}" name="{{ pair.name }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if pair.problem %} aria-invalid="true"{% endif %}>
+{% for value, label in pair.options %}
+      <option value="{{ value }}"{% if value == pair.chosen %} selected{% endif %}>{{ label }}</option>
+{% endfor %}
+    </select>
+    </div>
+{% endif %}
+{% elif row.kind == "switch" %}
+    <input{{ owner }} type="hidden" name="{{ row.name }}" value="false">
+    <input{{ owner }} id="{{ row.id }}" name="{{ row.name }}" type="checkbox" value="true"{% if row.checked %} checked{% endif %}{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}>
+{% elif row.kind == "secret" %}
+    <p class="secret-state">{% if row.state[0] == "set" %}<span class="tag tag-set">Set</span>{% else %}<span class="tag tag-error">Not set</span>{% endif %}{% if row.state[1] %} {{ row.state[1] }}{% endif %}{% if row.clear_label %} <label><input{{ owner }} type="checkbox" name="{{ row.name }}-clear" value="true"> {{ row.clear_label }}</label>{% endif %}</p>
+    <input{{ owner }} id="{{ row.id }}" name="{{ row.name }}" type="password" autocomplete="new-password" spellcheck="false"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}>
+{% elif row.kind == "mapping" %}
+    <p class="muted">{{ row.text }}</p>
+{% endif %}
+{% if row.problem %}
+    <p class="field-error" id="{{ row.id }}-error">{{ row.problem }}</p>
+{% endif %}
+{% if pair and pair.problem %}
+    <p class="field-error" id="{{ pair.id }}-error">{{ pair.problem }}</p>
+{% endif %}
+{% if row.default %}
+    <p class="setting-default" id="{{ row.id }}-default">{{ row.default }}</p>
+{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{# A group of setting rows under its heading. #}
+{% macro settings_group(group, rows, form="") %}
+  <section class="group" aria-labelledby="{{ group.key }}-title">
+    <div class="group-head">
+      <h2 id="{{ group.key }}-title">{{ group.title }}</h2>
+{% if group.help %}
+      <p class="group-help">{{ group.help }}</p>
+{% endif %}
+    </div>
+    <div class="rows">
+{% for row in rows %}
+{{ setting(row, form) }}
+{% endfor %}
+    </div>
+  </section>
+{% endmacro %}
+
+{# The summary of a page's "More settings" (sections.Fold): how many of them are not at
+   their default. #}
+{% macro more_summary(fold) %}
+<summary><span class="more-title">More settings</span>{% if fold.changed %}<span class="more-changed">{{ fold.changed|count }} changed</span>{% endif %}</summary>
+{% endmacro %}
+
+{# The error summary after a failed save: (field id, label, rule) per setting. #}
+{% macro error_notice(notices, title=None) %}
+<div class="notice notice-error" role="alert">
+  <p class="notice-title">{{ title or ("Nothing saved: " ~ notices|length ~ " setting" ~ ("s need" if notices|length != 1 else " needs") ~ " a different value") }}</p>
+  <ul>
+{% for id, label, rule in notices %}
+    <li><a href="#{{ id }}">{{ label }}</a> {{ rule }}</li>
+{% endfor %}
+  </ul>
+</div>
+{% endmacro %}
+
+{# The catalog's status line; tag: "p" (a row) or "span" (a readout). #}
+{% macro catalog_status(info, tag="p") %}
+{% if info.kind == "none" and not info.running %}
+<{{ tag }} class="status"><span class="led led-off" aria-hidden="true"></span><span>Off: no catalog is chosen</span></{{ tag }}>
+{% elif info.problem and not info.running %}
+<{{ tag }} class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Not connected: {{ info.problem.label|lower }} {{ info.problem.notice }}</span></{{ tag }}>
+{% elif not info.running %}
+<{{ tag }} class="status"><span class="led" aria-hidden="true"></span><span>Not connected yet: the catalog starts when Shijhon restarts</span></{{ tag }}>
+{% elif info.resting %}
+<{{ tag }} class="status"><span class="led led-cool" aria-hidden="true"></span><span>Resting after errors until {{ info.resting|hm }}</span></{{ tag }}>
+{% elif info.check and info.check.ok %}
+<{{ tag }} class="status"><span class="led led-ok" aria-hidden="true"></span><span>Answering, checked {{ info.check.at|hm }}, took {{ info.check.took_ms|round|int }} ms</span></{{ tag }}>
+{% elif info.check %}
+<{{ tag }} class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Error at {{ info.check.at|hm }}: <code>{{ info.check.error }}</code></span></{{ tag }}>
+{% else %}
+<{{ tag }} class="status"><span class="led" aria-hidden="true"></span><span>Not checked yet</span></{{ tag }}>
+{% endif %}
+{% endmacro %}
+
+{% macro chevron(direction) %}<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="{{ 'M3.5 10 8 5.5 12.5 10' if direction == 'up' else 'M3.5 6 8 10.5 12.5 6' }}" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></svg>{% endmacro %}

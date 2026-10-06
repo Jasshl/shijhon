@@ -1,0 +1,450 @@
+{
+ "name": "album-editions-remastered",
+ "path": "albums/900000021",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000021"
+  },
+  "title": "Northern Letters (Remastered)",
+  "artist": "Neve Ashdown",
+  "kind": "album",
+  "release_date": "1962-11-18",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000023"
+    },
+    "title": "Crimson Mirrors",
+    "artist": "Neve Ashdown",
+    "duration_ms": 259649,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000018",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000024"
+    },
+    "title": "Open",
+    "artist": "Neve Ashdown",
+    "duration_ms": 181511,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000019",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000025"
+    },
+    "title": "Faded Wolves",
+    "artist": "Neve Ashdown",
+    "duration_ms": 208181,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000020",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000026"
+    },
+    "title": "Open Mirrors",
+    "artist": "Neve Ashdown",
+    "duration_ms": 207659,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000021",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000027"
+    },
+    "title": "Pale Islands",
+    "artist": "Neve Ashdown",
+    "duration_ms": 170075,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000022",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000028"
+    },
+    "title": "Silent Meadow (Winter Rivers)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 467191,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000023",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000029"
+    },
+    "title": "Frozen Motors",
+    "artist": "Neve Ashdown",
+    "duration_ms": 186101,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000024",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000030"
+    },
+    "title": "Amber",
+    "artist": "Neve Ashdown",
+    "duration_ms": 166089,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000025",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000031"
+    },
+    "title": "Copper Station",
+    "artist": "Neve Ashdown",
+    "duration_ms": 243214,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000026",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000032"
+    },
+    "title": "Hidden Bridges",
+    "artist": "Neve Ashdown",
+    "duration_ms": 146891,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000027",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000033"
+    },
+    "title": "Velvet Tides",
+    "artist": "Neve Ashdown",
+    "duration_ms": 66714,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000028",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000034"
+    },
+    "title": "Low Horizon",
+    "artist": "Neve Ashdown",
+    "duration_ms": 73063,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000029",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000035"
+    },
+    "title": "Wandering Towers",
+    "artist": "Neve Ashdown",
+    "duration_ms": 118985,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000030",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000036"
+    },
+    "title": "Paper Circuits",
+    "artist": "Neve Ashdown",
+    "duration_ms": 91089,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000031",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000037"
+    },
+    "title": "Slow Engines",
+    "artist": "Neve Ashdown",
+    "duration_ms": 97153,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000032",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000038"
+    },
+    "title": "Copper Orchard",
+    "artist": "Neve Ashdown",
+    "duration_ms": 142398,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000033",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000039"
+    },
+    "title": "Crimson Canyon",
+    "artist": "Neve Ashdown",
+    "duration_ms": 23677,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000034",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000021"
+    },
+    "album_title": "Northern Letters (Remastered)",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": false,
+  "genres": [
+   "Rock",
+   "Arena Rock",
+   "Rock & Roll",
+   "Prog-Rock/Art Rock",
+   "Pop",
+   "Pop/Rock",
+   "Adult Contemporary",
+   "Hard Rock",
+   "Psychedelic",
+   "Soft Rock"
+  ],
+  "label": "DISTANT (Golden Arcade) Records",
+  "upc": "990000000002",
+  "track_count": 18,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000003"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000022/{w}x{h}.png",
+  "incomplete": false
+ }
+}

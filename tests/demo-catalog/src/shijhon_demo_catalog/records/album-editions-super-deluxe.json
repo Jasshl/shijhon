@@ -1,0 +1,1001 @@
+{
+ "name": "album-editions-super-deluxe",
+ "path": "albums/900000042",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000042"
+  },
+  "title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+  "artist": "Neve Ashdown",
+  "kind": "album",
+  "release_date": "1962-11-18",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000044"
+    },
+    "title": "Crimson Mirrors (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 260397,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000001",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000045"
+    },
+    "title": "Open (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 183107,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000002",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000046"
+    },
+    "title": "Faded Wolves (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 207143,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000003",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000047"
+    },
+    "title": "Open Mirrors (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 207815,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000004",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2012-10-28",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000048"
+    },
+    "title": "Pale Islands (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 171179,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000005",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000049"
+    },
+    "title": "Silent Meadow (Winter Rivers) [2019 Mix]",
+    "artist": "Neve Ashdown",
+    "duration_ms": 467370,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000006",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000050"
+    },
+    "title": "Frozen Motors (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 186087,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000007",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000051"
+    },
+    "title": "Amber (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 164831,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000008",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000052"
+    },
+    "title": "Copper Station (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 241738,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000009",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000053"
+    },
+    "title": "Hidden Bridges (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 147044,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000010",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000054"
+    },
+    "title": "Velvet Tides (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 65938,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000011",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000055"
+    },
+    "title": "Low Horizon (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 73143,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000012",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000056"
+    },
+    "title": "Wandering Towers (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 119529,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000013",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000057"
+    },
+    "title": "Paper Circuits (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 90494,
+    "disc": 1,
+    "number": 14,
+    "isrc": "ZZSHJ0000014",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000058"
+    },
+    "title": "Slow Engines (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 95645,
+    "disc": 1,
+    "number": 15,
+    "isrc": "ZZSHJ0000015",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000059"
+    },
+    "title": "Copper Orchard (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 142151,
+    "disc": 1,
+    "number": 16,
+    "isrc": "ZZSHJ0000016",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000060"
+    },
+    "title": "Crimson Canyon (2019 Mix)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 24668,
+    "disc": 1,
+    "number": 17,
+    "isrc": "ZZSHJ0000017",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000061"
+    },
+    "title": "Silent Meadow (Winter Rivers) [Frozen Arcade]",
+    "artist": "Neve Ashdown",
+    "duration_ms": 418902,
+    "disc": 2,
+    "number": 1,
+    "isrc": "ZZSHJ0000036",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000062"
+    },
+    "title": "Faded (Winter Machines)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 143195,
+    "disc": 2,
+    "number": 2,
+    "isrc": "ZZSHJ0000037",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000063"
+    },
+    "title": "Open (Last Rivers)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 217777,
+    "disc": 2,
+    "number": 3,
+    "isrc": "ZZSHJ0000038",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2012-09-28",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000064"
+    },
+    "title": "Amber Horizon (Echoing Cities)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 217187,
+    "disc": 2,
+    "number": 4,
+    "isrc": "ZZSHJ0000039",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000065"
+    },
+    "title": "Crimson Engines (Hidden Meadow)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 195026,
+    "disc": 2,
+    "number": 5,
+    "isrc": "ZZSHJ0000040",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000066"
+    },
+    "title": "Open Mirrors (Broken Satellites)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 210749,
+    "disc": 2,
+    "number": 6,
+    "isrc": "ZZSHJ0000041",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2012-10-14",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000067"
+    },
+    "title": "Pale Islands (Violet Tides)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 102922,
+    "disc": 2,
+    "number": 7,
+    "isrc": "ZZSHJ0000042",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000068"
+    },
+    "title": "Copper Station (Frozen Station)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 317862,
+    "disc": 2,
+    "number": 8,
+    "isrc": "ZZSHJ0000043",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000069"
+    },
+    "title": "Crimson Canyon (Paper Mirrors)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 94733,
+    "disc": 2,
+    "number": 9,
+    "isrc": "ZZSHJ0000044",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000070"
+    },
+    "title": "Wild Stones (Velvet Islands)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 200095,
+    "disc": 2,
+    "number": 10,
+    "isrc": "ZZSHJ0000045",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000071"
+    },
+    "title": "Frozen Motors (Violet Tides)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 221306,
+    "disc": 2,
+    "number": 11,
+    "isrc": "ZZSHJ0000046",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000072"
+    },
+    "title": "Faded Wolves (Violet Station)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 285076,
+    "disc": 2,
+    "number": 12,
+    "isrc": "ZZSHJ0000047",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000073"
+    },
+    "title": "Crimson Mirrors (Pale Mirrors)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 209966,
+    "disc": 3,
+    "number": 1,
+    "isrc": "ZZSHJ0000048",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2012-11-11",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000074"
+    },
+    "title": "Copper Orchard (Northern Islands)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 131693,
+    "disc": 3,
+    "number": 2,
+    "isrc": "ZZSHJ0000049",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000075"
+    },
+    "title": "Open Wolves (Last Rivers)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 162082,
+    "disc": 3,
+    "number": 3,
+    "isrc": "ZZSHJ0000050",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000076"
+    },
+    "title": "Hidden Bridges (Hidden Fields)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 194594,
+    "disc": 3,
+    "number": 4,
+    "isrc": "ZZSHJ0000051",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000077"
+    },
+    "title": "Velvet Tides (Hidden Fields)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 94071,
+    "disc": 3,
+    "number": 5,
+    "isrc": "ZZSHJ0000052",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000078"
+    },
+    "title": "Low Horizon (Quiet Engines)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 100153,
+    "disc": 3,
+    "number": 6,
+    "isrc": "ZZSHJ0000053",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000079"
+    },
+    "title": "Wandering Towers (Quiet Engines)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 125945,
+    "disc": 3,
+    "number": 7,
+    "isrc": "ZZSHJ0000054",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000080"
+    },
+    "title": "Amber (Broken Station)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 187161,
+    "disc": 3,
+    "number": 8,
+    "isrc": "ZZSHJ0000055",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000081"
+    },
+    "title": "Salt Letters",
+    "artist": "Neve Ashdown",
+    "duration_ms": 969860,
+    "disc": 3,
+    "number": 9,
+    "isrc": "ZZSHJ0000056",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000082"
+    },
+    "title": "Open (Open Islands)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 161388,
+    "disc": 3,
+    "number": 10,
+    "isrc": "ZZSHJ0000057",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "2012-09-28",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000083"
+    },
+    "title": "Wild Stones (Bright Wolves)",
+    "artist": "Neve Ashdown",
+    "duration_ms": 197673,
+    "disc": 3,
+    "number": 11,
+    "isrc": "ZZSHJ0000058",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000042"
+    },
+    "album_title": "Northern Letters (Super Deluxe Edition) [2019 Remix & Remaster]",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1962-11-18",
+    "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": false,
+  "genres": [
+   "Rock",
+   "Pop",
+   "Oldies",
+   "Singer/Songwriter",
+   "Pop/Rock",
+   "Adult Contemporary",
+   "Rock & Roll",
+   "Soft Rock",
+   "Psychedelic"
+  ],
+  "label": "DISTANT (Golden Arcade) Records",
+  "upc": "990000000003",
+  "track_count": 40,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000003"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000043/{w}x{h}.png",
+  "incomplete": false
+ }
+}

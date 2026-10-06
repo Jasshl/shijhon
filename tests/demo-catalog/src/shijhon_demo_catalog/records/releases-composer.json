@@ -1,0 +1,2723 @@
+{
+ "name": "releases-composer",
+ "path": "artists/900000151/releases",
+ "status": 200,
+ "body": [
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001295"
+   },
+   "title": "Quiet Stones",
+   "artist": "Oren Kestrel, Uma Okafor, Odile Ellery, Corin Loring, Oren Vance, Viggo Marek, Tobin Blackwood, Tobin Quill 3, Otto Lindqvist, Talia Loring & Ilse Jessup",
+   "kind": "album",
+   "release_date": "2019-11-24",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Classical",
+    "Classical Crossover"
+   ],
+   "label": "Wild Towers Records",
+   "upc": "990000000091",
+   "track_count": 13,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001296/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001297"
+   },
+   "title": "LOW (Golden Cities)",
+   "artist": "Uma Okafor, Hugo Garrow, Remy Oakes & Neve Delacroix 2",
+   "kind": "album",
+   "release_date": "2019-10-13",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Tides 2 Records",
+   "upc": "990000000092",
+   "track_count": 31,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001298/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001299"
+   },
+   "title": "Lunar Mirrors (Distant Horizon)",
+   "artist": "Uma Okafor, Petra Hale & Zoë Ångström",
+   "kind": "album",
+   "release_date": "2019-10-13",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Electric Canyon Records",
+   "upc": "990000000093",
+   "track_count": 26,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001300/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001301"
+   },
+   "title": "Hollow Wolves 2 (Early Canyon)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2019-07-21",
+   "explicit": true,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Classical Crossover"
+   ],
+   "label": "Electric Canyon Records",
+   "upc": "990000000094",
+   "track_count": 23,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001302/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001303"
+   },
+   "title": "Open Voices 3 (Violet Machines)",
+   "artist": "Uma Okafor & Oren Kestrel",
+   "kind": "album",
+   "release_date": "2019-02-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Restless Voices 2 Records",
+   "upc": "990000000095",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001304/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001305"
+   },
+   "title": "Low Rivers (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2019-02-03",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Tides 2 Records",
+   "upc": "990000000096",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001306/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001307"
+   },
+   "title": "Iron 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2018-12-02",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Amber Lanterns Records",
+   "upc": "990000000097",
+   "track_count": 20,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001308/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001309"
+   },
+   "title": "Hidden Harbor (Glass Harbor)",
+   "artist": "Uma Okafor & Oren Ellery",
+   "kind": "album",
+   "release_date": "2018-09-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Original Score",
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Broken Meadow Records",
+   "upc": "990000000098",
+   "track_count": 25,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001310/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000419"
+   },
+   "title": "Northern Engines (Broken Gardens)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2018-09-02",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Silent Towers Records",
+   "upc": "990000000099",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001311/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001312"
+   },
+   "title": "Hidden Arcade",
+   "artist": "Uma Okafor, Tobin Hale & SaltOrchard & Mila Vance",
+   "kind": "album",
+   "release_date": "2018-03-25",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Classical Crossover",
+    "Classical"
+   ],
+   "label": "Restless Voices 2 Records",
+   "upc": "990000000100",
+   "track_count": 29,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001313/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001314"
+   },
+   "title": "Open Letters (Original Soundtrack)",
+   "artist": "Uma Okafor & Bram Hale 2",
+   "kind": "album",
+   "release_date": "2017-12-24",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Original Score",
+    "Soundtrack"
+   ],
+   "label": "Wandering Towers 2 Records",
+   "upc": "990000000101",
+   "track_count": 20,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001315/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001316"
+   },
+   "title": "Quiet Fields (Golden Harbor)",
+   "artist": "Uma Okafor, Viggo Loring 2 & Hugo Norrell",
+   "kind": "album",
+   "release_date": "2017-11-11",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Burning Towers Records",
+   "upc": "990000000102",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001317/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001318"
+   },
+   "title": "Winter Letters (Golden Cities)",
+   "artist": "Uma Okafor & Petra Hale",
+   "kind": "album",
+   "release_date": "2017-06-24",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Amber Lanterns Records",
+   "upc": "990000000103",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001319/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001320"
+   },
+   "title": "Copper Orchard 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Jonah Lindqvist",
+   "kind": "album",
+   "release_date": "2017-04-30",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Early Satellites Records",
+   "upc": "990000000104",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001321/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000408"
+   },
+   "title": "Amber Summers 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2017-04-16",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Pop"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000105",
+   "track_count": 25,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001322/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001323"
+   },
+   "title": "Low Bridges (Winter Summers)",
+   "artist": "Uma Okafor, Greta Blackwood & Lumi Ellery 4",
+   "kind": "album",
+   "release_date": "2017-01-29",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Satellites 2 Records",
+   "upc": "990000000106",
+   "track_count": 58,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001324/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001325"
+   },
+   "title": "Velvet Machines (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2016-11-20",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Tides 2 Records",
+   "upc": "990000000107",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001326/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001327"
+   },
+   "title": "Early Harbor (Glass Harbor)",
+   "artist": "Zoë Ångström, Petra Hale & Uma Okafor",
+   "kind": "album",
+   "release_date": "2016-07-13",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Salt Fields Records",
+   "upc": "990000000108",
+   "track_count": 27,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001328/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001329"
+   },
+   "title": "Hollow Signals (Northern Station)",
+   "artist": "Uma Okafor & Neve Tallis 3",
+   "kind": "album",
+   "release_date": "2016-05-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Distant 3 Records",
+   "upc": "990000000109",
+   "track_count": 24,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001330/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001331"
+   },
+   "title": "Copper Circuits (Golden Cities)",
+   "artist": "Uma Okafor & Neve Tallis 3",
+   "kind": "album",
+   "release_date": "2016-05-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Distant 3 Records",
+   "upc": "990000000110",
+   "track_count": 24,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001332/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001333"
+   },
+   "title": "Frozen Voices",
+   "artist": "Sable Quill & Uma Okafor",
+   "kind": "album",
+   "release_date": "2016-02-14",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Horizon. Records",
+   "upc": "990000000111",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001334/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001335"
+   },
+   "title": "Electric Mirrors (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2016-01-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score"
+   ],
+   "label": "Salt Fields Records",
+   "upc": "990000000112",
+   "track_count": 9,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001336/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001337"
+   },
+   "title": "Faded Arcade (Winter Summers)",
+   "artist": "Uma Okafor, Jonah Marek & Oren Ellery",
+   "kind": "album",
+   "release_date": "2015-11-29",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Satellites 2 Records",
+   "upc": "990000000113",
+   "track_count": 35,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001338/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001339"
+   },
+   "title": "Hidden Lanterns",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2015-10-04",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Silent Harbor Records",
+   "upc": "990000000114",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001340/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001341"
+   },
+   "title": "Faded Canyon (Glass Harbor)",
+   "artist": "Zoë Ångström, Petra Hale & Uma Okafor",
+   "kind": "album",
+   "release_date": "2015-08-16",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Salt Fields Records",
+   "upc": "990000000115",
+   "track_count": 26,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001342/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001343"
+   },
+   "title": "Paper Towers (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2015-06-21",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Distant 3 Records",
+   "upc": "990000000116",
+   "track_count": 10,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001344/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001345"
+   },
+   "title": "Golden Harbor 2",
+   "artist": "Sable Quill & Uma Okafor",
+   "kind": "album",
+   "release_date": "2015-05-31",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Lunar Circuits Records",
+   "upc": "990000000117",
+   "track_count": 23,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001346/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001347"
+   },
+   "title": "Last Station (Early Harbor 2)",
+   "artist": "Uma Okafor & Odile Vance",
+   "kind": "album",
+   "release_date": "2015-03-24",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Hidden (ECHOING) Records",
+   "upc": "990000000118",
+   "track_count": 21,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001348/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001349"
+   },
+   "title": "Silent Colors 2 (Wild Satellites)",
+   "artist": "Uma Okafor & Neve Tallis 3",
+   "kind": "album",
+   "release_date": "2015-02-01",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Burning Towers Records",
+   "upc": "990000000119",
+   "track_count": 14,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001350/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001351"
+   },
+   "title": "Open Motors 2 (Wild Satellites)",
+   "artist": "Uma Okafor & Jonah Lindqvist",
+   "kind": "album",
+   "release_date": "2015-01-04",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Distant 3 Records",
+   "upc": "990000000120",
+   "track_count": 23,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001352/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001353"
+   },
+   "title": "Golden Cities 2 (Distant Horizon 2)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2014-12-14",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000121",
+   "track_count": 9,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001354/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000398"
+   },
+   "title": "Faded 4 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2014-11-09",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000122",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001355/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001356"
+   },
+   "title": "Wild Parade (Music from the Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2014-10-26",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000123",
+   "track_count": 9,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001357/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001358"
+   },
+   "title": "Early Machines (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Jonah Lindqvist",
+   "kind": "album",
+   "release_date": "2014-08-24",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Children’s Music"
+   ],
+   "label": "Early Satellites Records",
+   "upc": "990000000124",
+   "track_count": 27,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001359/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001360"
+   },
+   "title": "Winter Rivers 2 (Music from the Motion Picture)",
+   "artist": "Uma Okafor & Jonah Lindqvist",
+   "kind": "album",
+   "release_date": "2014-06-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Instrumental"
+   ],
+   "label": "Hidden Motors 2 Records",
+   "upc": "990000000125",
+   "track_count": 20,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001361/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001362"
+   },
+   "title": "Winter Islands 2 (Copper Engines)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2014-03-30",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000126",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001363/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001364"
+   },
+   "title": "Winter Islands 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2014-02-07",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000127",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001365/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001366"
+   },
+   "title": "Echoing Rivers (Bright Machines)",
+   "artist": "Uma Okafor, Leon Fairbanks, Neve Delacroix 3, Neve Tallis 3 & Wren Nyberg",
+   "kind": "album",
+   "release_date": "2014-01-12",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Slow 3 Records",
+   "upc": "990000000128",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001367/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001368"
+   },
+   "title": "Amber Parade (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Bram Hale 2",
+   "kind": "album",
+   "release_date": "2013-12-29",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score"
+   ],
+   "label": "Salt Fields Records",
+   "upc": "990000000129",
+   "track_count": 9,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001369/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001370"
+   },
+   "title": "Burning Meadow",
+   "artist": "Otto Fairbanks, Mila Vance, Uma Okafor & Leon Prescott",
+   "kind": "album",
+   "release_date": "2013-07-01",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Hollow Canyon 2 Records",
+   "upc": "990000000130",
+   "track_count": 35,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001371/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001372"
+   },
+   "title": "Paper Lanterns (Winter Summers) [Expanded Edition]",
+   "artist": "Uma Okafor & Greta Blackwood",
+   "kind": "album",
+   "release_date": "2013-03-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Satellites 2 Records",
+   "upc": "990000000131",
+   "track_count": 41,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001373/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001374"
+   },
+   "title": "Wild Stones 2 (Original Score)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2012-09-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Tides 2 Records",
+   "upc": "990000000132",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001375/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001376"
+   },
+   "title": "Hollow Arcade (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2012-07-29",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Burning Cities 2 Records",
+   "upc": "990000000133",
+   "track_count": 10,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001377/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001378"
+   },
+   "title": "Wandering 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2012-01-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Electric Canyon Records",
+   "upc": "990000000134",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001379/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001380"
+   },
+   "title": "Crimson Orchard (Original Soundtrack)",
+   "artist": "Uma Okafor, Bram Hale 2 & Greta Ingram",
+   "kind": "album",
+   "release_date": "2011-11-20",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Wandering Towers 2 Records",
+   "upc": "990000000135",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001381/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001382"
+   },
+   "title": "Northern Engines 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2011-02-06",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Golden 2 Records",
+   "upc": "990000000136",
+   "track_count": 5,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001383/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001384"
+   },
+   "title": "Hidden Wolves (Winter Summers)",
+   "artist": "Uma Okafor, Greta Blackwood & Neve Tallis 3",
+   "kind": "album",
+   "release_date": "2010-12-22",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Satellites 2 Records",
+   "upc": "990000000137",
+   "track_count": 19,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001385/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000402"
+   },
+   "title": "Winter Gardens (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Kasper Moreau",
+   "kind": "album",
+   "release_date": "2010-11-27",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Lunar 4 Records",
+   "upc": "990000000138",
+   "track_count": 24,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001386/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001387"
+   },
+   "title": "Golden Cities 3 (Original Motion Picture Score)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2010-09-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Worldwide"
+   ],
+   "label": "Wild Signals Records",
+   "upc": "990000000139",
+   "track_count": 20,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001388/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001389"
+   },
+   "title": "Hidden 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2010-09-12",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000140",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001390/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001391"
+   },
+   "title": "Hollow Cities 2 (Music from the Motion Picture)",
+   "artist": "Uma Okafor & Jonah Lindqvist",
+   "kind": "album",
+   "release_date": "2010-05-16",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Early Satellites Records",
+   "upc": "990000000141",
+   "track_count": 20,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001392/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001393"
+   },
+   "title": "Velvet Rivers (Original Motion Picture Soundtrack)",
+   "artist": "Nico Jessup 2 & Uma Okafor",
+   "kind": "album",
+   "release_date": "2010-04-18",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Golden 2 Records",
+   "upc": "990000000142",
+   "track_count": 10,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001394/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001395"
+   },
+   "title": "Slow Tides (Original Score)",
+   "artist": "Uma Okafor, Kasper Merritt 2 & Kasper Moreau",
+   "kind": "album",
+   "release_date": "2010-02-28",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical",
+    "R&B/Soul",
+    "Original Score"
+   ],
+   "label": "Slow Tides 2 Records",
+   "upc": "990000000143",
+   "track_count": 26,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001396/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001397"
+   },
+   "title": "Silent Pilots 2 (Winter Summers)",
+   "artist": "Uma Okafor, Greta Blackwood & Silas Quill",
+   "kind": "album",
+   "release_date": "2010-01-03",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Satellites 2 Records",
+   "upc": "990000000144",
+   "track_count": 49,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001398/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001399"
+   },
+   "title": "Broken (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2009-12-06",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Soundtrack",
+    "Original Score"
+   ],
+   "label": "Amber Lanterns Records",
+   "upc": "990000000145",
+   "track_count": 17,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001400/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001401"
+   },
+   "title": "Echoing Letters (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2009-05-31",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Classical"
+   ],
+   "label": "Distant 3 Records",
+   "upc": "990000000146",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001402/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001403"
+   },
+   "title": "Burning Satellites (Original Motion Picture Soundtrack) [Deluxe]",
+   "artist": "Uma Okafor & Arlo Ellery 3",
+   "kind": "album",
+   "release_date": "2009-05-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000147",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001404/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001405"
+   },
+   "title": "Glass Tides (Music from the Motion Picture)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2009-03-15",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Amber Lanterns Records",
+   "upc": "990000000148",
+   "track_count": 23,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001406/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001407"
+   },
+   "title": "Copper Stones (Tender Rivers)",
+   "artist": "Uma Okafor & Bram Hale 2",
+   "kind": "album",
+   "release_date": "2009-01-11",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Tender Satellites Records",
+   "upc": "990000000149",
+   "track_count": 7,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001408/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001409"
+   },
+   "title": "Lunar 5 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Zeno Quill 2",
+   "kind": "album",
+   "release_date": "2008-11-16",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000150",
+   "track_count": 7,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001410/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001411"
+   },
+   "title": "Violet Mirrors 2 (Restless Letters)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2008-09-14",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack"
+   ],
+   "label": "Low Voices Records",
+   "upc": "990000000151",
+   "track_count": 28,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001412/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001413"
+   },
+   "title": "Copper 4 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor, Jonah Lindqvist & Jonah Nyberg",
+   "kind": "album",
+   "release_date": "2008-05-01",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Last Colors 2 Records",
+   "upc": "990000000152",
+   "track_count": 16,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001414/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001415"
+   },
+   "title": "Violet Colors (1984 - 1994)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2008-04-03",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Amber Letters. Records",
+   "upc": "990000000153",
+   "track_count": 17,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001416/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000149"
+   },
+   "title": "Open 2 (Original Motion Picture Soundtrack) [Expanded Edition]",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2008-01-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000009",
+   "track_count": 30,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900000150/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001417"
+   },
+   "title": "Winter Engines (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Mila Arden",
+   "kind": "album",
+   "release_date": "2007-03-29",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Soundtrack",
+    "Original Score"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000154",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001418/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001419"
+   },
+   "title": "Restless Cities (Original Motion Picture Soundtrack) [Deluxe Edition]",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2006-08-03",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000155",
+   "track_count": 24,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001420/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001421"
+   },
+   "title": "Winter Islands 3 (Early Wolves) [feat. Leon Prescott]",
+   "artist": "Uma Okafor & Bram Hale 2",
+   "kind": "album",
+   "release_date": "2006-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Winter Orchard Records",
+   "upc": "990000000156",
+   "track_count": 16,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001422/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001423"
+   },
+   "title": "Hollow Voices (Original Motion Picture Score)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2006-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Rock",
+    "Children’s Music"
+   ],
+   "label": "Low Signals Records",
+   "upc": "990000000157",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001424/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000404"
+   },
+   "title": "Pale Pilots (Original Motion Picture Soundtrack) [Deluxe Edition]",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2005-09-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000158",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001425/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001426"
+   },
+   "title": "Sunken Arcade (Original Soundtrack)",
+   "artist": "Sable Garrow 2 & Uma Okafor",
+   "kind": "album",
+   "release_date": "2005-05-11",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Children’s Music"
+   ],
+   "label": "Low Signals Records",
+   "upc": "990000000159",
+   "track_count": 42,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001427/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001428"
+   },
+   "title": "Silent Tides (Original Motion Picture Soundtrack) [Deluxe Version]",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2005-02-10",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000160",
+   "track_count": 21,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001429/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001430"
+   },
+   "title": "Violet Parade 2 (Hidden Islands)",
+   "artist": "Uma Okafor & Bram Hale 2",
+   "kind": "album",
+   "release_date": "2004-12-15",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Video Game"
+   ],
+   "label": "Crimson 2 Records",
+   "upc": "990000000161",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001431/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001432"
+   },
+   "title": "Wild Stones 3 (Music from the Motion Picture)",
+   "artist": "Zeno Ferro & Uma Okafor",
+   "kind": "album",
+   "release_date": "2004-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score",
+    "Soundtrack"
+   ],
+   "label": "Last Colors 2 Records",
+   "upc": "990000000162",
+   "track_count": 17,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001433/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001434"
+   },
+   "title": "Broken 2 (Music from the Motion Picture)",
+   "artist": "Uma Okafor & Bram Hale 2",
+   "kind": "album",
+   "release_date": "2003-12-25",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Salt Fields Records",
+   "upc": "990000000163",
+   "track_count": 17,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001435/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000409"
+   },
+   "title": "Paper (Music from the Motion Picture)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2003-08-31",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000164",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001163/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001436"
+   },
+   "title": "Wandering Bridges (Winter Summers 2)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2003-07-24",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Video Game"
+   ],
+   "label": "Crimson 2 Records",
+   "upc": "990000000165",
+   "track_count": 17,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001437/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001438"
+   },
+   "title": "Hollow Machines (Northern Tides 2)",
+   "artist": "Uma Okafor, Mila Duval & Quinn Sorel",
+   "kind": "album",
+   "release_date": "2003-05-01",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical",
+    "TV Soundtrack",
+    "Original Score"
+   ],
+   "label": "Paper 3 Records",
+   "upc": "990000000166",
+   "track_count": 25,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001439/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001440"
+   },
+   "title": "Restless Gardens (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2003-04-27",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Amber Lanterns Records",
+   "upc": "990000000167",
+   "track_count": 25,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001441/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001442"
+   },
+   "title": "Pale Rivers (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2003-02-13",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Soundtrack"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000168",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001443/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001444"
+   },
+   "title": "Electric Mirrors 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2002-07-04",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Amber Lanterns Records",
+   "upc": "990000000169",
+   "track_count": 9,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001445/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001446"
+   },
+   "title": "Electric Harbor (Slow Harbor) [Original Motion Picture Soundtrack]",
+   "artist": "Uma Okafor & Silas Sorel",
+   "kind": "album",
+   "release_date": "2001-09-06",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Iron Islands Records",
+   "upc": "990000000170",
+   "track_count": 28,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001447/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000405"
+   },
+   "title": "Electric Harbor (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Silas Sorel",
+   "kind": "album",
+   "release_date": "2001-09-06",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Iron Islands Records",
+   "upc": "990000000171",
+   "track_count": 14,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001189/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001448"
+   },
+   "title": "Electric Harbor (Broken Circuits)",
+   "artist": "Uma Okafor & Silas Sorel",
+   "kind": "album",
+   "release_date": "2001-09-05",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Iron Islands Records",
+   "upc": "990000000172",
+   "track_count": 14,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001449/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001450"
+   },
+   "title": "Open 5 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2001-02-22",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Restless 6 Records",
+   "upc": "990000000173",
+   "track_count": 14,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001451/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000412"
+   },
+   "title": "Slow Circuits (Soundtrack from the Motion Picture)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2000-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Pop",
+    "Soundtrack",
+    "Original Score",
+    "Worldwide",
+    "Classical",
+    "Children’s Music"
+   ],
+   "label": "Low Signals Records",
+   "upc": "990000000174",
+   "track_count": 13,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001452/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001453"
+   },
+   "title": "Quiet Canyon (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "2000-01-30",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack"
+   ],
+   "label": "Tender Satellites Records",
+   "upc": "990000000175",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001454/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001175"
+   },
+   "title": "Silent Pilots (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1999-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Classical"
+   ],
+   "label": "Slow Towers Records",
+   "upc": "990000000176",
+   "track_count": 14,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001174/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000414"
+   },
+   "title": "Iron Fields (Soundtrack from the Motion Picture)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1999-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Children’s Music"
+   ],
+   "label": "Low Signals Records",
+   "upc": "990000000177",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001455/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001456"
+   },
+   "title": "Frozen Fields (Original Motion Picture Soundtrack)",
+   "artist": "Silas Sorel & Uma Okafor",
+   "kind": "album",
+   "release_date": "1998-08-06",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score",
+    "Soundtrack",
+    "Classical"
+   ],
+   "label": "Iron Towers Records",
+   "upc": "990000000178",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001457/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001458"
+   },
+   "title": "Velvet Machines 2 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor, Juno Prescott & Jonah Holloway",
+   "kind": "album",
+   "release_date": "1998-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Slow Towers Records",
+   "upc": "990000000179",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001459/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001460"
+   },
+   "title": "Hidden 3 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1998-02-08",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack"
+   ],
+   "label": "Tender Satellites Records",
+   "upc": "990000000180",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001461/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001462"
+   },
+   "title": "Silent Colors 3 (Soundtrack from the Motion Picture)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1997-02-22",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Last Tides 2 Records",
+   "upc": "990000000181",
+   "track_count": 7,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001463/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001464"
+   },
+   "title": "Echoing 3",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1997-02-22",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Soundtrack",
+    "Classical",
+    "Original Score",
+    "Rock"
+   ],
+   "label": "Hidden (ECHOING) Records",
+   "upc": "990000000182",
+   "track_count": 18,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001465/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000401"
+   },
+   "title": "Winter Parade 2 (Original Motion Picture Score)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1997-01-16",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Pale Circuits Records",
+   "upc": "990000000183",
+   "track_count": 11,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001466/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001467"
+   },
+   "title": "Restless Circuits (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor & Zeno Ferro",
+   "kind": "album",
+   "release_date": "1996-08-15",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Pop",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Glass 3 Records",
+   "upc": "990000000184",
+   "track_count": 17,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001468/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001469"
+   },
+   "title": "Distant Station (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1996-02-23",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Original Score"
+   ],
+   "label": "Last Colors 2 Records",
+   "upc": "990000000185",
+   "track_count": 22,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001470/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001471"
+   },
+   "title": "Distant Station (Original Motion Picture Soundtrack / Deluxe Edition)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1996",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "Distant Orchard 2 Records",
+   "upc": "990000000186",
+   "track_count": 30,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001472/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900001473"
+   },
+   "title": "Glass Engines (Restless Letters)",
+   "artist": "Silas Marek & Uma Okafor",
+   "kind": "album",
+   "release_date": "1995-06-26",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack"
+   ],
+   "label": "FROZEN 2 Records",
+   "upc": "990000000187",
+   "track_count": 13,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001474/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000415"
+   },
+   "title": "Electric Satellites (Music from the Original Motion Picture)",
+   "artist": "Silas Marek & Uma Okafor",
+   "kind": "album",
+   "release_date": "1995-06-26",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Rock",
+    "Adult Alternative",
+    "Original Score"
+   ],
+   "label": "FROZEN 2 Records",
+   "upc": "990000000188",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001475/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000411"
+   },
+   "title": "Northern Engines 3 (Original Motion Picture Soundtrack)",
+   "artist": "Uma Okafor",
+   "kind": "album",
+   "release_date": "1995-03-09",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Soundtrack",
+    "Classical",
+    "Original Score"
+   ],
+   "label": "Violet Tides 2 Records",
+   "upc": "990000000189",
+   "track_count": 15,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000151"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001476/{w}x{h}.png",
+   "incomplete": false
+  }
+ ]
+}

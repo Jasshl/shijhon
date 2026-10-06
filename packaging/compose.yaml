@@ -1,0 +1,132 @@
+# Shijhon in front of its own stock Navidrome. docs/quick-start.md has the steps: the .env
+# file, the configuration in config/ and the accounts.
+#
+# The databases and caches are kept in Docker volumes. To keep one in a folder instead, give
+# the folder's absolute path in .env: NAVIDROME_DATA, SHIJHON_DATA, USAGE_EXPORT_DATA. On
+# Docker Desktop keep the volumes: databases in a folder shared from macOS or Windows can be
+# corrupted.
+name: shijhon
+
+x-hardening: &hardening
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+
+services:
+  # A new volume, or a missing folder that Docker creates, belongs to root, and the other
+  # containers run as PUID:PGID. This gives each such one that is still empty to PUID:PGID,
+  # then ends. It changes nothing else.
+  data-owner:
+    # Navidrome's image, for its shell and tools.
+    image: &navidrome-image docker.io/deluan/navidrome:0.64.2@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    network_mode: none
+    restart: "no"
+    # The image declares /music a volume: covered, so that none is made for it.
+    tmpfs: [/music]
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        for folder in /data /shijhon-data /usage; do
+          if [ "$$(stat -c %u:%g "$$folder")" != "${PUID:-1000}:${PGID:-1000}" ] &&
+              [ -z "$$(ls -A "$$folder")" ]; then
+            chown "${PUID:-1000}:${PGID:-1000}" "$$folder" || exit 1
+          fi
+        done
+    volumes:
+      - ${NAVIDROME_DATA:-navidrome-data}:/data
+      - ${SHIJHON_DATA:-shijhon-data}:/shijhon-data
+      - ${USAGE_EXPORT_DATA:-usage-export}:/usage
+
+  navidrome:
+    <<: *hardening
+    # Unmodified Navidrome at the version Shijhon is tested against, pinned by digest.
+    image: *navidrome-image
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      ND_LOGLEVEL: info
+      # Navidrome takes the client's address from Shijhon. Trust only Shijhon's fixed
+      # address, written as a network ("/32"), without spaces.
+      ND_EXTAUTH_TRUSTEDSOURCES: 172.30.99.10/32
+    depends_on:
+      data-owner: {condition: service_completed_successfully}
+    volumes:
+      - ${NAVIDROME_DATA:-navidrome-data}:/data
+      - ${MUSIC_DIR:?set MUSIC_DIR}:/music:ro
+
+  shijhon:
+    <<: *hardening
+    build:
+      context: ..
+      args:
+        # Catalog adapters to install into the image (docs/catalogs.md):
+        # SHIJHON_ADAPTERS in .env, then build again: docker compose up -d --build
+        ADAPTERS: ${SHIJHON_ADAPTERS:-}
+    image: shijhon:local
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    tmpfs: [/tmp]
+    depends_on:
+      data-owner: {condition: service_completed_successfully}
+      navidrome: {condition: service_started}
+    # Time for a library write under way to finish before Docker kills the process.
+    stop_grace_period: 30s
+    networks:
+      default:
+        ipv4_address: 172.30.99.10  # the address Navidrome trusts (above)
+    ports:
+      # The port apps connect to, on every address of this machine, unencrypted.
+      # SHIJHON_BIND=127.0.0.1: this machine alone (with a TLS reverse proxy in front).
+      - "${SHIJHON_BIND:-0.0.0.0}:${SHIJHON_PORT:-4533}:8765"
+    volumes:
+      - ./config:/config:ro
+      - ${SHIJHON_DATA:-shijhon-data}:/data
+      # The library at the path Navidrome has it, read-only; only the placeholder
+      # folder inside it is writable.
+      - ${MUSIC_DIR:?set MUSIC_DIR}:/music:ro
+      - ${MUSIC_DIR:?set MUSIC_DIR}/_shijhon:/music/_shijhon
+      # The usage export, for the cleanup. Writable so that Shijhon can ask for a fresh
+      # one.
+      - ${USAGE_EXPORT_DATA:-usage-export}:/usage
+
+  # Writes the usage export from Navidrome's database (docs/deployment.md, "The usage
+  # export").
+  usage-export:
+    <<: *hardening
+    # The image the shijhon service builds.
+    image: shijhon:local
+    pull_policy: never
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    tmpfs: [/tmp]
+    network_mode: none
+    depends_on:
+      data-owner: {condition: service_completed_successfully}
+      navidrome: {condition: service_started}
+    command: ["usage-export", "--navidrome-db", "/navidrome-data/navidrome.db",
+              "--out", "/usage/usage.sqlite3", "--every", "900"]
+    volumes:
+      - ${NAVIDROME_DATA:-navidrome-data}:/navidrome-data:ro
+      - ${USAGE_EXPORT_DATA:-usage-export}:/usage
+
+# A fixed range, so that Navidrome knows Shijhon's address. If it is taken on this
+# machine, change it here, in the two addresses above and in trusted_proxies (the gateway,
+# .1, is where a reverse proxy on this host arrives from).
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.99.0/24
+
+# Used unless .env names a folder in their place.
+volumes:
+  navidrome-data:
+  shijhon-data:
+  usage-export:

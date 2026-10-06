@@ -1,0 +1,35 @@
+{
+ "name": "song-twins-other-edition",
+ "path": "songs/900000784",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000784"
+  },
+  "title": "IRON.",
+  "artist": "Esme Ashdown",
+  "duration_ms": 177846,
+  "disc": 1,
+  "number": 7,
+  "isrc": "ZZSHJ0000080",
+  "explicit": true,
+  "clean": false,
+  "album": {
+   "catalog": "demo",
+   "id": "900000786"
+  },
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000086"
+   }
+  ],
+  "album_title": "PALE RIVERS.",
+  "genres": [
+   "Hip-Hop/Rap"
+  ],
+  "release_date": "2010-05-22",
+  "artwork_template": "https://covers.demo.invalid/900000785/{w}x{h}.png"
+ }
+}

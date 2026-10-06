@@ -1,0 +1,251 @@
+{
+ "name": "album-ep-without-suffix",
+ "path": "albums/900000133",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000133"
+  },
+  "title": "wild stones",
+  "artist": "Jonah Fairbanks",
+  "kind": "album",
+  "release_date": "2010-10-03",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000136"
+    },
+    "title": "FROZEN",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 194223,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000087",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000137"
+    },
+    "title": "violet",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 202757,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000088",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-09-11",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000138"
+    },
+    "title": "electric mirrors",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 170819,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000089",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000139"
+    },
+    "title": "northern",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 177062,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000090",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-08-22",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000140"
+    },
+    "title": "amber stones",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 205159,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000091",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000141"
+    },
+    "title": "open",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 178452,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000092",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-04-18",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000142"
+    },
+    "title": "golden pilots",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 199818,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000093",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2009-07-10",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000143"
+    },
+    "title": "silent",
+    "artist": "Jonah Fairbanks",
+    "duration_ms": 230148,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000094",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2010-10-03",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000144"
+    },
+    "title": "velvet",
+    "artist": "Jonah Fairbanks & Cato Ashdown",
+    "duration_ms": 179286,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000095",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000133"
+    },
+    "album_title": "wild stones",
+    "genres": [
+     "Alternative"
+    ],
+    "release_date": "2011-02-06",
+    "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png"
+   }
+  ],
+  "explicit": false,
+  "clean": false,
+  "genres": [
+   "Alternative",
+   "Electronic",
+   "Rock"
+  ],
+  "label": "Bright Records",
+  "upc": "990000000007",
+  "track_count": 9,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000135"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000134/{w}x{h}.png",
+  "incomplete": false
+ }
+}

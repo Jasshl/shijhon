@@ -1,0 +1,39 @@
+{
+ "name": "song-duo-feat",
+ "path": "songs/900000342",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000342"
+  },
+  "title": "Amber 2 (feat. Lumi Duval)",
+  "artist": "ÉMILE BRØNN 2 & Greta Ashdown",
+  "duration_ms": 177594,
+  "disc": 1,
+  "number": 4,
+  "isrc": "ZZSHJ0000246",
+  "explicit": true,
+  "clean": false,
+  "album": {
+   "catalog": "demo",
+   "id": "900000335"
+  },
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000337"
+   },
+   {
+    "catalog": "demo",
+    "id": "900000338"
+   }
+  ],
+  "album_title": "Bright Circuits (Deluxe)",
+  "genres": [
+   "Hip-Hop/Rap"
+  ],
+  "release_date": "2004-09-10",
+  "artwork_template": "https://covers.demo.invalid/900000336/{w}x{h}.png"
+ }
+}

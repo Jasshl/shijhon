@@ -1,0 +1,13 @@
+{
+ "name": "artist-diacritic",
+ "path": "artists/900000337",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000337"
+  },
+  "name": "ÉMILE BRØNN 2",
+  "artwork_template": "https://covers.demo.invalid/900000420/{w}x{h}.png"
+ }
+}

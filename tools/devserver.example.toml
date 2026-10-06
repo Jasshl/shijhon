@@ -1,0 +1,99 @@
+# Development instance for checks with real apps (tools/devserver.py) and the live smoke
+# tests (pytest -m live). Copy this file OUTSIDE the repository and fill it in: it holds
+# add-on addresses and settings, which may be secret.
+
+# Optional: loggers logged at debug level, e.g. ["shijhon.covers"] (one line per catalog
+# cover request: sizes, cache, times). Without it, SHIJHON_LOG_DEBUG applies.
+# log_debug = ["shijhon.covers"]
+
+[server]
+# The address clients use, e.g. this machine's VPN address. Navidrome itself stays on
+# loopback; only Shijhon is reachable.
+host = "127.0.0.1"
+port = 4747
+
+[navidrome]
+user = "admin"
+password = "choose-a-password"
+
+# Audio add-ons (the add-on protocol), tried in this order.
+[[addons]]
+name = "First add-on"
+base_url = "https://addon.example.invalid/your-configuration"
+reach = "public"          # "loopback" for a worker on this machine, "private" for a LAN host
+settings = {}             # values for the add-on's declared settings
+# budget_seconds = 45     # optional: own time to first audio (default: the global ~9 s),
+                          # e.g. for a worker that prepares complete files
+
+# Optional: Shijhon's delivery settings (defaults for what the dashboard will edit).
+# [delivery]
+# routing = "ready_first"      # the first add-on that can deliver now, else reliable_source
+# reliable_source = "First add-on"
+# warm_ahead_depth = 2           # songs opened ahead: the client's queue, else the album
+# warm_ahead_delay_seconds = 2   # after a play's first byte
+# prefetch_memory_seconds = 600  # a client that fetches ahead itself gets none this long
+
+# Optional: a catalog. `kind` is the name of a catalog
+# adapter installed next to it (`shijhon catalogs` lists them), and the adapter's own
+# settings - its region, its credentials - go here too, as its documentation says. "demo"
+# is the tests' made-up catalog of invented artists, albums and songs: the development
+# environment has it (tests/demo-catalog).
+# [catalog]
+# kind = "demo"
+# twins = "explicit"          # clean/explicit versions: "explicit", "clean" or "both"
+#
+# Optional: catalog additions to search results and artist pages (defaults shown).
+# [search]
+# min_query_length = 3
+# budget_seconds = 3
+# discography_max_age_days = 7     # saved artist discographies are refreshed after this
+# artist_sync_pages = 10           # this many artist pages without a saved discography
+# artist_sync_seconds = 10         #   within this time: a sync, library pages only
+# guard_searches = 60              # this many different searches
+# guard_window_seconds = 20        #   within this time: library answers only
+# guard_pause_seconds = 60         #   for at least this long
+# song_only_additions = true       # isolated song-only ("Tracks") searches get additions
+# song_settle_seconds = 0.15       #   after this settle
+# song_burst_searches = 4          # this many different song-only searches
+# song_burst_seconds = 0.5         #   within this time: a burst, library answers only
+# song_burst_pause_seconds = 2     #   until the client has been quiet this long
+#
+# Optional: filling partially owned albums (needs [catalog]; defaults shown).
+# [fill]
+# enabled = true
+# open_budget_seconds = 3
+# library_pass = "dry_run"         # the pass over the whole library: "dry_run" lists what
+#                                  #   it would do (`shijhon matches --database
+#                                  #   <state>/shijhon/shijhon.sqlite3`) and fills nothing
+#                                  #   automatically, "on" fills, "off" stops the pass (views
+#                                  #   and searches still fill albums the policy allows)
+# pass_requests_per_second = 1     # its catalog requests
+# pass_start_seconds = 60          # after startup; then every pass_interval_hours (6)
+#
+# Optional: taking unused releases out again (Navidrome's database is read from the
+# instance's state; defaults shown). `shijhon cleanup --database <state>/shijhon/shijhon.sqlite3
+# --navidrome-db <state>/navidrome/data/navidrome.db` lists what it would take out.
+# [cleanup]
+# mode = "off"                     # "dry_run" logs it daily, "on" takes it out
+# unused_days = 30                 # after being added, if nobody used it
+# catalog_albums = true            # catalog albums added by a commit
+# fills = true                     # songs added to partly owned albums
+#
+# Catalog albums to add at startup, as a client's commit would (needs [catalog]).
+# [commits]
+# albums = ["<catalog album id>"]
+
+# Hand-written catalog releases to materialize as placeholders (no catalog needed).
+[[releases]]
+title = "Example Album"
+artist = "Example Artist"
+date = "2020-01-01"
+kind = "album"            # album | single | ep | compilation
+owned = [1]               # optional: track numbers to create as synthetic owned files,
+                          # so the album shows as partially owned and gets filled
+# fill = false            # optional: write only the owned files and leave the album to
+                          # Shijhon's matching with the configured catalog
+tracks = [
+  { title = "First Song", isrc = "XX0000000001", duration = 201.5 },
+  { title = "Second Song", isrc = "XX0000000002", duration = 187.0 },
+]

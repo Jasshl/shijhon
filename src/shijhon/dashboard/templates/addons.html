@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% set title = "Add-ons" %}
+{% from "_macros.html" import setting, more_summary, error_notice, chevron %}
+{% block main %}
+<div class="page-head">
+  <h1>Add-ons</h1>
+{% if items %}
+  <p class="page-summary">The routing mode (Playback) decides which add-on plays a catalog song: in order goes down this list; ready first takes the first on it that has the song ready; primary first starts with the primary, then tries the others fastest first, by their recent plays. Add-ons that are off are skipped.{% if errors %} {{ errors }} add-on{{ "s have errors" if errors != 1 else " has an error" }}{% if cooling %} and {{ cooling }} {{ "are" if cooling != 1 else "is" }} cooling down{% endif %}.{% elif cooling %} {{ cooling }} add-on{{ "s are" if cooling != 1 else " is" }} cooling down.{% endif %}</p>
+{% else %}
+  <p class="page-summary">Add-ons supply the audio for catalog songs you don't own.</p>
+{% endif %}
+</div>
+{% if notices %}
+{{ error_notice(notices, notice_title) }}
+{% endif %}
+{% if stale %}
+<div class="notice notice-error" role="alert">
+  <p class="notice-title">{{ stale }} settings not saved</p>
+  <p>They changed since the page was loaded (another save, a new address, or a new version of its manifest). Here they are as they are now: make your changes again.</p>
+</div>
+{% endif %}
+{% if flash and flash.words %}
+<div class="notice notice-{{ flash.tone }}" role="status"><p>{{ flash.words }}</p></div>
+{% endif %}
+{% if dash_off %}
+<div class="notice notice-warn" role="status">
+  <p>Add-ons' DASH links are not played: {{ dash_off }}. Shijhon asks the next add-on instead; other links play as usual.</p>
+</div>
+{% endif %}
+{% if env_list %}
+<div class="notice notice-info" role="status">
+  <p>This list is set by the environment: <code>{{ env_list }}</code>. Change it there; Shijhon applies it when it starts.</p>
+</div>
+{% elif from_file and owner %}
+<div class="notice {{ 'notice-warn' if differs else 'notice-info' }}" role="status">
+{% if differs %}
+  <p class="notice-title">The configuration file's add-ons are not applied</p>
+{% endif %}
+  <p>The configuration file lists add-ons, but this list was changed here on {{ owner.saved_at|day }}, so the file's list is not applied when Shijhon starts.{% if differs %} The file's list differs from this one ({{ differs|join(", ") }}): changes made there have no effect.{% endif %}</p>
+  <form method="post" action="{{ prefix }}/addons/configuration">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn-small">Use the file's list after a restart</button>
+  </form>
+</div>
+{% elif from_file and not handed_back %}
+<div class="notice notice-info" role="status">
+  <p>This list comes from the configuration file. Once you change it here, this list is kept and the file's list is no longer applied when Shijhon starts.</p>
+</div>
+{% endif %}
+<section class="group" aria-labelledby="order-title">
+  <div class="group-head">
+    <h2 id="order-title">Order</h2>
+{% if items %}
+    <p class="group-meta">{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on</p>
+{% endif %}
+  </div>
+{% if items and env_list %}
+  <ol class="chain chain-readonly">
+{% for item in items %}
+    <li class="source{% if not item.addon.enabled %} source-off{% elif item.health.attention %} source-attention{% endif %}" id="addon-{{ item.addon.id }}">
+      <span class="source-order">{{ item.order }}</span>
+      <span class="led{% if item.health.light %} led-{{ item.health.light }}{% endif %}" aria-hidden="true"></span>
+      <div class="source-name">
+        <h3>{{ item.addon.name }}</h3>
+        <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}</p>
+      </div>
+      <div class="source-health">
+        <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}</p>
+      </div>
+    </li>
+{% endfor %}
+  </ol>
+{% elif items %}
+  <ol class="chain">
+{% for item in items %}
+{% set addon = item.addon %}
+{% set health = item.health %}
+<li class="source{% if not addon.enabled %} source-off{% elif health.attention %} source-attention{% endif %}" id="addon-{{ addon.id }}">
+  <span class="source-order">{{ item.order }}</span>
+  <span class="led{% if health.light %} led-{{ health.light }}{% endif %}" aria-hidden="true"></span>
+  <div class="source-name">
+    <h3>{{ addon.name }}</h3>
+    <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if addon.budget is not none %}<span>Time to first audio {{ addon.budget|number }} s</span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}</p>
+  </div>
+  <p class="source-health{% if health.light == 'error' %} status-error{% endif %}">{{ health.words }}{% if health.code %} <code>{{ health.code }}</code>{% endif %}</p>
+  <form class="source-switch" method="post" action="{{ prefix }}/addons/{{ addon.id }}/enabled">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="switch" role="switch" aria-checked="{{ 'true' if addon.enabled else 'false' }}" aria-label="{{ addon.name }} enabled" name="enabled" value="{{ 'false' if addon.enabled else 'true' }}">
+      <span class="switch-track" aria-hidden="true"></span><span class="switch-text" aria-hidden="true">{{ "On" if addon.enabled else "Off" }}</span>
+    </button>
+  </form>
+  <form class="source-move joined" method="post" action="{{ prefix }}/addons/{{ addon.id }}/move">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="btn-icon btn-small" name="direction" value="up" aria-label="Move {{ addon.name }} up"{% if item.first %} disabled{% endif %}>{{ chevron("up") }}</button>
+    <button class="btn-icon btn-small" name="direction" value="down" aria-label="Move {{ addon.name }} down"{% if item.last %} disabled{% endif %}>{{ chevron("down") }}</button>
+  </form>
+  <details class="source-settings"{% if item.open %} open{% endif %}>
+    <summary>Settings<span class="visually-hidden"> for {{ addon.name }}</span></summary>
+    <div class="source-settings-body">
+      <form id="addon-{{ addon.id }}-settings" method="post" action="{{ prefix }}/addons/{{ addon.id }}/settings" novalidate>
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="version" value="{{ item.form_version }}">
+        <div class="rows rows-nested">
+{% for row in item.rows %}
+{{ setting(row) }}
+{% endfor %}
+        </div>
+{% for group, rows in item.more.groups %}
+        <details class="more-settings more-nested"{% if item.more.open %} open{% endif %}>
+          {{ more_summary(item.more) }}
+          <p class="group-help">{{ group.help }}</p>
+          <div class="rows rows-nested">
+{% for row in rows %}
+{{ setting(row) }}
+{% endfor %}
+          </div>
+        </details>
+{% endfor %}
+      </form>
+{% if item.manifest_error %}
+      <p class="small muted">The add-on's own settings appear here once its manifest can be read.</p>
+{% endif %}
+{% if item.unsent %}
+      <p class="small muted">Not sent to the add-on: {{ item.unsent|join(", ") }} (a list or a table in the configuration file; an add-on takes text, a number, or on/off).</p>
+{% endif %}
+      <div class="form-actions">
+        <button class="btn-primary" form="addon-{{ addon.id }}-settings">Save settings</button>
+{% if item.status %}
+        <p class="form-status{% if item.status != 'Not saved' %} is-saved{% endif %}" role="status">{{ item.status }}</p>
+{% endif %}
+      </div>
+      <details class="confirm source-remove">
+        <summary class="btn btn-danger btn-small"><span class="if-closed">Remove add-on…</span><span class="if-open">Keep add-on</span></summary>
+        <div class="confirm-body">
+          <p>Remove {{ addon.name }}? Its address and settings are deleted. Songs it served are tried on the other add-ons.{% if item.roles %} It is {{ item.roles|join(" and ") }}: choose another on <a href="{{ prefix }}/playback">Playback</a>.{% endif %}</p>
+          <form method="post" action="{{ prefix }}/addons/{{ addon.id }}/remove">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="btn-danger-fill">Remove {{ addon.name }}</button>
+          </form>
+        </div>
+      </details>
+    </div>
+  </details>
+</li>
+{% endfor %}
+  </ol>
+{% else %}
+  <div class="empty">
+    <p class="empty-title">No add-ons yet</p>
+    <p>Add-ons supply the audio for catalog songs you don't own. Add one by its manifest URL below.</p>
+  </div>
+{% endif %}
+</section>
+
+{% if not env_list %}
+<section class="group" aria-labelledby="add-title">
+  <div class="group-head">
+    <h2 id="add-title">Add add-on</h2>
+    <p class="group-help">Paste the add-on's manifest URL. Its settings appear here once it is added, and it joins the end of the order.</p>
+  </div>
+  <form class="rows row" method="post" action="{{ prefix }}/addons" novalidate>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="field">
+      <label for="manifest">Manifest URL</label>
+      <div class="inline-form">
+        <input id="manifest" name="manifest" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://addon.example/manifest.json" required{% if add_error %} aria-invalid="true" aria-describedby="manifest-error"{% endif %}>
+        <button class="btn-primary">Add add-on</button>
+      </div>
+{% if add_error %}
+      <p class="field-error" id="manifest-error">{{ add_error }}{% if add_code %} <code>{{ add_code }}</code>{% endif %}</p>
+{% endif %}
+    </div>
+    <div class="field">
+      <label for="reach">Network</label>
+      <select id="reach" name="reach" aria-describedby="reach-help">
+{% for value, label in reaches %}
+        <option value="{{ value }}"{% if value == add_reach %} selected{% endif %}>{{ label }}</option>
+{% endfor %}
+      </select>
+      <p class="field-help" id="reach-help">{{ reach_help }}</p>
+    </div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% set title = "Cleanup" %}
+{% from "_macros.html" import setting, error_notice %}
+{% macro form_status(part) %}
+{% if flash and flash.part == part and flash.status %}
+    <p class="form-status is-saved" role="status">{{ flash.status }}</p>
+{% elif form_for == part and notices %}
+    <p class="form-status">Not saved</p>
+{% endif %}
+{% endmacro %}
+{% block main %}
+<div class="page-head">
+  <h1>Cleanup</h1>
+  <p class="page-summary">What Shijhon added to the library, and the cleanup: it takes whole releases with no recorded use out again. A release taken out is added back when one of its songs is used.</p>
+</div>
+{% if notices %}
+{{ error_notice(notices) }}
+{% endif %}
+{% if flash and flash.words %}
+<div class="notice notice-{{ flash.tone }}" role="{{ 'alert' if flash.tone == 'error' else 'status' }}"><p>{{ flash.words }}</p></div>
+{% endif %}
+{% if problem %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">Saved settings not in use</p>
+  <p>The values saved here don't fit the configuration's, so the configuration's apply: {{ problem }} Save the cleanup settings to replace them.</p>
+</div>
+{% endif %}
+{% if not can_list %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">Nothing is checked</p>
+  <p>To see whether anyone uses a release, Shijhon reads the usage export, a small file made beside it from Navidrome's database: set <code>[navidrome] usage_export_path</code> (the deployment guide's <code>usage-export</code> service), or <code>database_path</code> for Navidrome's database itself. Until then nothing is listed or taken out, whatever the mode.</p>
+</div>
+{% endif %}
+{% if confirm %}
+<div class="notice notice-warn" role="alert" id="confirm">
+  <p class="notice-title">{{ "Switch the cleanup on?" if switching else "Let the cleanup take out more?" }}</p>
+{% if confirm.listing is not none %}
+{% if confirm.unused %}
+  <p>Its next check takes out the releases nobody has used by then. Right now that would be {{ confirm.unused|length|count }} release{{ "s" if confirm.unused|length != 1 }} ({{ confirm.songs|count }} song{{ "s" if confirm.songs != 1 }}), with the settings sent:</p>
+  <ul>
+{% for name in confirm.names() %}
+    <li>{{ name }}</li>
+{% endfor %}
+{% if confirm.unused|length > confirm.names()|length %}
+    <li>and {{ (confirm.unused|length - confirm.names()|length)|count }} more</li>
+{% endif %}
+  </ul>
+{% else %}
+  <p>Right now nothing would be taken out, with the settings sent: its next check takes out the releases nobody has used by then.</p>
+{% endif %}
+{% else %}
+  <p>{{ confirm.problem }} Nothing was saved.</p>
+{% endif %}
+{% if nonce %}
+  <form class="actions" method="post" action="{{ prefix }}/cleanup/settings">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+{% for name, value in confirm_form %}
+    <input type="hidden" name="{{ name }}" value="{{ value }}">
+{% endfor %}
+    <input type="hidden" name="confirm" value="{{ nonce }}">
+    <button class="btn-primary">{{ "Switch the cleanup on" if switching else "Save these settings" }}</button>
+    <a class="btn" href="{{ prefix }}/cleanup">Keep it as it is</a>
+  </form>
+{% endif %}
+</div>
+{% endif %}
+
+<section class="group" aria-labelledby="library-title">
+  <div class="group-head">
+    <h2 id="library-title">In the library</h2>
+    <p class="group-help">Placeholders stand for songs you don't own: silent files the add-ons play for.</p>
+  </div>
+  <div class="rows">
+    <dl class="readout">
+      <div><dt>Catalog albums</dt><dd>{{ overview.catalog.releases|count }} album{{ "s" if overview.catalog.releases != 1 }}, {{ overview.catalog.songs|count }} song{{ "s" if overview.catalog.songs != 1 }}; added when one of their songs was used</dd></div>
+      <div><dt>Songs added to your albums</dt><dd>{{ overview.fills.songs|count }} song{{ "s" if overview.fills.songs != 1 }} completing {{ overview.fills.releases|count }} partly owned album{{ "s" if overview.fills.releases != 1 }}</dd></div>
+      <div><dt>Downloaded audio</dt><dd>{{ overview.delivered|count }} song{{ "s" if overview.delivered != 1 }} in place of {{ "its" if overview.delivered == 1 else "their" }} placeholder{% if kept_gb is not none %}, {{ kept_gb|number }} GB{% if limits.delivered_gb %} of at most {{ limits.delivered_gb|number }} GB{% endif %}{% endif %}{% if limits.delivered_days %}; each kept {{ limits.delivered_days|number }} days after its last use{% endif %}</dd></div>
+      <div><dt>Taken out</dt><dd>{{ overview.removed_catalog|count }} catalog album{{ "s" if overview.removed_catalog != 1 }} and the added songs of {{ overview.removed_fills|count }} of your albums, {{ overview.removed_songs|count }} song{{ "s" if overview.removed_songs != 1 }} in all: shown as they were, and added back when used</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="group" aria-labelledby="check-title" id="check">
+  <div class="group-head">
+    <h2 id="check-title">Last check</h2>
+{% if total %}
+    <p class="group-meta">{{ total|count }} release{{ "s" if total != 1 }} due</p>
+{% endif %}
+    <p class="group-help">{% if mode == "on" %}On: checked once a day; unused releases are taken out.{% elif mode == "dry_run" %}Dry run: checked once a day; it only lists what it would take out.{% else %}Off: nothing is listed or taken out; who uses what is still noted once a day. A dry run from here lists what a check would take out.{% endif %}{% if mode != "off" and can_list and cleanup and cleanup.next_at %} The next check at about {{ cleanup.next_at|when }}.{% endif %}</p>
+  </div>
+  <div class="rows">
+    <div class="row status-row">
+      <p>{% if cleanup and cleanup.checking_since %}A check is under way since {{ cleanup.checking_since|hm }}{% if cleanup.waiting_for %}: it waits for a usage export made after {{ cleanup.waiting_for|hm }}{% endif %}. {% endif %}{% if listing %}{{ "A dry run from here" if swept.manual else "The daily check" }} at {{ listing.at|when }}, releases unused for {{ listing.unused_days|number }} days{% if listing.exported %}, by the usage export of {{ listing.snapshot_at|hm }}{% endif %}{% if swept.refused and not listing.refused %}: {{ "nothing more" if swept.outcomes else "nothing" }} was taken out ({{ swept.refused }}){% endif %}.{% elif not (cleanup and cleanup.checking_since) %}No check yet since Shijhon started.{% endif %}</p>
+      <form method="post" action="{{ prefix }}/cleanup/check">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn-small"{% if next_dry_run %} aria-describedby="dry-run-again"{% endif %}{% if not can_list or (cleanup and cleanup.checking_since) or next_dry_run %} disabled{% endif %}>Run a dry run now</button>
+{% if next_dry_run %}
+        <span class="small muted" id="dry-run-again">Again from {{ next_dry_run|hm }}</span>
+{% endif %}
+      </form>
+    </div>
+{% if listing and listing.refused %}
+    <div class="row">
+      <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Nothing is taken out: {{ listing.refused }}. Check what <code>{{ cleanup.usage.setting if cleanup and cleanup.usage else "[navidrome] usage_export_path" }}</code> points at{% if listing.exported %}, and which database the export is made from{% endif %}.</span></p>
+    </div>
+{% endif %}
+{% if failed and (not listing or failed[0] > listing.at) %}
+    <div class="row">
+      <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>The last check failed at {{ failed[0]|when }}: <code>{{ failed[1] }}</code>. The log says more.</span></p>
+    </div>
+{% endif %}
+{% if daily and daily.listed %}
+    <div class="row">
+      <p class="small muted">The daily check before, at {{ daily.listed.at|when }}: {% if daily.mode == "on" %}{{ daily_counts.out|count }} taken out{% else %}{{ daily_counts.out|count }} would have been taken out{% endif %}, {{ daily_counts.kept|count }} kept in use{% if daily_counts.failed %}, {{ daily_counts.failed|count }} failed{% endif %}{% if daily_counts.left %}, {{ daily_counts.left|count }} not taken out{% endif %}.</p>
+    </div>
+{% endif %}
+{% if listing %}
+    <div class="row">
+      <dl class="counts">
+        <div><dt>{{ "Would be taken out" if swept.mode != "on" else "Taken out" }}</dt><dd>{{ counts.out|count }}</dd></div>
+        <div><dt>Kept, in use</dt><dd>{{ counts.kept|count }}</dd></div>
+{% if counts.failed %}
+        <div><dt>Failed</dt><dd>{{ counts.failed|count }}</dd></div>
+{% endif %}
+{% if counts.left %}
+        <div><dt>Not taken out</dt><dd>{{ counts.left|count }}</dd></div>
+{% endif %}
+        <div><dt>Not due yet</dt><dd>{{ listing.waiting|count }}</dd></div>
+      </dl>
+{% if listing.next_due %}
+      <p class="small muted">The next release becomes due on {{ listing.next_due|day }}.</p>
+{% endif %}
+    </div>
+{% endif %}
+  </div>
+{% if listed %}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead>
+        <tr><th scope="col">Release</th><th scope="col">Added</th><th scope="col" class="num">Songs</th><th scope="col">State</th></tr>
+      </thead>
+      <tbody>
+{% for row in listed %}
+        <tr>
+          <td><span class="cell-title">{{ row.title }}</span><span class="cell-sub">{{ row.artist }}{{ " - songs added to your album" if row.fill else " - catalog album" }}</span></td>
+          <td data-label="Added">{{ row.added|day }}</td>
+          <td class="num" data-label="Songs">{{ row.songs|count }}</td>
+          <td data-label="State"{% if row.state == "failed" %} class="status-error"{% endif %}>{{ row.words }}</td>
+        </tr>
+{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% if pages > 1 %}
+  <nav class="pager" aria-label="Listed releases">
+    <p class="pager-status">Releases {{ first|count }}–{{ last|count }} of {{ total|count }}</p>
+    <div class="actions">
+{% if page > 1 %}
+      <a class="btn btn-small" href="?page={{ page - 1 }}#check">Previous</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Previous</a>
+{% endif %}
+{% if page < pages %}
+      <a class="btn btn-small" href="?page={{ page + 1 }}#check">Next</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Next</a>
+{% endif %}
+    </div>
+  </nav>
+{% endif %}
+{% elif listing %}
+  <div class="empty">
+    <p class="empty-title">Nothing is due</p>
+    <p>No release has gone unused for {{ listing.unused_days|number }} days.</p>
+  </div>
+{% else %}
+  <div class="empty">
+    <p class="empty-title">Nothing listed yet</p>
+    <p>{% if mode == "off" %}The cleanup is off. {% else %}The first check runs about ten minutes after Shijhon starts. {% endif %}A dry run from here lists what a check would take out now, and why the rest is kept.</p>
+  </div>
+{% endif %}
+</section>
+
+<form method="post" action="{{ prefix }}/cleanup/settings" novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <section class="group" aria-labelledby="settings-title">
+    <div class="group-head">
+      <h2 id="settings-title">Cleanup settings</h2>
+      <p class="group-help">Changes apply from the next check. Switching the cleanup on first shows what it would take out.</p>
+    </div>
+    <div class="rows">
+{% for row in settings %}
+{{ setting(row) }}
+{% endfor %}
+    </div>
+  </section>
+  <div class="form-actions">
+    <button class="btn-primary">Save cleanup settings</button>
+{{ form_status("cleanup") }}
+  </div>
+</form>
+
+<form method="post" action="{{ prefix }}/cleanup/downloads" novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+{% if delivery_problem %}
+  <div class="notice notice-warn" role="status">
+    <p class="notice-title">Saved Playback settings not in use</p>
+    <p>The values saved for Playback don't fit the configuration's, so the configuration's apply, these limits included: {{ delivery_problem }} Save the Playback page to replace them.</p>
+  </div>
+{% endif %}
+  <section class="group" aria-labelledby="downloads-title">
+    <div class="group-head">
+      <h2 id="downloads-title">Downloaded audio</h2>
+      <p class="group-help">Songs fetched whole - downloads, and plays that need converting - replace their placeholder for a while; then it comes back.</p>
+    </div>
+    <div class="rows">
+{% for row in downloads %}
+{{ setting(row) }}
+{% endfor %}
+    </div>
+  </section>
+  <div class="form-actions">
+    <button class="btn-primary">Save downloaded audio limits</button>
+{{ form_status("delivery") }}
+  </div>
+</form>
+{% endblock %}

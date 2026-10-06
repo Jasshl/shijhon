@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% from "_macros.html" import setting, settings_group, more_summary, error_notice, catalog_status %}
+{% block main %}
+<div class="page-head">
+  <h1>{{ title }}</h1>
+  <p class="page-summary">{{ summary }}</p>
+</div>
+{% if notices %}
+{{ error_notice(notices) }}
+{% endif %}
+{% if words %}
+<div class="notice notice-info" role="status"><p>{{ words }}</p></div>
+{% endif %}
+{% if problem %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">Saved settings not in use</p>
+  <p>The values saved here don't fit the configuration's, so the configuration's apply: {{ problem }} Save this page to replace them.</p>
+</div>
+{% endif %}
+{% if page == "catalog" %}
+{% if extra.notice %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">{{ extra.label }}</p>
+  <p>{{ extra.notice }}</p>
+</div>
+{% endif %}
+{% if extra.problem %}
+<div class="notice notice-error" role="alert">
+{% if extra.running %}
+  <p class="notice-title">Catalog settings need attention</p>
+  <p>Shijhon would not connect the catalog with them at its next start: <a href="#{{ extra.problem.id }}">{{ extra.problem.label }}</a> {{ extra.problem.notice }}</p>
+{% else %}
+  <p class="notice-title">Catalog not connected</p>
+  <p>Search and artist pages show only music you own, and partly owned albums aren't shown complete: <a href="#{{ extra.problem.id }}">{{ extra.problem.label }}</a> {{ extra.problem.notice }}</p>
+{% endif %}
+</div>
+{% endif %}
+{% for item in extra.withheld %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">Not sent: {{ item.label|lower }}</p>
+  <p>“{{ item.label }}” comes from the configuration file or the environment, set for the {{ item.address|lower }} named there. The <a href="#{{ item.id }}">{{ item.address|lower }}</a> saved here is on another host, so it is not sent there. Set the two together in the configuration file, or remove the one saved here.</p>
+</div>
+{% endfor %}
+{% for item in extra.displaced %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">Not sent: {{ item.label|lower }}</p>
+  <p>“{{ item.label }}” was saved here for another {{ item.address|lower }} than the one in use, which is on another host, so it is not sent there. <a href="#{{ item.id }}">Enter it again</a> if this one needs it; saving this page removes the old value.</p>
+</div>
+{% endfor %}
+<section class="group" aria-labelledby="status-title">
+  <div class="group-head"><h2 id="status-title">Status</h2></div>
+  <div class="rows">
+    <div class="row status-row">
+      {{ catalog_status(extra) }}
+{% if can_restart and not extra.running and extra.kind != "none" and not extra.problem %}
+      <form method="post" action="{{ prefix }}/restart">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ prefix }}/catalog">
+        <button class="btn-small" title="Songs that are playing may stop">Restart Shijhon</button>
+      </form>
+{% else %}
+      <form method="post" action="{{ prefix }}/catalog/check">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn-small"{% if not extra.running %} disabled{% endif %}>Check now</button>
+      </form>
+{% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+{% if page == "playback" and extra.missing %}
+<div class="notice notice-warn" role="status">
+{% for line, variable in extra.missing %}
+{% if variable %}
+  <p>{{ line }} <code>{{ variable }}</code> sets it: change it there, or add the add-on on <a href="{{ prefix }}/addons">Add-ons</a>.</p>
+{% else %}
+  <p>{{ line }} Choose another below, or add it on <a href="{{ prefix }}/addons">Add-ons</a>.</p>
+{% endif %}
+{% endfor %}
+</div>
+{% endif %}
+{% if page == "catalog" and extra.wait %}
+{# The wait for the catalog is a form of its own; its row is under "More settings". #}
+<form id="catalog-wait" method="post" action="{{ prefix }}/catalog/wait" novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+</form>
+{% endif %}
+<form method="post" action="{{ prefix }}/{{ page }}" novalidate>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+{% if shown_kind %}
+  <input type="hidden" name="{{ shown_kind[0] }}" value="{{ shown_kind[1] }}">
+{% endif %}
+{% if first_step %}
+  <div class="notice notice-info" role="status">
+    <p>Nothing is saved yet. Enter this catalog's settings, then save.</p>
+  </div>
+{% endif %}
+{% for group, rows in groups %}
+{{ settings_group(group, rows) }}
+{% endfor %}
+{% set wait = page == "catalog" and extra.wait %}
+{% if fold.groups or wait %}
+  <details class="more-settings"{% if fold.open %} open{% endif %}>
+    {{ more_summary(fold) }}
+{% if wait %}
+{% if extra.wait_problem %}
+    <div class="notice notice-warn" role="status">
+      <p class="notice-title">Saved wait not in use</p>
+      <p>The value saved here does not fit, so the configuration's applies: {{ extra.wait_problem }} Save the wait to replace it.</p>
+    </div>
+{% endif %}
+{{ settings_group(extra.wait_group, extra.wait, "catalog-wait") }}
+    <div class="form-actions">
+      <button class="btn-primary" form="catalog-wait">Save the wait</button>
+{% if extra.wait_status %}
+      <p class="form-status{% if extra.wait_saved %} is-saved{% endif %}" role="status">{{ extra.wait_status }}</p>
+{% endif %}
+    </div>
+{% endif %}
+{% for group, rows in fold.groups %}
+{{ settings_group(group, rows) }}
+{% endfor %}
+  </details>
+{% endif %}
+  <div class="form-actions{% if page == 'playback' %} form-actions-bar{% endif %}">
+    <button class="btn-primary">Save changes</button>
+{% if form_status %}
+    <p class="form-status{% if saved_ok %} is-saved{% endif %}" role="status">{{ form_status }}</p>
+{% endif %}
+  </div>
+</form>
+{% endblock %}

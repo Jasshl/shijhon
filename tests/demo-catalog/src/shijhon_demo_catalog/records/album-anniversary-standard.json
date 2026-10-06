@@ -1,0 +1,345 @@
+{
+ "name": "album-anniversary-standard",
+ "path": "albums/900000203",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000203"
+  },
+  "title": "Salt 2",
+  "artist": "BrokenMeadow",
+  "kind": "album",
+  "release_date": "1984-11-15",
+  "tracks": [
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000206"
+    },
+    "title": "Burning Engines",
+    "artist": "BrokenMeadow",
+    "duration_ms": 300931,
+    "disc": 1,
+    "number": 1,
+    "isrc": "ZZSHJ0000146",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-01",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000207"
+    },
+    "title": "Wild Cities",
+    "artist": "BrokenMeadow",
+    "duration_ms": 255780,
+    "disc": 1,
+    "number": 2,
+    "isrc": "ZZSHJ0000147",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000208"
+    },
+    "title": "Frozen Rivers",
+    "artist": "BrokenMeadow",
+    "duration_ms": 218547,
+    "disc": 1,
+    "number": 3,
+    "isrc": "ZZSHJ0000148",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000209"
+    },
+    "title": "Copper 2",
+    "artist": "BrokenMeadow",
+    "duration_ms": 183979,
+    "disc": 1,
+    "number": 4,
+    "isrc": "ZZSHJ0000149",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000210"
+    },
+    "title": "Distant",
+    "artist": "BrokenMeadow",
+    "duration_ms": 257675,
+    "disc": 1,
+    "number": 5,
+    "isrc": "ZZSHJ0000150",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000211"
+    },
+    "title": "Open 3",
+    "artist": "BrokenMeadow",
+    "duration_ms": 176471,
+    "disc": 1,
+    "number": 6,
+    "isrc": "ZZSHJ0000151",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000212"
+    },
+    "title": "Velvet Letters",
+    "artist": "BrokenMeadow",
+    "duration_ms": 142368,
+    "disc": 1,
+    "number": 7,
+    "isrc": "ZZSHJ0000152",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000213"
+    },
+    "title": "Iron Parade",
+    "artist": "BrokenMeadow",
+    "duration_ms": 224481,
+    "disc": 1,
+    "number": 8,
+    "isrc": "ZZSHJ0000153",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000214"
+    },
+    "title": "Restless Pilots",
+    "artist": "BrokenMeadow",
+    "duration_ms": 156965,
+    "disc": 1,
+    "number": 9,
+    "isrc": "ZZSHJ0000154",
+    "explicit": true,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000215"
+    },
+    "title": "Golden Colors",
+    "artist": "BrokenMeadow",
+    "duration_ms": 211747,
+    "disc": 1,
+    "number": 10,
+    "isrc": "ZZSHJ0000155",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000216"
+    },
+    "title": "Golden Pilots",
+    "artist": "BrokenMeadow",
+    "duration_ms": 196260,
+    "disc": 1,
+    "number": 11,
+    "isrc": "ZZSHJ0000156",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000217"
+    },
+    "title": "Frozen Shadows",
+    "artist": "BrokenMeadow",
+    "duration_ms": 232361,
+    "disc": 1,
+    "number": 12,
+    "isrc": "ZZSHJ0000157",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   },
+   {
+    "ref": {
+     "catalog": "demo",
+     "id": "900000218"
+    },
+    "title": "Faded Horizon",
+    "artist": "BrokenMeadow",
+    "duration_ms": 401941,
+    "disc": 1,
+    "number": 13,
+    "isrc": "ZZSHJ0000158",
+    "explicit": false,
+    "clean": false,
+    "album": {
+     "catalog": "demo",
+     "id": "900000203"
+    },
+    "album_title": "Salt 2",
+    "genres": [
+     "Rock"
+    ],
+    "release_date": "1984-11-15",
+    "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png"
+   }
+  ],
+  "explicit": true,
+  "clean": false,
+  "genres": [
+   "Rock"
+  ],
+  "label": "Violet 2 Records",
+  "upc": "990000000011",
+  "track_count": 13,
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000205"
+   }
+  ],
+  "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png",
+  "incomplete": false
+ }
+}

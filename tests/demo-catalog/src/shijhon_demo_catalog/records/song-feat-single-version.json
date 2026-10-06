@@ -1,0 +1,35 @@
+{
+ "name": "song-feat-single-version",
+ "path": "songs/900000148",
+ "status": 200,
+ "body": {
+  "ref": {
+   "catalog": "demo",
+   "id": "900000148"
+  },
+  "title": "Open Lanterns (feat. Kasper Merritt 2) [Radio Edit]",
+  "artist": "Oren Garrow",
+  "duration_ms": 246772,
+  "disc": 1,
+  "number": 1,
+  "isrc": "ZZSHJ0000096",
+  "explicit": false,
+  "clean": false,
+  "album": {
+   "catalog": "demo",
+   "id": "900000145"
+  },
+  "artist_refs": [
+   {
+    "catalog": "demo",
+    "id": "900000147"
+   }
+  ],
+  "album_title": "Open Lanterns (feat. Kasper Merritt 2) [Radio Edit] - Single",
+  "genres": [
+   "Pop"
+  ],
+  "release_date": "2006-06-11",
+  "artwork_template": "https://covers.demo.invalid/900000146/{w}x{h}.png"
+ }
+}

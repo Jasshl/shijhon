@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-accent="{{ accent }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sign in – Shijhon</title>
+<link rel="stylesheet" href="{{ prefix }}/static/shijhon.css">
+</head>
+<body>
+<main class="signin" id="main">
+  <p class="wordmark">Shijhon</p>
+  <div class="signin-panel">
+    <h1>Sign in</h1>
+    <p>Use a Navidrome account with admin rights.</p>
+{% if error %}
+    <div class="notice notice-error" role="alert">
+{% if error_title %}
+      <p class="notice-title">{{ error_title }}</p>
+{% endif %}
+      <p>{{ error }}</p>
+    </div>
+{% endif %}
+    <form method="post" action="{{ prefix }}/sign-in">
+      <input type="hidden" name="signin" value="{{ signin_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required value="{{ username }}">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn-primary">Sign in</button>
+    </form>
+  </div>
+</main>
+{% from "_macros.html" import legal %}
+<footer class="signin-footer">
+  {{ legal(version, copyright, license, source_url) }}
+</footer>
+</body>
+</html>

@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% set title = "Diagnostics" %}
+{% from "_macros.html" import catalog_status %}
+{% block main %}
+<div class="page-head">
+  <h1>Diagnostics</h1>
+  <p class="page-summary">Checked when the page loaded, at {{ checked_at|hm }}.</p>
+</div>
+{% if not nd.answering %}
+<div class="notice notice-error" role="alert">
+  <p class="notice-title">Navidrome is not answering</p>
+  <p>Music apps can't sign in or play anything until it is back. Check that Navidrome is running.</p>
+</div>
+{% endif %}
+{% if not database_private %}
+<div class="notice notice-warn" role="status">
+  <p class="notice-title">The database is readable by others</p>
+  <p>It holds add-on addresses and secrets. Make it readable by Shijhon's own user only: <code>chmod 600</code>.</p>
+</div>
+{% endif %}
+<section class="group" aria-labelledby="navidrome-title">
+  <div class="group-head"><h2 id="navidrome-title">Navidrome</h2></div>
+  <div class="rows">
+    <dl class="readout">
+      <div><dt>Status</dt><dd>
+{% if nd.answering %}
+<span class="status"><span class="led led-ok" aria-hidden="true"></span><span>Answering in {{ nd.took_ms|round|int }} ms</span></span>
+{% else %}
+<span class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Not answering: <code>{{ nd.error }}</code></span></span>
+{% endif %}
+      </dd></div>
+      <div><dt>Address</dt><dd><code>{{ nd_url }}</code></dd></div>
+      <div><dt>Version</dt><dd>{% if nd.version %}<code>{{ nd.version }}</code>{% if nd.version == pinned %}, the version Shijhon is tested with{% else %}; Shijhon is tested with <code>{{ pinned }}</code>{% endif %}{% else %}<span class="muted">Unknown while it isn't answering</span>{% endif %}</dd></div>
+{% if nd.songs is not none %}
+      <div><dt>Library</dt><dd>{% if nd.albums is not none %}{{ nd.albums|count }} albums, {% endif %}{{ nd.songs|count }} songs{% if nd.last_scan %}; last scan {{ nd.last_scan|when }}{% endif %}</dd></div>
+{% endif %}
+{% if nd.purge_missing %}
+      <div><dt>Missing files</dt><dd>{% if nd.purge_missing == "never" %}Kept, as Shijhon requires (<code>Scanner.PurgeMissing</code> is <code>never</code>){% else %}<span class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Removed: <code>Scanner.PurgeMissing</code> is <code>{{ nd.purge_missing }}</code>; Shijhon requires <code>never</code></span></span>{% endif %}</dd></div>
+{% endif %}
+    </dl>
+  </div>
+</section>
+
+<section class="group" aria-labelledby="addons-title">
+  <div class="group-head">
+    <h2 id="addons-title">Add-ons</h2>
+    <p class="group-meta"><a href="{{ prefix }}/addons">Change on Add-ons</a></p>
+  </div>
+{% if chain %}
+  <ol class="chain chain-readonly">
+{% for item in chain %}
+    <li class="source{% if not item.addon.enabled %} source-off{% elif item.health.attention %} source-attention{% endif %}">
+      <span class="source-order">{{ item.order }}</span>
+      <span class="led{% if item.health.light %} led-{{ item.health.light }}{% endif %}" aria-hidden="true"></span>
+      <div class="source-name">
+        <h3>{{ item.addon.name }}</h3>
+{% if item.version %}
+        <p class="source-meta"><span>Version <code>{{ item.version }}</code></span></p>
+{% endif %}
+      </div>
+      <div class="source-health">
+        <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}</p>
+{% if item.health.detail %}
+        <p class="source-detail">{{ item.health.detail }}</p>
+{% endif %}
+      </div>
+    </li>
+{% endfor %}
+  </ol>
+{% else %}
+  <div class="empty">
+    <p class="empty-title">No add-ons yet</p>
+    <p>Add-ons supply the audio for catalog songs you don't own. <a href="{{ prefix }}/addons">Add one on Add-ons</a>.</p>
+  </div>
+{% endif %}
+</section>
+
+<section class="group" aria-labelledby="catalog-title">
+  <div class="group-head"><h2 id="catalog-title">Catalog</h2></div>
+  <div class="rows">
+    <dl class="readout">
+      <div><dt>Status</dt><dd>{{ catalog_status(catalog, "span") }}</dd></div>
+      <div><dt>Catalog</dt><dd>{% if catalog_label %}{{ catalog_label }}{% if catalog_addon %}: {{ catalog_addon }}{% endif %}{% if catalog_region %}, region <code>{{ catalog_region }}</code>{% endif %}{% else %}None{% endif %}</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="group" aria-labelledby="versions-title">
+  <div class="group-head"><h2 id="versions-title">Shijhon</h2></div>
+  <div class="rows">
+    <dl class="readout">
+      <div><dt>Version</dt><dd><code>{{ version }}</code></dd></div>
+      <div><dt>Database schema</dt><dd>Version <code>{{ schema }}</code>{% if schema == bundled %}, up to date{% else %}; this Shijhon expects <code>{{ bundled }}</code>{% endif %}</dd></div>
+      <div><dt>Running since</dt><dd>{{ started|day }}, {{ started|hm }}</dd></div>
+{% if storage %}
+      <div><dt>Placeholders</dt><dd>{{ storage.placeholders|count }} song{{ "s" if storage.placeholders != 1 }}, {{ storage.placeholder_bytes|size }}</dd></div>
+      <div><dt>Downloaded audio</dt><dd>{{ storage.delivered|count }} song{{ "s" if storage.delivered != 1 }}, {{ storage.delivered_bytes|size }}</dd></div>
+{% endif %}
+    </dl>
+  </div>
+</section>
+
+<section class="group" aria-labelledby="restart-title" id="restart">
+  <div class="group-head">
+    <h2 id="restart-title">Restart</h2>
+{% if can_restart %}
+    <p class="group-help">Settings marked “Applies after restart” take effect when Shijhon restarts. Songs that are playing may stop; a track being added to the library is given time to finish first.</p>
+  </div>
+  <div class="rows">
+    <div class="row status-row">
+      <p class="status"><span>Shijhon stops and is started again by Docker or your service manager, with the saved settings. A container without a restart policy stays stopped.</span></p>
+      <form method="post" action="{{ prefix }}/restart">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ prefix }}/diagnostics">
+        <button class="btn-small">Restart Shijhon</button>
+      </form>
+    </div>
+  </div>
+{% else %}
+    <p class="group-help">Settings marked “Applies after restart” take effect when Shijhon restarts. Restart it where it is run: with Docker Compose, <code>docker compose restart shijhon</code>; with a service manager, its restart command. Songs that are playing may stop.</p>
+  </div>
+{% endif %}
+  <div class="rows">
+    <dl class="readout">
+{% if pending %}
+{% for item in pending %}
+      <div><dt>Waiting for a restart</dt><dd>{{ item.label }}{% if item.at %}, saved {{ item.at|hm }}{% endif %}</dd></div>
+{% endfor %}
+{% else %}
+      <div><dt>Waiting for a restart</dt><dd>Nothing: no saved setting is waiting for a restart.</dd></div>
+{% endif %}
+    </dl>
+  </div>
+</section>
+
+<section class="group" aria-labelledby="errors-title">
+  <div class="group-head">
+    <h2 id="errors-title">Recent errors</h2>
+    <p class="group-meta">Last 24 hours</p>
+  </div>
+{% if errors %}
+  <div class="table-wrap">
+    <table class="table table-stack">
+      <thead><tr><th scope="col">Last</th><th scope="col">Where</th><th scope="col">Message</th><th scope="col" class="num">Times</th></tr></thead>
+      <tbody>
+{% for error in errors %}
+        <tr><td data-label="Last">{{ error.last|hm }}</td><td data-label="Where">{{ error.where }}</td><td data-label="Message" class="cell-message">{{ error.message }}</td><td data-label="Times" class="num">{{ error.times|count }}</td></tr>
+{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty">
+    <p class="empty-title">No errors</p>
+    <p>Warnings and errors Shijhon logs appear here for a day.</p>
+  </div>
+{% endif %}
+</section>
+{% endblock %}

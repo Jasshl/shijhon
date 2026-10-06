@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-accent="{{ accent }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>{{ title }} – Shijhon</title>
+<link rel="stylesheet" href="{{ prefix }}/static/shijhon.css">
+</head>
+<body>
+<main class="signin" id="main">
+  <p class="wordmark">Shijhon</p>
+  <div class="signin-panel">
+    <h1>Admin rights can't be checked</h1>
+    <div class="notice notice-error" role="alert">
+      <p class="notice-title">Navidrome gives no answer</p>
+      <p>The dashboard asks Navidrome, as Shijhon's service account, whether you are still an admin, and got no answer: Navidrome is not answering, or the service account can't list its users. Reload this page once that works again; you stay signed in.</p>
+    </div>
+  </div>
+</main>
+{% from "_macros.html" import legal %}
+<footer class="signin-footer">
+  {{ legal(version, copyright, license, source_url) }}
+</footer>
+</body>
+</html>

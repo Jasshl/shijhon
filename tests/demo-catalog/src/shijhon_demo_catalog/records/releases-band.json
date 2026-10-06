@@ -1,0 +1,91 @@
+{
+ "name": "releases-band",
+ "path": "artists/900000205/releases",
+ "status": 200,
+ "body": [
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000447"
+   },
+   "title": "Quiet Towers (20th Anniversary Edition)",
+   "artist": "BrokenMeadow",
+   "kind": "album",
+   "release_date": "1986-11-13",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Alternative",
+    "Rock",
+    "Adult Alternative",
+    "Grunge"
+   ],
+   "label": "Violet 2 Records",
+   "upc": "990000000190",
+   "track_count": 12,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000205"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001477/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000203"
+   },
+   "title": "Salt 2",
+   "artist": "BrokenMeadow",
+   "kind": "album",
+   "release_date": "1984-11-15",
+   "explicit": true,
+   "clean": false,
+   "genres": [
+    "Rock"
+   ],
+   "label": "Violet 2 Records",
+   "upc": "990000000011",
+   "track_count": 13,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000205"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900000204/{w}x{h}.png",
+   "incomplete": false
+  },
+  {
+   "ref": {
+    "catalog": "demo",
+    "id": "900000448"
+   },
+   "title": "Lunar 6 (Deluxe Edition)",
+   "artist": "BrokenMeadow",
+   "kind": "album",
+   "release_date": "1982-08-07",
+   "explicit": false,
+   "clean": false,
+   "genres": [
+    "Alternative",
+    "Rock",
+    "Grunge",
+    "Adult Alternative"
+   ],
+   "label": "Glass Summers Records",
+   "upc": "990000000191",
+   "track_count": 25,
+   "artist_refs": [
+    {
+     "catalog": "demo",
+     "id": "900000205"
+    }
+   ],
+   "artwork_template": "https://covers.demo.invalid/900001478/{w}x{h}.png",
+   "incomplete": false
+  }
+ ]
+}
