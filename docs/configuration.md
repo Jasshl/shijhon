@@ -81,6 +81,7 @@ filling and the cleanup do.
 | `[fill] enabled` (on) | Matching and filling of albums that are partly in your library |
 | `[fill] library_pass` (`dry_run`) | The pass over the whole library: `dry_run`, `on` or `off` |
 | `[fill] auto_min_songs` (3), `auto_min_share` (0.25) | The fill policy: an album is filled automatically when you have at least this many of its songs, or this share of its tracks. 1 song: every album |
+| `[fill] auto_pick` (on) | When several releases fit an album, or the one that fits numbers its tracks differently from your files, the most likely is used. Off: such albums go to the review list |
 | `[cleanup] mode` (`off`) | `off`; `dry_run`: the daily check logs what it would take out; `on` |
 | `[cleanup] unused_days` (30) | A release nobody has used is taken out this many days after it was added |
 | `[cleanup] catalog_albums` (on), `fills` (on) | Which releases: catalog albums added to the library, and the songs added to partly owned albums |
@@ -114,9 +115,9 @@ JavaScript. Each page shows the settings most people change first, the rest unde
 - **Add-ons**: add, order, enable, disable or remove add-ons, and their settings.
 - **Playback**: the `[delivery]` settings.
 - **Catalog**: which catalog is used, and its settings.
-- **Library**: the fill policy, the library pass and the **review list**: albums whose
-  match needs a decision. Fill one from a release you choose, keep it as it is, or match
-  it again.
+- **Library**: the fill policy, the library pass, the **review list** (albums whose
+  match needs a decision) and the albums **picked automatically**. Fill one from a release
+  you choose, keep it as it is, or match it again.
 - **Cleanup**: what Shijhon added, the cleanup's settings, what its last check took out
   or would take out, and the limits for downloaded audio. A change that lets it take out
   more first shows what the next check would take out.

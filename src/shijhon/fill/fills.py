@@ -36,6 +36,15 @@ The review list's actions: fill an album from a release the owner chose (refused
 owned track is not on it, a new track would take an owned track's position, or the owned
 files say the album is complete), keep it as it is, or match it again.
 
+**Automatic picks** (``auto_pick``, on by default): an album the matcher would send to
+review for several plausible editions, or for a release numbered differently from the
+owned files, is matched with the most likely release instead (``matching/matcher.py``),
+recorded as picked (``picked``: the reason it settled), and shown and filled like any
+match. Its tracks keep the release's numbering, also where an owned song has the same disc
+and number. A review row for one of those reasons is matched again while picks are on - by
+the library pass, a view, or a search or artist page that shows the album. The review list
+lists the picks too, with the same actions to change them while they are not filled.
+
 **Fill policy**: automatic fills - the library pass, albums a search, an
 artist page or a view shows - only for albums of which the owner has at least ``min_songs``
 songs (3) or a share (a quarter) of the release; the others are matched and kept as
@@ -74,6 +83,8 @@ from shijhon.catalog.model import (
 )
 from shijhon.locks import KeyedLocks
 from shijhon.matching.matcher import (
+    INCOMPLETE,
+    PICKABLE,
     Match,
     Matcher,
     Outcome,
@@ -83,6 +94,7 @@ from shijhon.matching.matcher import (
     complete_by_tags,
     confirm,
     displaced,
+    doubled,
 )
 from shijhon.matching.normalize import fold, same_artist, title_key
 from shijhon.navidrome.client import NavidromeError, NavidromeService
@@ -153,12 +165,21 @@ class Decision:
     backing: dict[CatalogRef, str] = field(default_factory=dict)
     parts: list[OwnedAlbum] = field(default_factory=list)
     planned: bool = False  # recorded as a dry run's plan (automatic fills are off)
+    picked: str = ""  # the review reason an automatic pick settled ("": not picked)
+    # A track the fill adds may take a disc and number an owned song of the album has: a
+    # picked release keeps its numbering, and a fill taken out is added back as it was.
+    shares: bool = False
 
     @classmethod
     def of(cls, match: Match) -> Decision:
         ref = str(match.release.ref) if match.release is not None else None
         outcome = _OUTCOMES[match.outcome]
-        return cls(outcome, match.reason, match.release, dict(match.links), match.candidates, ref)
+        decision = cls(
+            outcome, match.reason, match.release, dict(match.links), match.candidates, ref
+        )
+        decision.picked = match.picked
+        decision.shares = bool(match.picked)
+        return decision
 
     @property
     def added(self) -> int:
@@ -207,6 +228,7 @@ class Fills:
         rest_seconds: float = 60.0,
         policy: FillPolicy | None = None,
         auto_fill: bool = True,
+        auto_pick: bool = True,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.store = store
@@ -226,6 +248,9 @@ class Fills:
         # Automatic fills at all (views, searches, artist pages, syncs, the pass): off while
         # the library pass is a dry run - only first use fills then.
         self.auto_fill = auto_fill
+        # Several plausible editions, or a release numbered differently from the owned
+        # files: the most likely release is picked, instead of the review list.
+        self.auto_pick = auto_pick
         self.resting_until = 0.0  # after the catalog failed
         self._rest_noted = 0.0  # the rest a view's log line named
         self._locks = KeyedLocks()
@@ -243,13 +268,13 @@ class Fills:
     async def viewable(self, album_id: str) -> bool:
         """Whether a view of this album may have something to add (no work, one or two
         small queries): not a catalog album, not filled, and a plan that fills it (checked
-        against the owned songs then), no match yet, or a failure whose wait is over. A dry
-        run's other plans (complete, review, no match) add nothing: a view leaves them to
-        the library pass."""
+        against the owned songs then), no match yet, a failure whose wait is over, or a
+        review an automatic pick may settle now. A dry run's other plans (complete, review,
+        no match) add nothing: a view leaves them to the library pass."""
         if not album_id or "." in album_id or await self._filled(album_id):
             return False
         row = await self._row(album_id)
-        return row is None or _has_plan(row) or self._retry_due(row)
+        return row is None or _has_plan(row) or self._retry_due(row) or self._repick(row)
 
     async def view(self, album_id: str, client: Client) -> tuple[Decision | None, str | None]:
         """(What to show the owned album complete with, why not): the release whose missing
@@ -382,6 +407,32 @@ class Fills:
                 self._shown_plans.popitem(last=False)
         return found
 
+    async def unsettled(self, album_ids: Iterable[str]) -> set[str]:
+        """The owned albums among ``album_ids`` that no release completes: in review (unless
+        for a release that fills or completes another album, or is in the library - a part
+        of that album's release, say), without a match, or kept as they are by the owner -
+        not filled. Search
+        results and artist pages show the catalog's editions of these beside them. Albums
+        not matched yet are not among them (their match is under way)."""
+        wanted = sorted({a for a in album_ids if a and "." not in a})
+        found: set[str] = set()
+        for start in range(0, len(wanted), 500):
+            chunk = wanted[start : start + 500]
+            rows = await self.store.fetchall(
+                "SELECT album_id FROM album_matches m"  # noqa: S608
+                f" WHERE scope = ? AND album_id IN ({','.join('?' * len(chunk))})"
+                " AND (outcome IN ('none', 'kept') OR (outcome = 'review' AND ("
+                " release_ref IS NULL OR NOT ("
+                " EXISTS (SELECT 1 FROM releases WHERE ref = m.release_ref)"
+                " OR EXISTS (SELECT 1 FROM album_matches o WHERE o.scope = m.scope"
+                " AND o.release_ref = m.release_ref AND o.album_id != m.album_id"
+                " AND o.outcome IN ('filled', 'deferred', 'complete'))))))"
+                " AND NOT EXISTS (SELECT 1 FROM releases WHERE owned_album_id = m.album_id)",
+                [self.scope, *chunk],
+            )
+            found.update(str(r["album_id"]) for r in rows)
+        return found
+
     async def backed(self, release_ref: str, track: CatalogRef) -> str | None:
         """The owned song (of another album of the release) that plays for a track of
         a release shown with an owned album before its fill."""
@@ -508,7 +559,8 @@ class Fills:
         songs: int = 0,
     ) -> bool:
         """Worth matching: not a catalog release, not filled, not matched (a failure is
-        tried again after a while); not while the catalog rests after failing (unless
+        tried again after a while, a review an automatic pick settles once picks are on);
+        not while the catalog rests after failing (unless
         ``mind_rest`` is off: the caller waits for the rest itself). A dry run's plan is
         acted on (``dry_run``: it is already planned). A deferred album is filled on first
         use (not ``auto``), and automatically (``auto``) only once the fill policy allows
@@ -530,6 +582,8 @@ class Fills:
             return not dry_run and (not auto or allowed)
         if row["outcome"] == "failed":
             return self._retry_due(row)
+        if self._repick(row):
+            return True  # matched again under the automatic pick, also by a dry run
         return bool(row["planned"]) and not dry_run and (not auto or self.auto_fill)
 
     async def _filled(self, album_id: str) -> bool:
@@ -545,6 +599,10 @@ class Fills:
             " release_tracks, cleaned_at FROM album_matches WHERE album_id = ? AND scope = ?",
             [album_id, self.scope],
         )
+
+    def _repick(self, row: Any) -> bool:
+        """A review an automatic pick settles, while picks are on: matched again."""
+        return self.auto_pick and row["outcome"] == "review" and row["reason"] in PICKABLE
 
     def _retry_due(self, row: Any) -> bool:
         """A failed match whose wait (doubling with each failure) is over."""
@@ -625,10 +683,11 @@ class Fills:
                     # Its songs are on a filled album's release: matched again (the
                     # review list's "Match again"), another edition of that release would
                     # put the same songs in two albums.
-                    as_part = Decision("review", part[0], None, {}, [], None)
+                    as_part = Decision("review", part[0], None, {}, [part[2]], part[2])
                     await self._record(album_id, as_part, owned, planned=dry_run)
                     return as_part
                 decision = None if dry_run else await self._planned(album_id, owned)
+                fresh = decision is None  # matched now (not a saved plan)
                 if decision is None:
                     if self.resting:
                         return None
@@ -650,7 +709,7 @@ class Fills:
                 ):
                     # A track of it could not be read: filling would leave a gap for good.
                     decision.outcome = "review"
-                    decision.reason = "the catalog's track list could not be read in full"
+                    decision.reason = INCOMPLETE
                 if decision.outcome == "filled" and await self._in_library(decision.release_ref):
                     # Committed as a catalog album (or filling another owned album):
                     # filling this one too would show the release twice.
@@ -669,6 +728,18 @@ class Fills:
                             else "shown complete, filled on first use"
                         )  # fmt: skip
                 planned = dry_run or decision.planned
+                if fresh and decision.picked and decision.outcome in ("filled", "deferred"):
+                    others = len(set(decision.candidates) - {decision.release_ref})
+                    log.info(
+                        "album matched by an automatic pick: %s (%d owned): %s, %d other"
+                        " release(s) plausible (%s)%s",
+                        _named(target),
+                        len(target.songs),
+                        decision.release_ref,
+                        others,
+                        decision.picked,
+                        " (dry run)" if planned else "",
+                    )
                 if decision.outcome == "filled" and not planned:
                     await self._materialize(target.id, target, decision, trigger)
                 elif decision.outcome == "review" and not planned:
@@ -710,7 +781,10 @@ class Fills:
                          _named(owned), len(owned.songs), IN_LIBRARY)  # fmt: skip
                 return
             result, planned, linked = await self.engine.materialize_held(
-                decision.release, owned_album_id=album_id, links=decision.links
+                decision.release,
+                owned_album_id=album_id,
+                links=decision.links,
+                share_positions=decision.shares,
             )
         await self.engine.back_placeholders(decision.release, result, planned, linked)
         self.fills += 1
@@ -760,31 +834,37 @@ class Fills:
         the album of the group with the closest title (then the most songs), the others'
         songs playing for their tracks there, and they become its parts. Otherwise the
         album is matched as it is."""
+        pick = self.auto_pick
         others = await self._group(owned)
         if not others:
-            return owned, Decision.of(await matcher.match(owned))
+            return owned, Decision.of(await matcher.match(owned, pick=pick))
         members = [owned, *others]
         anchor = max(members, key=lambda o: (len(o.songs), o.id))
-        decision = Decision.of(await matcher.match(anchor))
+        decision = Decision.of(await matcher.match(anchor, pick=pick))
         release = decision.release
         if decision.outcome not in ("filled", "complete") or release is None:
             if anchor.id == owned.id:
                 return owned, decision
-            return owned, Decision.of(await matcher.match(owned))  # nothing shared found
+            # Nothing shared found.
+            return owned, Decision.of(await matcher.match(owned, pick=pick))
         confirmed = [(anchor, decision.links)] + [
             (m, links)
             for m in members
             if m.id != anchor.id and (links := confirm(m, release)) is not None
         ]
         if owned.id not in {m.id for m, _ in confirmed}:
-            return owned, Decision.of(await matcher.match(owned))  # not part of the release
+            # Not part of the release.
+            return owned, Decision.of(await matcher.match(owned, pick=pick))
         if decision.outcome == "complete":  # the anchor owns every track: the rest are parts
             decision.parts = [m for m, _ in confirmed if m.id != anchor.id]
             return anchor, decision
         best, links = max(confirmed, key=lambda c: (_closeness(c[0].title, release.title),
                                                     len(c[0].songs), c[0].id))  # fmt: skip
         if (
-            clashes(best, release, links)
+            # (A pick keeps the release's numbering: a clash leaves the closest title - unless
+            # two of the tracks it would add there share a place.)
+            (clashes(best, release, links) and not decision.shares)
+            or (decision.shares and doubled(release, links))
             or complete_by_tags(best)
             # (A release without track numbers of its own: only an album numbered like its
             # order is filled - the anchor is, the matcher saw to it.)
@@ -839,11 +919,15 @@ class Fills:
         reason = f"part of {_named(owner)} (album {owner.id}): {how}"
         for part in decision.parts:
             row = await self.store.fetchone(
-                "SELECT outcome, planned FROM album_matches WHERE album_id = ? AND scope = ?",
+                "SELECT outcome, planned, reason FROM album_matches"
+                " WHERE album_id = ? AND scope = ?",
                 [part.id, self.scope],
             )
-            if row is not None and (row["outcome"] == "kept" or (planned and not row["planned"])):
-                continue  # the owner's choice, or a real outcome a dry run leaves alone
+            # The owner's choice, or a real outcome a dry run leaves alone - not a review an
+            # automatic pick settles (it would be matched again at every pass).
+            real = planned and not row["planned"] if row is not None else False
+            if row is not None and (row["outcome"] == "kept" or (real and not self._repick(row))):
+                continue
             part_decision = Decision(
                 "review", reason, None, {}, [str(decision.release_ref)], decision.release_ref
             )
@@ -852,13 +936,13 @@ class Fills:
                 log.info("album match needs review: %s (%d owned): %s",
                          _named(part), len(part.songs), reason)  # fmt: skip
 
-    async def _part_of(self, owned: OwnedAlbum) -> tuple[str, str] | None:
-        """(the part reason, the album's name) of an owned album that is a part of a filled
-        album's release: the filled album is of the same artist and title,
+    async def _part_of(self, owned: OwnedAlbum) -> tuple[str, str, str] | None:
+        """(the part reason, the album's name, the release) of an owned album that is a part
+        of a filled album's release: the filled album is of the same artist and title,
         edition words aside, and every song of this album is on its release. Else None - a
         single or an edition with songs of its own is no part, whichever was filled first."""
         rows = await self.store.fetchall(
-            "SELECT r.owned_album_id, r.title, r.artist, r.data, m.title AS owner_title,"
+            "SELECT r.ref, r.owned_album_id, r.title, r.artist, r.data, m.title AS owner_title,"
             " m.artist AS owner_artist FROM releases r LEFT JOIN album_matches m"
             " ON m.album_id = r.owned_album_id AND m.scope = ?"
             " WHERE r.owned_album_id IS NOT NULL AND r.owned_album_id != ?",
@@ -879,7 +963,8 @@ class Fills:
             if confirm(owned, release) is None:
                 continue  # a song of its own: an album of its own
             name = f"{artist or '?'} - {title}"
-            return f"part of {name} (album {row['owned_album_id']}): filled there", name
+            reason = f"part of {name} (album {row['owned_album_id']}): filled there"
+            return reason, name, str(row["ref"])
         return None
 
     async def _in_library(self, release_ref: str | None) -> bool:
@@ -892,13 +977,13 @@ class Fills:
         """A dry run's plan for the album, as long as its owned songs are as they were then
         (a retag - track totals, numbers, titles - can change what the album needs)."""
         row = await self.store.fetchone(
-            "SELECT outcome, reason, release_ref, candidates, plan FROM album_matches"
+            "SELECT outcome, reason, release_ref, candidates, plan, picked FROM album_matches"
             " WHERE album_id = ? AND scope = ? AND outcome != 'failed'"
             " AND (planned = 1 OR outcome = 'deferred')",
             [album_id, self.scope],
         )
-        if row is None or not row["plan"]:
-            return None
+        if row is None or not row["plan"] or self._repick(row):
+            return None  # (a dry run's review a pick may settle now: matched again)
         try:
             plan = json.loads(row["plan"])
             if plan["owned"] != _fingerprint(owned):
@@ -906,7 +991,8 @@ class Fills:
             release = release_from_data(plan["release"]) if plan.get("release") else None
             links = {CatalogRef.parse(k): str(v) for k, v in plan.get("links", {}).items()}
             backing = {CatalogRef.parse(k): str(v) for k, v in plan.get("backing", {}).items()}
-        except (ValueError, KeyError, TypeError) as exc:
+            shares = plan.get("shares") is True
+        except (ValueError, KeyError, TypeError, AttributeError) as exc:
             log.info("album plan unreadable: %s", type(exc).__name__)
             return None
         # A deferred album is filled now (its first use; an automatic fill or a view defers
@@ -919,6 +1005,8 @@ class Fills:
         reason = "" if deferred else row["reason"]
         decision = Decision(outcome, reason, release, links, candidates, row["release_ref"])
         decision.backing = backing
+        decision.picked = str(row["picked"] or "")
+        decision.shares = shares or bool(decision.picked)
         return decision
 
     # --- the review list's actions --------------------------------------------------------
@@ -965,8 +1053,13 @@ class Fills:
             links = confirm(owned, release)
             if links is None:
                 raise ChoiceRefused("an owned track is not on this release")
-            if clashes(owned, release, links):
+            shares = clashes(owned, release, links)
+            if shares and not self.auto_pick:
                 raise ChoiceRefused("a track it would add takes an owned track's position")
+            if shares and doubled(release, links):
+                raise ChoiceRefused(
+                    "the release has two tracks to add at one disc and track number"
+                )
             if not release.numbered and displaced(owned, release, links):
                 raise ChoiceRefused(
                     "the catalog lists this release's tracks without numbers, and the"
@@ -977,6 +1070,7 @@ class Fills:
             reason = "chosen from the review list"
             chosen = str(release.ref)
             decision = Decision("filled", reason, release, links, [chosen], chosen)
+            decision.shares = shares
             if len(links) == len(release.tracks):
                 decision.outcome = "complete"
             else:
@@ -1043,7 +1137,20 @@ class Fills:
             )
         }
         data = json.loads(release["data"])
-        plan = {"owned": _fingerprint(owned), "release": data, "links": links, "backing": backing}
+        plan: dict[str, Any] = {
+            "owned": _fingerprint(owned),
+            "release": data,
+            "links": links,
+            "backing": backing,
+        }
+        # Added back as it was: where a track shares a disc and number with an owned song
+        # (a picked release keeps its numbering), it shares them again.
+        owned_at = {(song.disc, song.number) for song in owned.songs}
+        placed = await self.store.fetchall(
+            "SELECT disc, track FROM placeholders WHERE release_ref = ?", [release_ref]
+        )
+        if any((int(r["disc"]), int(r["track"])) in owned_at for r in placed):
+            plan["shares"] = True
         now = self.clock()
         reason = (
             f"its fill was taken out as unused ({time.strftime('%Y-%m-%d', time.localtime(now))}):"
@@ -1115,13 +1222,15 @@ class Fills:
                 data["release"] = release_data(decision.release)
                 data["links"] = {str(k): v for k, v in decision.links.items()}
                 data["backing"] = {str(k): v for k, v in decision.backing.items()}
+                if decision.shares:
+                    data["shares"] = True
             plan = json.dumps(data)
         await self.store.execute(
             "INSERT INTO album_matches (album_id, scope, outcome, release_ref, reason,"
             " candidates, attempts, checked_at, planned, plan, title, artist, owned_songs,"
-            " release_tracks) VALUES"
-            " (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'failed' THEN 1 ELSE 0 END, ?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT (album_id, scope) DO UPDATE SET outcome = excluded.outcome,"
+            " release_tracks, picked) VALUES"
+            " (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'failed' THEN 1 ELSE 0 END, ?, ?, ?, ?, ?, ?, ?,"
+            " ?) ON CONFLICT (album_id, scope) DO UPDATE SET outcome = excluded.outcome,"
             # A failure keeps the release and plan the album had (it is still shown with
             # them after the wait, and their songs never become a catalog copy).
             " release_ref = CASE WHEN excluded.outcome = 'failed'"
@@ -1132,6 +1241,8 @@ class Fills:
             " planned = excluded.planned,"
             " plan = CASE WHEN excluded.outcome = 'failed' THEN album_matches.plan"
             " ELSE excluded.plan END,"
+            " picked = CASE WHEN excluded.outcome = 'failed' THEN album_matches.picked"
+            " ELSE excluded.picked END,"
             " title = COALESCE(NULLIF(excluded.title, ''), album_matches.title),"
             " artist = COALESCE(NULLIF(excluded.artist, ''), album_matches.artist),"
             " owned_songs = excluded.owned_songs, release_tracks = excluded.release_tracks,"
@@ -1156,6 +1267,7 @@ class Fills:
                 owned.artist if owned is not None else "",
                 _owned_count(decision, owned),
                 decision.tracks,
+                decision.picked if decision.outcome in ("filled", "deferred") else "",
             ],
         )
 

@@ -41,7 +41,7 @@ def report(database: Path, *, everything: bool = False, policy: Any = None) -> s
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT scope, album_id, outcome, planned, release_ref, reason, candidates,"
-                " title, artist, plan, owned_songs, release_tracks, cleaned_at,"
+                " title, artist, plan, owned_songs, release_tracks, cleaned_at, picked,"
                 " album_id IN (SELECT owned_album_id FROM releases WHERE owned_album_id IS NOT"
                 " NULL) AS has_release FROM album_matches ORDER BY scope, artist, title, album_id"
             ).fetchall()
@@ -149,12 +149,13 @@ def _added(row: Any) -> int:
 def _line(row: Any) -> str:
     album = _album(row)
     outcome = row["outcome"]
+    picked = " (picked automatically)" if row["picked"] else ""
     if outcome == "filled" and row["planned"]:
         release = _plan(row).get("release") or {}
         total = len(release.get("tracks") or [])
         return (
             f"{album}: {_added(row)} of {total} tracks to add from {row['release_ref']}"
-            f" ({release.get('title') or '?'})"
+            f" ({release.get('title') or '?'}){picked}"
         )
     text = f"{album}: {row['reason'] or outcome}"
     if outcome == "filled":
@@ -162,4 +163,4 @@ def _line(row: Any) -> str:
     candidates = [c for c in str(row["candidates"] or "").split(",") if c]
     if outcome in ("review", "kept") and candidates:
         text += f" [candidates: {', '.join(candidates)}]"
-    return text
+    return text + picked

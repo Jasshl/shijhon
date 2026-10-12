@@ -227,6 +227,78 @@
   </div>
 {% endif %}
 </section>
+
+{% if picks_total %}
+<section class="group" aria-labelledby="picked-title" id="picked">
+  <div class="group-head">
+    <h2 id="picked-title">Picked automatically</h2>
+    <p class="group-meta">{{ picks_total|count }} album{{ "s" if picks_total != 1 }}</p>
+    <p class="group-help">Albums matched with the most likely of the releases that fit. Until one is filled, you can fill it from another release, keep it as it is, or match it again.</p>
+  </div>
+  <div class="table-wrap">
+    <table class="table table-stack review">
+      <thead>
+        <tr><th scope="col" class="col-album">Album</th><th scope="col" class="num">Owned</th><th scope="col" class="col-reason">Release</th><th scope="col">Action</th></tr>
+      </thead>
+      <tbody>
+{% for item in picks %}
+{% set row = item.row %}
+        <tr>
+          <td><span class="cell-title">{{ row.title }}</span><span class="cell-sub">{{ row.artist }}</span></td>
+          <td class="num" data-label="Owned">{% if row.tracks %}{{ row.owned|count }} of {{ row.tracks|count }}{% else %}{{ row.owned|count }} song{{ "s" if row.owned != 1 }}{% endif %}</td>
+          <td data-label="Release">{{ item.label or (item.options[0][1] if item.options else "Unknown release") }}<span class="cell-sub">{{ row.sentence }}{% if row.filled %} Filled from it.{% elif row.planned %} Found by the dry run.{% else %} Shown complete; filled when used.{% endif %}</span></td>
+          <td>
+{% if row.filled %}
+            <p class="small muted">Filled</p>
+{% elif item.job %}
+            <p class="small muted">{{ "Filling" if item.job.action == "fill" else "Matching again" }} since {{ item.job.started|when }}…</p>
+{% else %}
+            <form class="review-actions" method="post" action="{{ prefix }}/library/review/{{ row.album_id|urlencode }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="page" value="{{ picks_page }}">
+              <input type="hidden" name="list" value="picked">
+{% if item.options %}
+              <div class="inline-form">
+                <label class="visually-hidden" for="p{{ loop.index }}-release">Release to fill {{ row.title }} from</label>
+                <select id="p{{ loop.index }}-release" name="release" class="select-small">
+{% for ref, label in item.options %}
+                  <option value="{{ ref }}">{{ label }}</option>
+{% endfor %}
+                </select>
+                <button class="btn-small" name="action" value="fill">Fill</button>
+              </div>
+{% endif %}
+              <div class="actions">
+                <button class="btn-quiet btn-small" name="action" value="keep">Keep as is</button>
+                <button class="btn-quiet btn-small" name="action" value="rematch">Match again</button>
+              </div>
+            </form>
+{% endif %}
+          </td>
+        </tr>
+{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% if picks_pages > 1 %}
+  <nav class="pager" aria-label="Pages of albums picked automatically">
+    <p class="pager-status">Albums {{ picks_first|count }}–{{ picks_last|count }} of {{ picks_total|count }}</p>
+    <div class="actions">
+{% if picks_page > 1 %}
+      <a class="btn btn-small" href="?picks={{ picks_page - 1 }}#picked">Previous</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Previous</a>
+{% endif %}
+{% if picks_page < picks_pages %}
+      <a class="btn btn-small" href="?picks={{ picks_page + 1 }}#picked">Next</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Next</a>
+{% endif %}
+    </div>
+  </nav>
+{% endif %}
+</section>
+{% endif %}
 {% endif %}
 
 <details class="more-settings"{% if fold.open %} open{% endif %}>

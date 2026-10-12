@@ -437,6 +437,13 @@ META: dict[str, dict[str, Meta]] = {
             " lists and searches too. Off: the owned songs' count until it is filled.",
             "albums",
         ),
+        "auto_pick": Meta(
+            "Pick a release when several fit",
+            "Several releases fit an album, or the one that fits numbers its tracks"
+            " differently: the most likely is used, and listed under Picked automatically."
+            " Off: such albums wait in the review list.",
+            "albums",
+        ),
         "open_budget_seconds": Meta(
             "Wait for a match on first view",
             "How long an album seen for the first time waits for its match; after it, it"

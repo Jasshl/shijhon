@@ -26,6 +26,17 @@ new track on an owned track's position; or a larger edition - deluxe, expanded, 
 the owned title does not name while the owned tracks run 1..n without a gap, so the album
 may be the complete standard edition), ``none``. Owned files are never changed by
 matching.
+
+**Automatic pick** (``pick``): where the edition choice leaves several plausible
+releases, or the one it leaves numbers its tracks differently from the owned files, the
+most likely release fills the album instead of the review list: the one with the most owned
+tracks matched exactly (the same ISRC, or the same disc and track number), then by the
+edition choice's order (exact title, owned year, the owned files' kind, explicit), then the
+one found first. A release that cannot fill the album is passed over - its track list not
+read in full, unnumbered tracks in another order than the owned files, two tracks to add
+at one disc and number, or a larger edition of an album that may be complete -; when none
+is left, the album goes to review for that reason. A picked release keeps its own
+numbering: a track it adds may share a disc and number with an owned song.
 """
 
 from __future__ import annotations
@@ -56,6 +67,20 @@ SEARCH_LIMIT = 25
 _LARGER = re.compile(
     r"\b(deluxe|expanded|anniversary|bonus|super|special|collector'?s|complete)\b", re.I
 )
+# Review reasons (the dashboard explains them by these texts).
+SEVERAL = "several plausible editions"
+OTHER_TITLES = "the owned tracks are only on releases with other titles"
+INCOMPLETE = "the catalog's track list could not be read in full"
+NUMBERED_DIFFERENTLY = "the release numbers its tracks differently from the owned files"
+UNNUMBERED = (
+    "the catalog lists the release's tracks without numbers, and the owned files are"
+    " numbered differently from its order"
+)
+LARGER = "only a larger edition matches; the owned album may be complete"
+DOUBLED = "the release has two tracks to add at one disc and track number"
+# The review reasons an automatic pick settles: an album with one of them is matched again
+# while picks are on.
+PICKABLE = (SEVERAL, NUMBERED_DIFFERENTLY)
 
 
 class Outcome(StrEnum):
@@ -97,6 +122,7 @@ class Match:
     # Catalog track -> the owned song it is (the fill creates the others).
     links: dict[CatalogRef, str] = field(default_factory=dict)
     candidates: list[str] = field(default_factory=list)  # plausible releases (for review)
+    picked: str = ""  # the review reason an automatic pick settled ("": not picked)
 
     @property
     def missing(self) -> int:
@@ -108,7 +134,9 @@ class Matcher:
         self.catalog = catalog
         self.twins = twins  # which of a clean/explicit pair, when the owned files do not say
 
-    async def match(self, owned: OwnedAlbum) -> Match:
+    async def match(self, owned: OwnedAlbum, *, pick: bool = False) -> Match:
+        """``pick``: settle several plausible editions, or a release numbered differently
+        from the owned files, by an automatic pick instead of the review list."""
         if not owned.songs:
             return Match(Outcome.NONE, "no owned songs")
         if complete_by_tags(owned):
@@ -119,8 +147,7 @@ class Matcher:
             others = await self._plausible(owned, elsewhere[:MAX_ELSEWHERE])
             if others:
                 names = [str(r.ref) for r, _ in others]
-                reason = "the owned tracks are only on releases with other titles"
-                return Match(Outcome.REVIEW, reason, candidates=names)
+                return Match(Outcome.REVIEW, OTHER_TITLES, candidates=names)
             looked = len(titled) + len(elsewhere)
             return Match(Outcome.NONE, f"no release has every owned track ({looked} looked at)")
         names = [str(r.ref) for r, _ in plausible]
@@ -131,29 +158,28 @@ class Matcher:
             release, links = self._choose(owned, complete)[0]
             return Match(Outcome.COMPLETE, "every track is owned", release, links, names)
         chosen = self._choose(owned, plausible)
-        if len(chosen) != 1:
-            return Match(Outcome.REVIEW, "several plausible editions", candidates=names)
-        release, links = chosen[0]
-        match = Match(Outcome.FILL, "", release, links, names)
-        if release.incomplete:
-            # Neither complete nor to be filled from: tracks are missing from what was read.
-            match.outcome = Outcome.REVIEW
-            match.reason = "the catalog's track list could not be read in full"
-        elif clashes(owned, release, links):
-            match.outcome = Outcome.REVIEW
-            match.reason = "the release numbers its tracks differently from the owned files"
-        elif not release.numbered and displaced(owned, release, links):
-            # The catalog sent no track numbers (they are its list's order): the tracks a
-            # fill adds would get places the owned files' numbering does not have.
-            match.outcome = Outcome.REVIEW
-            match.reason = (
-                "the catalog lists the release's tracks without numbers, and the owned"
-                " files are numbered differently from its order"
-            )
-        elif _LARGER.search(release.title) and not _LARGER.search(owned.title) and _gapless(owned):
-            match.outcome = Outcome.REVIEW
-            match.reason = "only a larger edition matches; the owned album may be complete"
-        return match
+        if len(chosen) == 1:
+            release, links = chosen[0]
+            why = unfit(owned, release, links)
+            if why is None:
+                return Match(Outcome.FILL, "", release, links, names)
+            if not pick or why != NUMBERED_DIFFERENTLY:
+                return Match(Outcome.REVIEW, why, release, links, names)
+        elif not pick:
+            return Match(Outcome.REVIEW, SEVERAL, candidates=names)
+        else:
+            why = SEVERAL
+        ranked = self._ranked(owned, plausible)
+        for release, links in ranked:
+            if unfit(owned, release, links, picking=True) is None:
+                if why == NUMBERED_DIFFERENTLY and not clashes(owned, release, links):
+                    why = SEVERAL  # another plausible release, numbered like the files
+                reason = f"picked automatically ({why})"
+                return Match(Outcome.FILL, reason, release, links, names, picked=why)
+        # Nothing a pick could fill: the most likely one's reason (never one a pick settles).
+        release, links = ranked[0]
+        reason = unfit(owned, release, links, picking=True) or INCOMPLETE
+        return Match(Outcome.REVIEW, reason, release, links, names)
 
     async def _plausible(
         self, owned: OwnedAlbum, refs: list[CatalogRef]
@@ -214,12 +240,9 @@ class Matcher:
                 return SearchResults()
             raise
 
-    def _choose(
-        self,
-        owned: OwnedAlbum,
-        plausible: list[tuple[CatalogRelease, dict[CatalogRef, str]]],
-    ) -> list[tuple[CatalogRelease, dict[CatalogRef, str]]]:
-        """The edition choice: narrow down while a preference applies."""
+    def _preferences(self, owned: OwnedAlbum) -> list[Callable[[CatalogRelease], bool]]:
+        """The edition choice's preferences, in order: the exact owned title, the owned
+        year, the owned files' kind of a clean/explicit pair, explicit."""
         wants_clean = owned.clean if owned.clean is not None else self.twins is Twins.CLEAN
 
         def exact_title(release: CatalogRelease) -> bool:
@@ -234,18 +257,35 @@ class Matcher:
         def explicit(release: CatalogRelease) -> bool:
             return release.explicit or wants_clean
 
-        rules: list[Callable[[CatalogRelease], bool]] = [
-            exact_title,
-            same_year,
-            same_kind,
-            explicit,
-        ]
+        return [exact_title, same_year, same_kind, explicit]
+
+    def _choose(
+        self,
+        owned: OwnedAlbum,
+        plausible: list[tuple[CatalogRelease, dict[CatalogRef, str]]],
+    ) -> list[tuple[CatalogRelease, dict[CatalogRef, str]]]:
+        """The edition choice: narrow down while a preference applies."""
         chosen = plausible
-        for rule in rules:
+        for rule in self._preferences(owned):
             preferred = [p for p in chosen if rule(p[0])]
             if preferred:
                 chosen = preferred
         return chosen
+
+    def _ranked(
+        self,
+        owned: OwnedAlbum,
+        plausible: list[tuple[CatalogRelease, dict[CatalogRef, str]]],
+    ) -> list[tuple[CatalogRelease, dict[CatalogRef, str]]]:
+        """The plausible releases, most likely first: the most owned tracks matched exactly,
+        then the edition choice's preferences in order, then the order they were found in."""
+        rules = self._preferences(owned)
+
+        def rank(item: tuple[CatalogRelease, dict[CatalogRef, str]]) -> tuple[int, ...]:
+            release, links = item
+            return (exact(owned, release, links), *(int(rule(release)) for rule in rules))
+
+        return sorted(plausible, key=rank, reverse=True)  # stable: found first on a tie
 
 
 def complete_by_tags(owned: OwnedAlbum) -> bool:
@@ -303,6 +343,53 @@ def _find(song: OwnedSong, tracks: list[CatalogTrack]) -> CatalogTrack | None:
 
     at = [t for t in tracks if (t.disc, t.number) == (song.disc, song.number)]
     return next((t for t in at if same(t)), None) or next((t for t in tracks if same(t)), None)
+
+
+def unfit(
+    owned: OwnedAlbum,
+    release: CatalogRelease,
+    links: dict[CatalogRef, str],
+    *,
+    picking: bool = False,
+) -> str | None:
+    """Why the release cannot fill the album (a review reason), or None. ``picking``: for an
+    automatic pick, which keeps the release's numbering - a track it adds may share a disc
+    and number with an owned song."""
+    if release.incomplete:
+        # Neither complete nor to be filled from: tracks are missing from what was read.
+        return INCOMPLETE
+    if not picking and clashes(owned, release, links):
+        return NUMBERED_DIFFERENTLY
+    if picking and doubled(release, links):
+        # Its numbering is kept: two placeholders would share a place.
+        return DOUBLED
+    if not release.numbered and displaced(owned, release, links):
+        # The catalog sent no track numbers (they are its list's order): the tracks a
+        # fill adds would get places the owned files' numbering does not have.
+        return UNNUMBERED
+    if _LARGER.search(release.title) and not _LARGER.search(owned.title) and _gapless(owned):
+        return LARGER
+    return None
+
+
+def exact(owned: OwnedAlbum, release: CatalogRelease, links: dict[CatalogRef, str]) -> int:
+    """How many owned songs the release has with their ISRC or at their disc and number."""
+    songs = {song.id: song for song in owned.songs}
+    found = 0
+    for track in release.tracks:
+        song = songs.get(links.get(track.ref, ""))
+        if song is not None and (
+            (track.isrc and track.isrc in song.isrcs)
+            or (track.disc, track.number) == (song.disc, song.number)
+        ):
+            found += 1
+    return found
+
+
+def doubled(release: CatalogRelease, links: dict[CatalogRef, str]) -> bool:
+    """Two tracks the fill would add have the same disc and number."""
+    places = [(t.disc, t.number) for t in release.tracks if t.ref not in links]
+    return len(places) != len(set(places))
 
 
 def clashes(owned: OwnedAlbum, release: CatalogRelease, links: dict[CatalogRef, str]) -> bool:

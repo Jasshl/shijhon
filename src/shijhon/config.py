@@ -414,6 +414,11 @@ class FillSettings(BaseModel):
     # length in album lists too (getArtist, search3, getAlbumList2, getStarred2);
     # off: lists keep Navidrome's counts until the fill.
     complete_lists: bool = True
+    # Several releases fit an album equally well, or the one that fits numbers its tracks
+    # differently from the owned files: the most likely release is picked and the album
+    # matched with it (listed on the dashboard's Library page). Off: such albums wait in the
+    # review list.
+    auto_pick: bool = True
     # Fill policy: automatic fills (the library pass, albums shown by searches and
     # artist pages, views) only when the owner has at least this many songs of the album,
     # or this share of its tracks; others are shown complete and filled on first use.

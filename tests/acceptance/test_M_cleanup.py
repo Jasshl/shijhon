@@ -1378,6 +1378,67 @@ def test_a_fill_taken_out_is_shown_complete_and_filled_again_on_its_next_use(
     assert entry.fill and "its album favorited" in entry.kept
 
 
+# Two songs of a 14-track album, numbered as another edition numbers them: its release is
+# picked and keeps its numbers (two of the songs it adds share theirs).
+RENUMBERED = Album(
+    "Esme Ashdown",
+    "PALE RIVERS.",
+    (Track("NORTHERN.", 1, seconds=118), Track("AMBER.", 2, seconds=187)),
+    recording_date="2010",
+)
+
+
+@pytest.mark.parametrize("elsewhere", [False, True])
+def test_a_picked_fill_taken_out_is_filled_again_as_it_was(
+    navidrome_factory: NavidromeFactory, tmp_path: Path, elsewhere: bool
+) -> None:
+    """Its record is added back with the same song IDs, the numbers it shares with the
+    owned songs kept - also when its match was made in another catalog or region (the
+    cleanup writes this one's)."""
+    replay = Replay()
+    replay.aliases["esme ashdown pale rivers."] = "bright canyon"
+    nd = navidrome_factory()
+    write_album(nd.music, RENUMBERED)
+    nd.scan(full=True)
+    fill = {"enabled": True, "background_pause_seconds": 0, "auto_min_songs": 1,
+            "library_pass": "off", "pass_start_seconds": 3600}  # fmt: skip
+    with delivery_world(
+        nd,
+        tmp_path,
+        catalog=replay.catalog(),
+        fill=fill,
+        navidrome_database=nd.data / "navidrome.db",
+        cleanup={"mode": "on"},
+    ) as world:
+        found = nd.client().ok("search3", {"query": RENUMBERED.title, "songCount": 0})
+        [album] = [a["id"] for a in found["searchResult3"]["album"]]
+        fills = world.services.fills
+        assert fills is not None
+        decision = call(world, lambda: fills.fill(album))
+        assert decision.outcome == "filled" and decision.picked
+        added = fill_songs(world, album)
+        assert len(added) == 12
+        tracks = sorted(
+            s["track"] for s in nd.client().ok("getAlbum", {"id": album})["album"]["song"]
+        )
+        assert tracks[:4] == [1, 1, 2, 2]
+        if elsewhere:
+
+            async def moved() -> None:
+                await world.services.store.execute(
+                    "UPDATE album_matches SET scope = 'other.xx' WHERE album_id = ?", [album]
+                )
+
+            call(world, moved)
+        assert len(sweep(world).removed) == 1 and fill_songs(world, album) == []
+        with collected("shijhon.placeholders.engine") as lines:
+            world.client().ok("star", {"albumId": album})  # its next use fills it
+        assert fill_songs(world, album) == added
+        assert not any("was dropped" in line for line in lines)  # added back from it
+        after = nd.client().ok("getAlbum", {"id": album})["album"]["song"]
+        assert sorted(s["track"] for s in after) == tracks
+
+
 # One more song of that release, in an album of its own: a part of it.
 PART = Album(
     "Neve Ashdown",

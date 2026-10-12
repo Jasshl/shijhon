@@ -25,8 +25,22 @@ catalog. Navidrome checks every login.
 ## Matching and filling
 
 - Albums partly in your library are matched against the catalog when they are first
-  shown, and by a background pass over the whole library. Uncertain matches go to the
-  review list on the dashboard's Library page.
+  shown, and by a background pass over the whole library.
+- When several releases fit an album, or the one that fits numbers its tracks differently
+  from your files, Shijhon picks the most likely: the release with the most of your tracks
+  at their own track numbers (or with their ISRCs), then the one with your album's exact
+  title, its year, and its clean or explicit kind, then the one the catalog lists first.
+  Its tracks keep the release's numbers, even where one of your files has the same number.
+  The dashboard's Library page lists these picks, and you can change them there until the
+  album is filled ([`auto_pick`](configuration.md#fill-and-cleanup) turns picking off).
+  With picking on, a manual choice can also use a release numbered differently from your
+  files; added songs keep its numbers, and your files stay unchanged.
+- Other uncertain matches go to the review list on the Library page: for example, when
+  your tracks are only on releases with other titles, such as a compilation. Such an album
+  stays as it is, and searches and artist pages show the catalog's versions of it beside
+  it, so you can play those. The same goes for albums without a match, and for albums you
+  keep as they are. Matching one of these albums to a usable release hides the separate
+  catalog editions again.
 - A matched album is shown complete, with the complete album's song count and length.
   Nothing else Navidrome says about your own music is changed, and your files are never
   modified.

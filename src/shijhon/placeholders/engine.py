@@ -524,16 +524,22 @@ class PlaceholderEngine:
         links: Mapping[CatalogRef, str] | None = None,
         only: Iterable[CatalogRef] | None = None,
         cover: bytes | None = None,
+        share_positions: bool = False,
     ) -> tuple[MaterializeResult, list[_Planned], list[str]]:
         """``materialize`` for a caller that holds the release's lock (``lock_for``); no
-        backing is looked up. Returns (the result, the new placeholders, the linked songs)."""
+        backing is looked up. Returns (the result, the new placeholders, the linked songs).
+        ``share_positions``: a new track may take a disc and number an owned song of the
+        album has (the release's numbering kept, as an automatic pick accepts it) - also
+        when its record of being taken out is added back."""
         links = dict(links or {})
         only = list(only) if only is not None else None
         await self._writable()
         ref = str(release.ref)
         await self._settle_left(ref)
         if ref not in await self._removed_releases():
-            return await self._materialize(release, owned_album_id, links, only, cover)
+            return await self._materialize(
+                release, owned_album_id, links, only, cover, share_positions
+            )
 
         async def anew() -> None:
             """Whether the release's tracks, added anew, fit the owned album as it is now
@@ -546,16 +552,24 @@ class PlaceholderEngine:
             fresh = [
                 t for t in release.tracks if t.ref not in links and (only is None or t.ref in only)
             ]
-            await self._fits_owned(release, owned, links, fresh)
+            await self._fits_owned(release, owned, links, fresh, share_positions)
 
         # Taken out as unused: back from its record first (the same song IDs); a record
         # that does not fit is dropped, and its old IDs stay known until the release is made
         # anew (a stream of one waits for it: never Navidrome's silent file meanwhile).
         await self._restore_held(
-            ref, cover, added_as=(owned_album_id,), owned_now=set(links), keep_ids=True, anew=anew
+            ref,
+            cover,
+            added_as=(owned_album_id,),
+            owned_now=set(links),
+            keep_ids=True,
+            anew=anew,
+            share_positions=share_positions,
         )
         try:
-            return await self._materialize(release, owned_album_id, links, only, cover)
+            return await self._materialize(
+                release, owned_album_id, links, only, cover, share_positions
+            )
         finally:
             if ref in self._removed_refs and await self.removed_record(ref) is None:
                 await self._forget_removed(ref, in_database=False)
@@ -566,6 +580,7 @@ class PlaceholderEngine:
         owned: OwnedAlbum,
         linked: Mapping[CatalogRef, str],
         to_create: list[CatalogTrack],
+        share_positions: bool = False,
     ) -> None:
         """Every addition to an owned album keeps the rules its first fill keeps - whoever
         asks: a fill, a song added to an album filled before, a refresh. Refused
@@ -573,7 +588,8 @@ class PlaceholderEngine:
         read in full; one whose track numbers are only the order the catalog listed them
         in (``numbered`` off) while the album's songs - the owned ones it is linked to, the
         placeholders it has there - sit elsewhere; and a new track whose disc and number
-        another song of the album has. ``linked``: track -> the song it is."""
+        another song of the album has (with ``share_positions``: another placeholder of
+        the release, or another new track). ``linked``: track -> the song it is."""
         if release.incomplete:
             raise MaterializeError(
                 "the catalog's track list of the release is incomplete: nothing is added"
@@ -599,13 +615,15 @@ class PlaceholderEngine:
                         " album's songs are numbered differently from its order: nothing is"
                         " added"
                     )
-        taken = set(files.values()) | set(placed.values())
+        taken = set(placed.values()) | (set() if share_positions else set(files.values()))
         for track in to_create:
             if (track.disc, track.number) in taken:
                 raise MaterializeError(
                     f"{track.title!r} would take another song's place in the owned album"
                     " (its disc and number): nothing is added"
                 )
+            if share_positions:  # never two new tracks on one place either
+                taken.add((track.disc, track.number))
 
     async def refused(self) -> str | None:
         """Why the library may not be written now, or None - asked of Navidrome now, never
@@ -641,6 +659,7 @@ class PlaceholderEngine:
         links: dict[CatalogRef, str],
         only: Iterable[CatalogRef] | None,
         cover: bytes | None,
+        share_positions: bool = False,
     ) -> tuple[MaterializeResult, list[_Planned], list[str]]:
         existing = await self.store.fetchone(
             "SELECT folder, album_id, owned_album_id, album_tags FROM releases WHERE ref = ?",
@@ -685,7 +704,7 @@ class PlaceholderEngine:
         if owned_album_id and (owned is None or not owned.songs):
             raise MaterializeError("the owned album has no owned songs")
         if owned is not None:
-            await self._fits_owned(release, owned, {**known, **links}, to_create)
+            await self._fits_owned(release, owned, {**known, **links}, to_create, share_positions)
         # Later additions reuse the release's album tags so they always join the same album.
         album_tags: dict[str, list[str]] = (
             json.loads(existing["album_tags"])
@@ -1545,13 +1564,15 @@ class PlaceholderEngine:
         also: Statements | None = None,
         keep_ids: bool = False,
         anew: Callable[[], Awaitable[None]] | None = None,
+        share_positions: bool = False,
     ) -> str | None:
         """``restore_release`` under the release's lock. ``added_as`` (a commit or a fill of
         the release: the owned album it fills, or None): the record is used only if it was
         that - a catalog album, or a fill of that album -, else it is dropped (the release
         is added anew); so too when a track it had a placeholder for is owned now
         (``owned_now``: the tracks the album owns), and when a song of the album sits where
-        one of its placeholders was (the album was renumbered or gained a song meanwhile).
+        one of its placeholders was (the album was renumbered or gained a song meanwhile) -
+        unless the fill shares positions with owned songs (``share_positions``).
         A record is dropped only where the release's tracks can be added anew instead:
         ``anew`` raises when they do not fit the album (``_fits_owned``), and the record
         then stays, with its old IDs. (The album is looked at again when they are added:
@@ -1579,7 +1600,7 @@ class PlaceholderEngine:
         if recorded and not before:
             self._restore_failed[ref] = time.monotonic()
             raise MaterializeError("the owned album it filled is not in the library")
-        if recorded and added_as is not None:
+        if recorded and added_as is not None and not share_positions:
             taken = {
                 (int(s.get("discNumber") or 1), int(s.get("trackNumber") or 0))
                 for s in await self.navidrome.songs_of_album(recorded)

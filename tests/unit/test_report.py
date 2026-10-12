@@ -117,3 +117,20 @@ def test_what_would_be_filled_is_what_the_fill_policy_allows_now(
     strict = capsys.readouterr().out
     assert "Would fill (dry run)" not in strict and "matched earlier" not in strict
     assert "Harbor Lights" in strict.split("To fill on first use:\n")[1]
+
+
+def test_automatic_picks_are_marked(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    path = _database(tmp_path)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO album_matches (album_id, scope, outcome, planned, release_ref, reason,"
+        " title, artist, owned_songs, release_tracks, picked, checked_at)"
+        " VALUES ('a9', 'x.us', 'filled', 0, 'x:8', 'picked automatically', 'Picked', 'Mara',"
+        " 2, 12, 'several plausible editions', 1)"
+    )
+    conn.commit()
+    conn.close()
+    main(["matches", "--database", str(path), "--all"])
+    out = capsys.readouterr().out
+    assert "  Mara - Picked: from x:8 (picked automatically)\n" in out
+    assert "Mara - Tides: several plausible editions [candidates: x:3, x:4]\n" in out

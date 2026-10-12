@@ -38,6 +38,12 @@
 
 - **Before a partly owned album is matched**, using a catalog song of its release adds
   the release as a separate album. Your album then goes to the review list.
+- **An automatic pick can be another edition than yours.** The Library page lists the
+  picks. You can change one until the album is filled, not after.
+- **A picked release keeps its track numbers.** Where your files are numbered
+  differently, two songs of the album can have the same number.
+- **An album in the review list, without a match, or kept as it is** has your songs only.
+  The catalog's versions of it are separate albums in searches and on artist pages.
 - **Artists who share a name.** An artist's page in your library shows the releases of the
   catalog artist with that name. If there are several, Shijhon looks at the first three
   and takes the one that shares the most album titles with your library, or none if none

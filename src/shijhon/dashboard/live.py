@@ -177,6 +177,7 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
     # catalog or with filling off).
     ("fill", "auto_min_songs"): (Target("fills.policy", _policy, optional=True),),
     ("fill", "auto_min_share"): (Target("fills.policy", _policy, optional=True),),
+    ("fill", "auto_pick"): (Target("fills.auto_pick", _same("auto_pick"), optional=True),),
     ("fill", "library_pass"): (
         Target(
             "library_pass.mode",

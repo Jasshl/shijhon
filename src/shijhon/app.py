@@ -552,6 +552,7 @@ class ShijhonApp:
                 syncs=Bursts(fill.sync_albums, fill.sync_seconds),
                 pause_seconds=fill.background_pause_seconds,
                 policy=FillPolicy(fill.auto_min_songs, fill.auto_min_share),
+                auto_pick=fill.auto_pick,
             )
             # Owned albums shown complete from their first view, filled on first use.
             albums = CompleteAlbums(fills, self.upstream, library_artists=library_artists)
@@ -563,6 +564,7 @@ class ShijhonApp:
             catalog_ids.owner = views.owner = fills.owner
             views.album_of = navidrome.album
             additions.exposed = fills.exposed
+            additions.unsettled = fills.unsettled
             # The pass has a small cache of its own: its thousands of lookups must not push
             # listeners' answers out of the shared one.
             own = CachedCatalog(

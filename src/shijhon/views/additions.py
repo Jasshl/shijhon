@@ -17,11 +17,12 @@ pages alone.
 
 De-duplication against the library: catalog items that are in the library (committed or
 filled), albums that are editions of a library album in the answer (the edition rules of
-``catalog/editions.py``), songs with an owned song's ISRC or with its title, artist
-and length, and artists with an owned artist's name. The catalog's search and artist
-answers are cached and coalesced (``catalog/cache.py``), so search-as-you-type does not
-become per-keystroke catalog traffic. Catalog items credited to a library artist link
-to that artist.
+``catalog/editions.py``) - unless no release completes that album (in review, without a
+match, kept as it is: the catalog's editions show beside it) -, songs with an owned song's
+ISRC or with its title, artist and length, and artists with an owned artist's name. The
+catalog's search and artist answers are cached and coalesced (``catalog/cache.py``), so
+search-as-you-type does not become per-keystroke catalog traffic. Catalog items credited
+to a library artist link to that artist.
 
 Every ``search3`` is logged without its text: its length, the requested counts and
 offsets, and what the catalog did. A client sending many different searches in a short
@@ -252,6 +253,9 @@ class CatalogAdditions:
         # Owned albums a search result or an artist page shows: matched and filled in the
         # background, when set.
         self.exposed: Callable[[Client, Iterable[str]], None] | None = None
+        # Of the owned albums an answer shows, those no release completes (in review,
+        # without a match, kept as they are): the catalog's editions show beside them.
+        self.unsettled: Callable[[Iterable[str]], Awaitable[set[str]]] | None = None
         self.clock = clock
         # After the catalog failed (unavailable, rate limited), additions pause until then.
         self.resting_until = 0.0
@@ -512,10 +516,12 @@ class CatalogAdditions:
                     kept.append(entry)
             additions["artist"] = kept[:room]
         if (room := wanted.get("album", 0) - len(owned_albums)) > 0:
-            known = [library_album(a) for a in owned_albums]
-            # The albums of owned songs, unless listed (and typed) among the albums above.
             listed = {a.get("id") for a in owned_albums}
-            known += [album_of_song(s) for s in owned_songs if s.get("albumId") not in listed]
+            of_songs = [s for s in owned_songs if s.get("albumId") not in listed]
+            open_ = await self._unsettled([*listed, *(s.get("albumId") for s in of_songs)])
+            known = [library_album(a) for a in owned_albums if a.get("id") not in open_]
+            # The albums of owned songs, unless listed (and typed) among the albums above.
+            known += [album_of_song(s) for s in of_songs if s.get("albumId") not in open_]
             albums = await self._missing_releases(found.albums, known)
             albums.sort(key=lambda r: _album_rank(r, query))
             shown_albums = albums[:room]
@@ -724,8 +730,9 @@ class CatalogAdditions:
         )
         self._stands_for(name, discography)
         try:
+            open_ = await self._unsettled([a.get("id") for a in owned])
             additions = await self._missing_releases(
-                discography or (), [library_album(a) for a in owned]
+                discography or (), [library_album(a) for a in owned if a.get("id") not in open_]
             )
         except Exception as exc:  # Navidrome's answer, rather than asking it again
             log.warning("artist page additions failed: %s", type(exc).__name__)
@@ -1228,6 +1235,13 @@ class CatalogAdditions:
         self._answered[key] = self.clock()
 
     # --- de-duplication against the library -------------------------------------------------
+
+    async def _unsettled(self, album_ids: Iterable[Any]) -> set[str]:
+        """The owned albums among these that no release completes (none without filling):
+        they do not stand for the catalog's editions of them."""
+        if self.unsettled is None:
+            return set()
+        return await self.unsettled(str(a) for a in album_ids if a)
 
     async def _missing_releases(
         self, releases: Iterable[CatalogRelease], library: list[LibraryAlbum]

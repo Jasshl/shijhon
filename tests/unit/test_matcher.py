@@ -15,7 +15,19 @@ from shijhon.catalog.model import (
     ReleaseKind,
     Twins,
 )
-from shijhon.matching.matcher import Matcher, Outcome, OwnedAlbum, OwnedSong, complete_by_tags
+from shijhon.matching.matcher import (
+    DOUBLED,
+    INCOMPLETE,
+    LARGER,
+    NUMBERED_DIFFERENTLY,
+    PICKABLE,
+    SEVERAL,
+    Matcher,
+    Outcome,
+    OwnedAlbum,
+    OwnedSong,
+    complete_by_tags,
+)
 
 ARTIST = "Mara Vance"
 TITLES = ["Open Door", "Quiet Harbor", "Paper Tides", "Low Light", "Echoing"]
@@ -102,8 +114,9 @@ class Catalog:
 
 async def match(album: OwnedAlbum, *releases: CatalogRelease, **options: Any) -> Any:
     twins = options.pop("twins", Twins.EXPLICIT)
+    pick = options.pop("pick", False)
     catalog = Catalog(*releases, **options)
-    return await Matcher(catalog, twins=twins).match(album)  # type: ignore[arg-type]
+    return await Matcher(catalog, twins=twins).match(album, pick=pick)  # type: ignore[arg-type]
 
 
 @pytest.mark.anyio
@@ -201,9 +214,9 @@ async def test_a_remaster_fills_an_album_with_a_gap() -> None:
     assert found.outcome is Outcome.FILL
 
 
-@pytest.mark.anyio
-async def test_a_release_numbered_differently_goes_to_review() -> None:
-    """A new track would take an owned track's number."""
+def numbered_differently() -> tuple[OwnedAlbum, CatalogRelease]:
+    """Owned songs 1-3 and a release that has them as 2, 1 and 4: its track 3 (to add)
+    takes an owned song's number."""
     names = ["Quiet Harbor", "Open Door", "Bonus 1", "Paper Tides"]
     shuffled = release("sh", count=4, names=names)
     album = owned([1, 2, 3])
@@ -213,8 +226,16 @@ async def test_a_release_numbered_differently_goes_to_review() -> None:
         )
         for s in album.songs
     )
-    found = await match(dataclasses.replace(album, songs=songs), shuffled)
-    assert found.outcome is Outcome.REVIEW and "numbers" in found.reason
+    return dataclasses.replace(album, songs=songs), shuffled
+
+
+@pytest.mark.anyio
+async def test_a_release_numbered_differently_goes_to_review() -> None:
+    """A new track would take an owned track's number (automatic picks off)."""
+    album, shuffled = numbered_differently()
+    found = await match(album, shuffled, pick=False)
+    assert found.outcome is Outcome.REVIEW and found.reason == NUMBERED_DIFFERENTLY
+    assert not found.picked
 
 
 @pytest.mark.anyio
@@ -263,9 +284,121 @@ async def test_owned_files_without_a_rating_follow_the_twins_setting() -> None:
 
 @pytest.mark.anyio
 async def test_several_plausible_editions_go_to_review() -> None:
+    """Automatic picks off."""
     one, two = release("one"), release("two")  # identical as far as the album can tell
-    found = await match(owned([1, 2]), one, two)
+    found = await match(owned([1, 2]), one, two, pick=False)
     assert found.outcome is Outcome.REVIEW and sorted(found.candidates) == ["x:one", "x:two"]
+    assert found.reason == SEVERAL and not found.picked
+
+
+@pytest.mark.anyio
+async def test_a_pick_takes_the_first_found_of_identical_editions() -> None:
+    one, two = release("one"), release("two")
+    found = await match(owned([1, 2]), one, two, pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "one"
+    assert found.picked == SEVERAL and found.reason == f"picked automatically ({SEVERAL})"
+    assert sorted(found.candidates) == ["x:one", "x:two"] and found.missing == 3
+
+
+@pytest.mark.anyio
+async def test_a_pick_prefers_the_most_owned_tracks_matched_exactly() -> None:
+    """The owned songs at their own numbers (or with their ISRCs) on one edition, found
+    elsewhere on the other: the first is picked, whatever the order found."""
+    names = ["Quiet Harbor", "Open Door", "Paper Tides", "Low Light", "Echoing"]
+    shuffled = release("sh", names=names)  # owned 1 and 2 swapped
+    album = owned([1, 2])
+    songs = tuple(
+        dataclasses.replace(
+            s, duration_ms=next(t.duration_ms for t in shuffled.tracks if t.title == s.title) + 500
+        )
+        for s in album.songs
+    )
+    album = dataclasses.replace(album, songs=songs)
+    straight = release("st")
+    straight = dataclasses.replace(
+        straight,
+        tracks=tuple(
+            dataclasses.replace(t, duration_ms=u.duration_ms)
+            for t, u in zip(
+                straight.tracks,
+                sorted(shuffled.tracks, key=lambda t: TITLES.index(t.title)),
+                strict=True,
+            )
+        ),
+    )
+    found = await match(album, shuffled, straight, pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "st"
+    # By ISRC as well: owned files numbered their own way, with the second edition's codes.
+    one, two = release("one"), release("two")
+    renumbered = tuple(
+        dataclasses.replace(s, number=s.number + 3, isrcs=(f"ZZTWO{s.number:05d}",))
+        for s in owned([1, 2]).songs
+    )
+    found = await match(dataclasses.replace(owned([1, 2]), songs=renumbered), one, two, pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "two"
+
+
+@pytest.mark.anyio
+async def test_a_pick_settles_a_release_numbered_differently() -> None:
+    """The release keeps its numbering: the track it adds shares an owned song's number."""
+    album, shuffled = numbered_differently()
+    found = await match(album, shuffled, pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "sh"
+    assert found.picked == NUMBERED_DIFFERENTLY and found.missing == 1
+
+
+@pytest.mark.anyio
+async def test_a_pick_prefers_a_release_numbered_like_the_owned_files() -> None:
+    """The edition choice's release numbers its tracks differently; another plausible one
+    (of another year) has the owned songs at their numbers: that one is picked, as one of
+    several plausible releases."""
+    album, shuffled = numbered_differently()
+    lengths = {t.title: t.duration_ms for t in shuffled.tracks}
+    other = release("st", count=4, year="2005-01-01")
+    other = dataclasses.replace(
+        other,
+        tracks=tuple(
+            dataclasses.replace(t, duration_ms=lengths.get(t.title, t.duration_ms))
+            for t in other.tracks
+        ),
+    )
+    found = await match(album, shuffled, other, pick=False)
+    assert found.outcome is Outcome.REVIEW and found.reason == NUMBERED_DIFFERENTLY
+    found = await match(album, shuffled, other, pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "st"
+    assert found.picked == SEVERAL
+
+
+@pytest.mark.anyio
+async def test_a_pick_passes_over_releases_it_cannot_fill_from() -> None:
+    one = dataclasses.replace(release("one"), incomplete=True)
+    two = release("two")
+    found = await match(owned([1, 2]), one, two, pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "two"
+    # None it could fill from: review for the most likely one's reason - never one that a
+    # pick settles (the album would be matched again and again).
+    found = await match(owned([1, 2]), one, dataclasses.replace(two, incomplete=True), pick=True)
+    assert found.outcome is Outcome.REVIEW and found.reason == INCOMPLETE
+    # Two tracks to add at one disc and number (a catalog that numbers a second disc as the
+    # first): it keeps its numbering, so it is passed over.
+    folded = release("fo", count=7)
+    folded = dataclasses.replace(
+        folded,
+        tracks=tuple(
+            dataclasses.replace(t, number=t.number - 3 if t.number > 5 else t.number)
+            for t in folded.tracks
+        ),
+    )
+    found = await match(owned([1, 2]), folded, release("fo2", count=7), pick=True)
+    assert found.outcome is Outcome.FILL and found.release.ref.id == "fo2"
+    again = dataclasses.replace(folded, ref=CatalogRef("x", "f3"))
+    found = await match(owned([1, 2]), folded, again, pick=True)
+    assert found.outcome is Outcome.REVIEW and found.reason == DOUBLED
+    big = release("dx1", "Harbor Lights (Deluxe)", count=9)
+    bigger = release("dx2", "Harbor Lights (Deluxe)", count=9)
+    found = await match(owned([1, 2]), big, bigger, pick=True)  # perhaps a whole album
+    assert found.outcome is Outcome.REVIEW and found.reason == LARGER
+    assert found.reason not in PICKABLE
 
 
 @pytest.mark.anyio

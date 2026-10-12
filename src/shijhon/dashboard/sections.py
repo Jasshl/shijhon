@@ -263,7 +263,7 @@ def rows(
                 "locked": env.get(f.key, ""),
                 "saved": bool(just_saved and f.key in just_saved),
                 "default": ""
-                if f.kind in ("secret", "mapping")
+                if f.kind in ("secret", "mapping") or (f.meta.choices == "sources" and not default)
                 else f"Default {f.describe(default)}"
                 + (", from the configuration" if default != f.builtin else ""),
             }

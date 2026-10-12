@@ -1,6 +1,7 @@
 """The Library page's data: the album matches' counts, the library pass's progress, the
-review list with the releases it considered, and the review actions that run in the
-background (a fill waits for Navidrome's scan: up to a couple of minutes).
+review list with the releases it considered, the albums matched by an automatic pick, and
+the review actions that run in the background (a fill waits for Navidrome's scan: up to a
+couple of minutes).
 
 Everything is read from ``album_matches`` (one scope: the running catalog and region)
 and done through ``Fills``' public methods; nothing here matches or fills by itself.
@@ -16,6 +17,7 @@ from typing import Any
 
 import anyio
 
+from shijhon.matching.matcher import NUMBERED_DIFFERENTLY, SEVERAL
 from shijhon.store import Store
 
 PAGE = 25  # review rows a page
@@ -27,7 +29,7 @@ JOB_SHOWN_SECONDS = 900.0  # a finished action's notice
 # The matcher's and the fills' reasons, as a headline and a sentence (others: shown as
 # they are).
 _REASONS: dict[str, tuple[str, str]] = {
-    "several plausible editions": (
+    SEVERAL: (
         "Several releases match",
         "More than one edition fits the owned songs.",
     ),
@@ -35,7 +37,7 @@ _REASONS: dict[str, tuple[str, str]] = {
         "Only on releases with other titles",
         "The owned songs are on releases under other names, such as a compilation.",
     ),
-    "the release numbers its tracks differently from the owned files": (
+    NUMBERED_DIFFERENTLY: (
         "Track numbers differ",
         "The release numbers its tracks differently from your files.",
     ),
@@ -54,6 +56,13 @@ _REASONS: dict[str, tuple[str, str]] = {
     "the placeholders did not join the album": (
         "The fill did not join the album",
         "The added songs did not join your album after Navidrome's scan.",
+    ),
+}
+# Why a release was picked automatically, as a sentence.
+_PICKED: dict[str, str] = {
+    SEVERAL: "Several releases fit the owned songs; this is the most likely.",
+    NUMBERED_DIFFERENTLY: (
+        "It numbers its tracks differently from your files; the added songs keep its numbers."
     ),
 }
 _PART = re.compile(r"^part of (?P<album>.+?) \(album [^)]*\): (?P<state>.+)$", re.DOTALL)
@@ -190,6 +199,57 @@ async def review(store: Store, scope: str, page: int) -> tuple[list[ReviewRow], 
                 sentence,
                 part,
                 refs,
+                bool(row["planned"]),
+            )
+        )
+    return found, total, page
+
+
+@dataclass
+class PickRow:
+    album_id: str
+    title: str
+    artist: str
+    owned: int
+    tracks: int
+    sentence: str  # why the release was picked
+    refs: list[str]  # the picked release, then the other plausible ones
+    filled: bool  # filled from it (no action changes that here)
+    planned: bool  # from a dry run
+
+
+async def picks(store: Store, scope: str, page: int) -> tuple[list[PickRow], int, int]:
+    """One page of the albums matched by an automatic pick (artist, then title), the list's
+    length, and the page shown (a page past the end shows the last one)."""
+    where = "scope = ? AND picked != '' AND outcome IN ('filled', 'deferred')"
+    total_row = await store.fetchone(
+        f"SELECT COUNT(*) AS n FROM album_matches WHERE {where}",  # noqa: S608
+        [scope],
+    )
+    total = int(total_row["n"]) if total_row else 0
+    page = min(max(1, page), max(1, -(-total // PAGE)))
+    rows = await store.fetchall(
+        "SELECT album_id, title, artist, owned_songs, release_tracks, picked, candidates,"  # noqa: S608
+        " release_ref, planned, album_id IN (SELECT owned_album_id FROM releases"
+        " WHERE owned_album_id IS NOT NULL) AS filled"
+        f" FROM album_matches WHERE {where}"
+        " ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE, album_id LIMIT ? OFFSET ?",
+        [scope, PAGE, (page - 1) * PAGE],
+    )
+    found = []
+    for row in rows:
+        refs = [row["release_ref"]] if row["release_ref"] else []
+        refs += [r for r in (row["candidates"] or "").split(",") if r and r not in refs]
+        found.append(
+            PickRow(
+                row["album_id"],
+                row["title"] or "Unknown album",
+                row["artist"] or "Unknown artist",
+                int(row["owned_songs"] or 0),
+                int(row["release_tracks"] or 0),
+                _PICKED.get(row["picked"], ""),
+                refs,
+                bool(row["filled"]),
                 bool(row["planned"]),
             )
         )

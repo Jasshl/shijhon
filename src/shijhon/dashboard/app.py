@@ -1836,6 +1836,8 @@ class Dashboard:
         labels = {f.key: (f.id, f.meta.label) for f in sections.fields_of("fill")}
         text = request.query_params.get("page", "1")
         page_number = int(text) if text.isdigit() and len(text) < 7 else 1
+        text = request.query_params.get("picks", "1")
+        picks_page = int(text) if text.isdigit() and len(text) < 7 else 1
         context: dict[str, Any] = {
             "fills_on": fills is not None,
             "songs": songs,
@@ -1851,10 +1853,12 @@ class Dashboard:
             "form_for": (form or {}).get("form", ""),
             "jobs": self.jobs.recent(session.token_hash),
             "page": page_number,
+            "picks_page": picks_page,
         }
         if fills is not None:
             scope = fills.scope
             rows, total, page_number = await library.review(self.store, scope, page_number)
+            picked, picks_total, picks_page = await library.picks(self.store, scope, picks_page)
             albums: set[str] | None = None
             # The pass's own cached catalog, when there is one (not the listeners' cache);
             # nothing is asked while the catalog rests after errors.
@@ -1867,7 +1871,9 @@ class Dashboard:
 
             async def describe() -> None:
                 if not fills.resting:
-                    await self.describer.describe(describing, [r for row in rows for r in row.refs])
+                    refs = [r for row in rows for r in row.refs]
+                    refs += [r for pick in picked for r in pick.refs]
+                    await self.describer.describe(describing, refs)
 
             async with anyio.create_task_group() as group:
                 group.start_soon(count)
@@ -1891,6 +1897,23 @@ class Dashboard:
                 pages=max(1, -(-total // library.PAGE)),
                 first=(page_number - 1) * library.PAGE + 1,
                 last=min(total, page_number * library.PAGE),
+                picks=[
+                    {
+                        "row": row,
+                        "label": self.describer.label(row.refs[0]) if row.refs else None,
+                        "options": [
+                            (ref, self.describer.label(ref) or f"Release {ref.partition(':')[2]}")
+                            for ref in row.refs
+                        ],
+                        "job": self.jobs.running(row.album_id),
+                    }
+                    for row in picked
+                ],
+                picks_total=picks_total,
+                picks_page=picks_page,
+                picks_pages=max(1, -(-picks_total // library.PAGE)),
+                picks_first=(picks_page - 1) * library.PAGE + 1,
+                picks_last=min(picks_total, picks_page * library.PAGE),
                 running=self._pass_running(passing),
                 resting=_wall(fills.resting_until, fills.clock) if fills.resting else None,
                 pass_mode=passing.mode if passing is not None else "",
@@ -1986,7 +2009,10 @@ class Dashboard:
         fills = services.fills if services is not None else None
         form: dict[str, str] = request.state.form
         album_id = request.path_params["album"]
-        back = f"/library?page={quote(form.get('page', '1'))}#review"
+        if form.get("list") == "picked":
+            back = f"/library?picks={quote(form.get('page', '1'))}#picked"
+        else:
+            back = f"/library?page={quote(form.get('page', '1'))}#review"
         if fills is None:
             raise Refused(PlainTextResponse("Filling albums is off.\n", 409, headers=HEADERS))
 
@@ -2053,10 +2079,14 @@ class Dashboard:
         return note(words)
 
     async def _review_row(self, fills: Any, album_id: str) -> Any:
+        """The album's row in the review list: in review, or matched by an automatic pick
+        and not filled yet."""
         assert self.store is not None
         return await self.store.fetchone(
             "SELECT title, artist, reason, candidates, release_ref FROM album_matches"
-            " WHERE album_id = ? AND scope = ? AND outcome = 'review'",
+            " WHERE album_id = ? AND scope = ? AND (outcome = 'review' OR (picked != ''"
+            " AND outcome IN ('filled', 'deferred') AND album_id NOT IN"
+            " (SELECT owned_album_id FROM releases WHERE owned_album_id IS NOT NULL)))",
             [album_id, fills.scope],
         )
 
@@ -2115,7 +2145,8 @@ class Dashboard:
             await fills.fill(job.album_id, hold=True, matcher=paced)
             assert self.store is not None
             row = await self.store.fetchone(
-                "SELECT outcome, reason FROM album_matches WHERE album_id = ? AND scope = ?",
+                "SELECT outcome, reason, picked FROM album_matches"
+                " WHERE album_id = ? AND scope = ?",
                 [job.album_id, fills.scope],
             )
         except BaseException as exc:
@@ -2138,9 +2169,11 @@ class Dashboard:
             self.jobs.finish(job, ok=outcome is None and fills.resting, message=words)
             return
         if outcome in ("deferred", "filled"):
+            picked = row is not None and row["picked"]
+            how = "the most likely release is picked" if picked else "it matches a release"
             words, ok = (
-                f"{job.title} matches a release now: it is shown complete, and filled"
-                " automatically or when used, as the fill policy says.",
+                f"{job.title}: {how} now. It is shown complete, and filled automatically or"
+                " when used, as the fill policy says.",
                 True,
             )
         elif outcome == "review":
