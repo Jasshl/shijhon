@@ -26,6 +26,26 @@ class KeyedLocks:
             else:
                 self._locks[key] = (lock, users - 1)
 
+    @asynccontextmanager
+    async def hold_now(self, key: str) -> AsyncIterator[bool]:
+        """``key`` held at once (True) - or not at all (False) while someone holds or waits
+        for it: nothing waits here."""
+        if key in self._locks:
+            yield False
+            return
+        lock = anyio.Lock()
+        lock.acquire_nowait()
+        self._locks[key] = (lock, 1)
+        try:
+            yield True
+        finally:
+            lock.release()
+            lock, users = self._locks[key]
+            if users <= 1:
+                del self._locks[key]
+            else:
+                self._locks[key] = (lock, users - 1)
+
     def held(self, key: str) -> bool:
         """Whether someone holds (or waits for) ``key``."""
         return key in self._locks

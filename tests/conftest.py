@@ -42,6 +42,7 @@ CANARY_MODULES = (
     "test_E_",
     "test_J_contract.py",
     "test_harness_smoke.py",
+    "test_R_playlists.py",  # owner auth and atomic playlist publication/recovery
 )
 
 

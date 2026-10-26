@@ -476,8 +476,9 @@ _MAX_DEPTH = 8  # containers within containers, at most
 @dataclass
 class Inspected:
     """What an MP4's boxes say: whether it is encrypted (or nests boxes too deep to tell),
-    and its length in its own timescale - the fragments' sample durations added up, else
-    the track's header's."""
+    and its length in its own timescale - of its first audio track (an MP4 may hold more;
+    a media segment's runs, without a header, all count): the samples its header holds
+    and its fragments' sample durations added up, else the track's header's length."""
 
     encrypted: bool = False
     timescale: int | None = None
@@ -488,54 +489,128 @@ class Inspected:
         return self.units / self.timescale if self.timescale and self.units else None
 
 
+@dataclass
+class _Track:
+    """A track as its ``trak`` box tells it: its ID, its kind ("soun" for audio), its
+    timescale and header length, and the durations of the samples its header holds."""
+
+    id: int | None = None
+    handler: bytes = b""
+    timescale: int | None = None
+    length: int = 0
+    held: int = 0
+
+
+@dataclass
+class _Walked:
+    tracks: list[_Track] = field(default_factory=list)
+    defaults: dict[int, int] = field(default_factory=dict)  # by track: its runs' default
+    runs: dict[int | None, int] = field(default_factory=dict)  # by track: their durations
+
+
 def inspect(source: BinaryIO | bytes, size: int | None = None) -> Inspected:
-    """Read the boxes of an MP4 (a joined file, or an init segment's bytes); "mdat" is
-    skipped, not read."""
+    """Read the boxes of an MP4 (a joined file, a file of fragments, or a segment's bytes);
+    "mdat" is skipped, not read."""
     stream = io.BytesIO(source) if isinstance(source, bytes) else source
     if size is None:
         size = stream.seek(0, io.SEEK_END)
     found = Inspected()
-    state = {"trex": 0, "fragments": 0, "header": 0}
-    _walk(stream, 0, size, found, state)
-    found.units = state["fragments"] or state["header"]
+    walked = _Walked()
+    _walk(stream, 0, size, found, walked)
+    audio = [t for t in walked.tracks if t.handler == b"soun"] or walked.tracks
+    if not audio:
+        found.units = sum(walked.runs.values())
+        return found
+    track = audio[0]
+    found.timescale = track.timescale
+    runs = walked.runs.get(track.id, 0) if track.id is not None else sum(walked.runs.values())
+    found.units = (track.held + runs) or track.length
     return found
 
 
+def fragmented(source: BinaryIO, size: int | None = None) -> bool:
+    """Whether an MP4's movie is in fragments - its ``moov`` has an ``mvex`` box: then its
+    header tells no length (or only that of the samples before the first fragment), and
+    tag readers - Navidrome's included - read none from it. Only the ``moov`` box's own
+    boxes are read."""
+    if size is None:
+        size = source.seek(0, io.SEEK_END)
+    for kind, payload, end in _boxes(source, 0, size):
+        if kind == b"moof":
+            return True
+        if kind == b"moov":
+            return any(inner == b"mvex" for inner, _, _ in _boxes(source, payload, end))
+    return False
+
+
 def _walk(
-    stream: BinaryIO, start: int, end: int, found: Inspected, state: dict[str, int], depth: int = 0
+    stream: BinaryIO,
+    start: int,
+    end: int,
+    found: Inspected,
+    walked: _Walked,
+    depth: int = 0,
+    track: _Track | None = None,
+    traf: list[int | None] | None = None,  # (its track, its runs' default duration)
 ) -> None:
     if depth > _MAX_DEPTH:  # (the boxes nest a few levels deep: deeper is no audio of ours)
         found.encrypted = True
         return
-    default = state["trex"]
     for kind, payload, box_end in _boxes(stream, start, end):
         if kind in _ENCRYPTED:
             found.encrypted = True
+        elif kind == b"trak":
+            mine = _Track()
+            _walk(stream, payload, box_end, found, walked, depth + 1, mine)
+            walked.tracks.append(mine)
+        elif kind == b"traf":
+            _walk(stream, payload, box_end, found, walked, depth + 1, track, [None, 0])
         elif kind in _CONTAINERS:
-            _walk(stream, payload, box_end, found, state, depth + 1)
-        elif kind in (b"stsd", b"mdhd", b"trex", b"tfhd", b"trun"):
+            _walk(stream, payload, box_end, found, walked, depth + 1, track, traf)
+        elif kind in (b"stsd", b"tkhd", b"hdlr", b"mdhd", b"stts", b"trex", b"tfhd", b"trun"):
             data = _read(stream, payload, box_end)
             if kind == b"stsd":  # its sample entries' kinds (an encrypted one is "enca")
                 entries = io.BytesIO(data)
                 found.encrypted |= any(k in _ENCRYPTED for k, _, _ in _boxes(entries, 8, len(data)))
-            elif kind == b"mdhd" and data:
-                # Version 0: 32-bit times, then the timescale and the duration; 1: 64-bit.
-                layout, at, unknown = (">II", 12, 0xFFFFFFFF) if data[0] == 0 else (">IQ", 20, -1)
-                if len(data) >= at + struct.calcsize(layout):
-                    timescale, length = struct.unpack_from(layout, data, at)
-                    found.timescale = timescale or found.timescale
-                    known = length != unknown and length != 0xFFFFFFFFFFFFFFFF
-                    state["header"] += length if known else 0
+            elif track is not None and data:
+                _track_box(kind, data, track)
             elif kind == b"trex" and len(data) >= 16:
-                state["trex"] = default = struct.unpack_from(">I", data, 12)[0]
-            elif kind == b"tfhd" and len(data) >= 8:
+                walked.defaults[struct.unpack_from(">I", data, 4)[0]] = struct.unpack_from(
+                    ">I", data, 12
+                )[0]
+            elif kind == b"tfhd" and traf is not None and len(data) >= 8:
                 flags = int.from_bytes(data[1:4], "big")
+                ident = int(struct.unpack_from(">I", data, 4)[0])
                 at = 8 + (8 if flags & 0x1 else 0) + (4 if flags & 0x2 else 0)
-                default = state["trex"]
+                traf[0], traf[1] = ident, walked.defaults.get(ident, 0)
                 if flags & 0x8 and len(data) >= at + 4:
-                    default = struct.unpack_from(">I", data, at)[0]
-            elif kind == b"trun" and len(data) >= 8:
-                state["fragments"] += _run_length(data, default)
+                    traf[1] = struct.unpack_from(">I", data, at)[0]
+            elif kind == b"trun" and traf is not None and len(data) >= 8:
+                walked.runs[traf[0]] = walked.runs.get(traf[0], 0) + _run_length(data, traf[1] or 0)
+
+
+def _track_box(kind: bytes, data: bytes, track: _Track) -> None:
+    """A field of the track a ``trak`` box describes, from one of its boxes."""
+    version = data[0]
+    if kind == b"tkhd":
+        at = 20 if version == 1 else 12
+        if len(data) >= at + 4:
+            track.id = struct.unpack_from(">I", data, at)[0]
+    elif kind == b"hdlr" and len(data) >= 12:
+        track.handler = data[8:12]
+    elif kind == b"mdhd":
+        # Version 0: 32-bit times, then the timescale and the duration; 1: 64-bit.
+        layout, at, unknown = (">II", 12, 0xFFFFFFFF) if version == 0 else (">IQ", 20, -1)
+        if len(data) >= at + struct.calcsize(layout):
+            timescale, length = struct.unpack_from(layout, data, at)
+            track.timescale = timescale or track.timescale
+            known = length != unknown and length != 0xFFFFFFFFFFFFFFFF
+            track.length = length if known else 0
+    elif kind == b"stts" and len(data) >= 8:
+        count = min(struct.unpack_from(">I", data, 4)[0], (len(data) - 8) // 8)
+        track.held = sum(
+            n * delta for n, delta in struct.iter_unpack(">II", data[8 : 8 + count * 8])
+        )
 
 
 def _run_length(data: bytes, default: int) -> int:

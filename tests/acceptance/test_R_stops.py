@@ -28,7 +28,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -52,13 +52,15 @@ from tests.conftest import NavidromeFactory
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.engine import EngineParts, catalog_release, engine_for
 from tests.harness.fake_addon import FakeTrack
+from tests.harness.fragmented import fragmented_mp4, is_fragmented
 from tests.harness.library import Album, Track, frequency_for, tone, write_album
+from tests.harness.music_import_formats import IMPORT_FORMATS, import_tone
 from tests.harness.navidrome import NavidromeInstance
 
 pytestmark = pytest.mark.anyio
 
 ROOT = Path(__file__).resolve().parents[2]
-AUDIO = {".flac", ".m4a", ".mp4", ".mp3", ".ogg", ".opus"}
+AUDIO = tagging.DELIVERED_SUFFIXES  # (every container delivered audio may be)
 MATERIALIZE_STEPS = ["intended", "staged", "in place", "verified", "recorded"]
 
 
@@ -629,6 +631,55 @@ def test_a_new_placeholder_scanned_before_its_row_waits_for_it(world: DeliveryWo
     assert response.status_code == 200 and response.content == audio.read_bytes()
 
 
+@pytest.mark.parametrize("step", ["swapped", "verified"])
+def test_a_kept_stream_whose_library_write_stops_stays_a_placeholder_and_is_kept_later(
+    world: DeliveryWorld, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    """A streamed song handed over to be kept, its swap stopped part way (its
+    compensation runs): its row and file stay together as a placeholder, the work folder
+    keeps nothing of it, and a later play in full keeps it."""
+    retention = world.services.deliverer.retention
+    assert retention is not None
+    monkeypatch.setattr(retention, "enabled", True)
+    engine = world.services.engine
+    song, _, audio = world.placeholder_track(f"r-kept-{step}", [world.addons[0]])
+    stopped: list[str] = []
+
+    async def stop(name: str) -> None:
+        if name == f"replacement {step}":
+            stopped.append(name)
+            raise RuntimeError("a stop")
+
+    engine.step = stop
+    try:
+        assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
+        deadline = time.monotonic() + 20
+        while not stopped or retention._held:
+            assert time.monotonic() < deadline, "the kept stream was not handed over"
+            time.sleep(0.1)
+    finally:
+        engine.step = None
+
+    async def rows() -> Any:
+        return await world.services.store.fetchone(
+            "SELECT * FROM placeholders WHERE song_id = ?", [song]
+        )
+
+    row = call(world, rows)
+    assert row["state"] == "placeholder"
+    silent = engine.layout.absolute(str(row["placeholder_path"]))
+    marker = tagging.marker_of(silent)
+    assert marker is not None and marker.silence
+    assert not list(engine.layout.staging.glob("backup-*"))
+    work = world.services.download_first.work_dir
+    assert [p.name for p in work.iterdir()] == []
+    assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
+    deadline = time.monotonic() + 20
+    while call(world, rows)["state"] != "delivered":
+        assert time.monotonic() < deadline, "the later play was not kept"
+        time.sleep(0.1)
+
+
 def test_delivered_audio_plays_after_a_revert_a_stop_interrupted_never_its_silence(
     world: DeliveryWorld,
 ) -> None:
@@ -986,6 +1037,33 @@ async def test_a_replacement_killed_at_any_step_ends_with_the_file_its_row_names
 
 
 @pytest.mark.parametrize("step", SWAP_STEPS)
+@pytest.mark.parametrize("key", ["wavpack", "wma", "wav-pcm", "matroska-flac"])
+async def test_a_replacement_in_another_container_killed_at_any_step_is_put_right(
+    navidrome: NavidromeInstance, state: Path, tmp_path: Path, key: str, step: str
+) -> None:
+    """Kept streams keep their add-on's container (APEv2, ASF, ID3 in WAVE, Matroska): its
+    marker tells the start's repair which file the row names, as for the others."""
+    name = f"r-replace-{key}-" + step.replace(" ", "-")
+    song, folder = await one_placeholder(navidrome, state, name)
+    formats = {f.key: f for f in IMPORT_FORMATS}
+    sample = import_tone(tmp_path / name, formats[key], tagged=False)
+    await kill_at(
+        navidrome, state, swap_step("replacement", step), action="replace", song=song,
+        delivered=str(sample),
+    )  # fmt: skip
+    async with restarted(navidrome, state) as parts:
+        recorded = await assert_in_step(parts, folder)
+        row = await row_of(parts, song)
+        assert row["state"] == ("delivered" if step == "committed" else "placeholder")
+        if row["state"] == "delivered":
+            assert str(row["path"]).endswith(sample.suffix) and row["path"] in recorded
+        else:
+            await parts.engine.replace_with_delivered(song, sample)
+        assert await parts.engine.revert_to_placeholder(song)
+        await assert_in_step(parts, folder)
+
+
+@pytest.mark.parametrize("step", SWAP_STEPS)
 @pytest.mark.parametrize("fmt", ["flac", "m4a"])
 async def test_a_revert_killed_at_any_step_ends_with_the_file_its_row_names(
     navidrome: NavidromeInstance, state: Path, tmp_path: Path, fmt: str, step: str
@@ -999,6 +1077,120 @@ async def test_a_revert_killed_at_any_step_ends_with_the_file_its_row_names(
         await assert_in_step(parts, folder)
         row = await row_of(parts, song)
         assert row["state"] == ("placeholder" if step == "committed" else "delivered")
+
+
+@pytest.mark.parametrize("step", SWAP_STEPS)
+@pytest.mark.parametrize("codec", ["aac", "flac"])
+async def test_delivered_audio_put_in_one_piece_killed_at_any_step_is_put_right(
+    navidrome: NavidromeInstance, state: Path, tmp_path: Path, codec: str, step: str
+) -> None:
+    """Delivered audio in fragments replaced by the same audio in one piece
+    (``redeliver``): at the same path (AAC, in an M4A both) the file in place stays - both
+    are its delivered audio -; to another (FLAC: .m4a to .flac) the file the row names, the
+    other one beside it going. Either way the next start ends with one file of the song, its
+    row and Navidrome in step, and the song can be swapped again."""
+    key = f"r-one-piece-{codec}-" + step.replace(" ", "-")
+    song, folder = await one_placeholder(navidrome, state, key)
+    pieces = fragmented_mp4(tmp_path / "fragments.m4a", frequency_for(key), 3, codec)
+    async with engine_for(navidrome, state) as parts:
+        await parts.engine.replace_with_delivered(song, pieces)  # (as delivered before)
+    whole = tmp_path / f"whole.{'flac' if codec == 'flac' else 'm4a'}"
+    await anyio.run_process(
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(pieces), "-map", "0:a:0", "-c",
+         "copy", *(["-f", "flac"] if codec == "flac" else ["-f", "mp4"]), str(whole)],
+    )  # fmt: skip
+    await kill_at(
+        navidrome, state, swap_step("redelivery", step), action="redeliver", song=song,
+        delivered=str(whole),
+    )  # fmt: skip
+    async with restarted(navidrome, state) as parts:
+        recorded = await assert_in_step(parts, folder)
+        row = await row_of(parts, song)
+        assert row["state"] == "delivered" and row["path"] in recorded
+        moved = codec == "flac" and step == "committed"
+        assert str(row["path"]).endswith(".flac" if moved else ".m4a")
+        listed = await parts.navidrome.song(song)
+        assert listed is not None and listed["path"] == row["path"]
+        if not str(row["path"]).endswith(whole.suffix) or is_fragmented(
+            parts.layout.absolute(str(row["path"]))
+        ):
+            assert await parts.engine.redeliver(song, whole, unused_since=float("inf"))
+        assert await parts.engine.revert_to_placeholder(song)
+        await assert_in_step(parts, folder)
+
+
+@pytest.mark.parametrize("how", ["second rename", "scan", "swapped", "verified", "committed"])
+@pytest.mark.parametrize("codec", ["aac", "flac"])
+async def test_a_redelivery_that_fails_in_the_app_keeps_the_song_s_audio(
+    navidrome: NavidromeInstance, state: Path, tmp_path: Path, codec: str, how: str
+) -> None:
+    """A redelivery failing in the running app - its second rename, Navidrome's scan, or a
+    failure at a step: the files are put right at once from the backup, which goes only once
+    Navidrome confirms the file the row names - never the backup of the only audio while its
+    path is empty (at the same path the row reads the same before and after the swap)."""
+    key = f"r-one-piece-fails-{codec}-" + how.replace(" ", "-")
+    song, folder = await one_placeholder(navidrome, state, key)
+    pieces = fragmented_mp4(tmp_path / "fragments.m4a", frequency_for(key), 3, codec)
+    whole = tmp_path / f"whole.{'flac' if codec == 'flac' else 'm4a'}"
+    await anyio.run_process(
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(pieces), "-map", "0:a:0", "-c",
+         "copy", *(["-f", "flac"] if codec == "flac" else ["-f", "mp4"]), str(whole)],
+    )  # fmt: skip
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        await engine.replace_with_delivered(song, pieces)  # (as delivered before)
+        rename, scanned = engine_module.os.replace, engine._song_at
+        failures = []
+
+        def replace(src: Any, dst: Any) -> None:
+            staged = Path(src).parent == parts.layout.staging
+            if how == "second rename" and not failures and staged and "backup-" not in str(dst):
+                failures.append(dst)
+                raise OSError("a failure")
+            rename(src, dst)
+
+        async def song_at(*args: Any, **kwargs: Any) -> bool:
+            if how == "scan" and not failures:
+                failures.append("scan")
+                raise NavidromeError("unavailable")
+            return await scanned(*args, **kwargs)
+
+        async def stop(name: str) -> None:
+            if name == f"redelivery {how}":
+                raise RuntimeError("a failure")
+
+        engine_module.os.replace = replace  # type: ignore[assignment]
+        engine._song_at = song_at  # type: ignore[method-assign]
+        engine.step = stop
+        try:
+            with pytest.raises((ReplaceError, RuntimeError)) if how != "committed" else _never():
+                await engine.redeliver(song, whole, unused_since=float("inf"))
+        except RuntimeError:
+            assert how == "committed"  # (raised after its row's update: the new file stays)
+        finally:
+            engine_module.os.replace = rename  # type: ignore[assignment]
+            engine._song_at = scanned  # type: ignore[method-assign]
+            engine.step = None
+        recorded = await assert_in_step(parts, folder)
+        row = await row_of(parts, song)
+        assert row["state"] == "delivered" and row["path"] in recorded
+        path = parts.layout.absolute(str(row["path"]))
+        assert path.exists() and tagging.marker_of(path) is not None
+        assert list(parts.layout.staging.glob(f"backup-{song}.*")) == []
+        if how == "committed":
+            assert not is_fragmented(path) and path.suffix == whole.suffix
+        elif codec == "flac" or how == "second rename":
+            assert is_fragmented(path)  # (the row's file, from its backup)
+        # Swapped again from there, as the next sweep does.
+        assert await engine.redeliver(song, whole, unused_since=float("inf"))
+        now = parts.layout.absolute(str((await row_of(parts, song))["path"]))
+        assert now.suffix == whole.suffix and not is_fragmented(now)
+        await assert_in_step(parts, folder)
+
+
+@contextmanager
+def _never() -> Iterator[None]:
+    yield
 
 
 @pytest.mark.parametrize("step", SWAP_STEPS)
@@ -1551,3 +1743,921 @@ async def test_a_canceled_removal_is_put_back_without_waiting_for_navidrome(
         monkeypatch.setattr(parts.scans, "until", until)
         assert await engine.repair_removals() == 1
         assert len(await assert_in_step(parts, result.folder)) == 2
+
+
+# --- music imports: the copy that joins an album, and the link to a library song -------
+
+
+class _Stopped(BaseException):
+    """A stop between two steps (the worker's own interruption path)."""
+
+
+async def _restart(w: Any) -> None:
+    """Close the import service and open a new one over the same state and root."""
+    from shijhon.music_imports import MusicImports
+
+    old = w.imports
+    await old.aclose()
+    w.imports = MusicImports(
+        old.store,
+        old.access,
+        library_id=old.library_id,
+        library_path=old.storage.library,
+        limits=old.limits,
+        scan=old.scan,
+        native_lookup=old.native_lookup,
+        refresh=old.refresh,
+        native_song=old.native_song,
+    )
+    await w.imports.initialize()
+
+
+async def _finish(w: Any, name: str, job_id: str, state: str) -> dict[str, Any]:
+    from tests.acceptance.test_music_import_overlap import settle
+
+    owner = w.users[name][0]
+    status = await w.imports.status(owner, job_id)
+    assert status["state"] == "paused" and status["error"] == "interrupted", status
+    await w.imports.resume(owner, job_id)
+    return await settle(w, name, job_id, state)
+
+
+def _incoming(w: Any) -> set[str]:
+    return {
+        p.name for p in (w.nd.music / "_imports" / ".incoming").iterdir() if p.name != ".ndignore"
+    }
+
+
+@pytest.mark.parametrize("when", ["planned", "after-copy", "in-transaction"])
+async def test_an_import_copy_stopped_at_any_step_is_made_once(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    """A copy is recorded, with its reservation, before its bytes are written: a stop at
+    any step leaves a record of every copy file there is, and the import ends with one
+    copy."""
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_overlap import LANTERNS, LIBRARY, world
+
+    nd = navidrome_factory()
+    write_album(nd.music, LIBRARY)
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "ben"
+    dated = write_album(
+        source,
+        dataclasses.replace(LIBRARY, tracks=LANTERNS[4:5], release_date="2020-03-01", folder="D"),
+    )
+    job = await w.imports.create(ben, "copy-stop")
+    from shijhon.music_imports import ManifestEntry
+
+    job = await w.imports.declare(
+        ben, job["id"], "page", [ManifestEntry("f0", "D/" + dated[0].name, dated[0].stat().st_size)]
+    )
+    await w.imports.seal(ben, job["id"])
+    data = dated[0].read_bytes()
+
+    async def stream() -> Any:
+        yield data
+
+    await w.imports.receive(ben, job["id"], job["items"][0]["id"], 0, stream())
+    await w.imports.review(ben, job["id"])
+    if when == "planned":
+
+        async def stop_before(self: Any, *args: Any) -> Any:
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_retag", stop_before)
+    elif when == "after-copy":
+        made = service_module.MusicImports._retag
+
+        async def stop_after(self: Any, *args: Any) -> Any:
+            await made(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_retag", stop_after)
+    else:
+        copied = service_module.MusicImports._copied
+
+        async def stop_in(self: Any, *args: Any) -> None:
+            await copied(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_copied", stop_in)
+    with pytest.raises(_Stopped):
+        await w.imports.tick()
+    monkeypatch.undo()
+    # Every copy file there is has its record, reserving its storage.
+    [planned] = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from<>''")
+    assert planned["state"] == "discarding" and planned["reserved_size"] > 0
+    original = await w.store.fetchone("SELECT * FROM music_import_items WHERE derived_from=''")
+    assert original["state"] == "copying"
+    assert _incoming(w) <= {original["staging_name"], planned["staging_name"]}
+    assert (planned["staging_name"] in _incoming(w)) == (when != "planned")
+    await _restart(w)
+    assert not await w.store.fetchone("SELECT 1 FROM music_import_items WHERE derived_from<>''")
+    assert _incoming(w) == {original["staging_name"]}
+    review = await _finish(w, "ben", job["id"], "review")
+    [item] = review["items"]
+    assert item["outcome"] == "copy"
+    copies = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from<>''")
+    assert len(copies) == 1
+    original = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    assert _incoming(w) == {original["staging_name"], copies[0]["staging_name"]}
+    from tests.acceptance.test_music_import_overlap import approve
+
+    done = await approve(w, "ben", review)
+    assert done["complete_files"] == 1
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("when", ["in-transaction", "after-commit"])
+async def test_an_import_link_stopped_at_any_step_links_once(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_overlap import LANTERNS, LIBRARY, settle, upload, world
+
+    nd = navidrome_factory()
+    write_album(nd.music, LIBRARY)
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "ben"
+    files = write_album(
+        source, dataclasses.replace(LIBRARY, tracks=LANTERNS[:1], fmt="mp3", folder="S")
+    )
+    review = await upload(w, "ben", files, source, "link-stop")
+    assert [i["outcome"] for i in review["items"]] == ["linked"]
+    await w.imports.approve(ben, review["id"], review["revision"], "go")
+    if when == "in-transaction":
+        credit = service_module.record_link_credit
+
+        async def stop_in(*args: Any, **kwargs: Any) -> bool:
+            await credit(*args, **kwargs)
+            raise _Stopped
+
+        monkeypatch.setattr(service_module, "record_link_credit", stop_in)
+        with pytest.raises(_Stopped):
+            await w.imports.tick()
+        assert await w.store.fetchone("SELECT 1 FROM music_import_links") is None
+        assert (
+            await w.store.fetchone(
+                "SELECT 1 FROM collection_originals WHERE provenance_id GLOB 'link:*'"
+            )
+            is None
+        )
+    else:
+        assert await w.imports.tick()  # the link commits
+
+        async def stop(*args: Any) -> None:
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_release_linked", stop)
+        with pytest.raises(_Stopped):
+            await w.imports.tick()
+        [row] = await w.store.fetchall("SELECT * FROM music_import_items")
+        assert row["state"] == "linked" and row["reserved_size"] > 0
+    monkeypatch.undo()
+    await _restart(w)
+    await w.imports.resume(ben, review["id"])
+    done = await settle(w, "ben", review["id"], "done")
+    assert done["linked_files"] == 1
+    assert len(await w.store.fetchall("SELECT * FROM music_import_links")) == 1
+    credits = await w.store.fetchall(
+        "SELECT * FROM collection_originals WHERE provenance_id GLOB 'link:*'"
+    )
+    assert len(credits) == 1
+    [row] = await w.store.fetchall("SELECT * FROM music_import_items")
+    assert row["reserved_size"] == 0 and row["staging_name"] not in _incoming(w)
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("when", ["in-transaction", "after-commit"])
+async def test_an_import_sent_back_to_review_when_stopped_at_any_step_is_reviewed_once(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    """Another import made the reviewed plan wrong (a second album of one name): the
+    import goes back to review once, whatever the stop."""
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_overlap import (
+        LANTERNS,
+        album_songs,
+        approve,
+        settle,
+        upload,
+        world,
+    )
+
+    nd = navidrome_factory()
+    w = await world(nd, tmp_path, ("ana", "ben"))
+    album = Album("Glass Orchard", "Paper Garden", LANTERNS[:4], folder="Paper Garden")
+    first = write_album(
+        tmp_path / "ana",
+        dataclasses.replace(album, tracks=LANTERNS[:2], release_date="2020-01-01"),
+    )
+    second = write_album(
+        tmp_path / "ben",
+        dataclasses.replace(album, tracks=LANTERNS[2:4], release_date="2020-06-01"),
+    )
+    review_a = await upload(w, "ana", first, tmp_path / "ana", "ana-import")
+    review_b = await upload(w, "ben", second, tmp_path / "ben", "ben-import")
+    await approve(w, "ana", review_a)
+    ben = w.users["ben"][0]
+    await w.imports.approve(ben, review_b["id"], review_b["revision"], "go-b")
+    if when == "in-transaction":
+        reset = service_module.MusicImports._reset_overlap
+
+        async def stop_in(self: Any, conn: Any, job_id: str) -> None:
+            await reset(self, conn, job_id)
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_reset_overlap", stop_in)
+    else:
+        back = service_module.MusicImports._back_to_review
+
+        async def stop_after(self: Any, *args: Any) -> None:
+            await back(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_back_to_review", stop_after)
+    with pytest.raises(_Stopped):
+        for _ in range(20):
+            await w.imports.tick()
+    monkeypatch.undo()
+    job = await w.store.fetchone("SELECT * FROM music_import_jobs WHERE id=?", [review_b["id"]])
+    assert (job["approved_revision"] is None) == (when == "after-commit")
+    assert not await w.store.fetchone(
+        "SELECT 1 FROM music_import_items WHERE job_id=? AND state<>'eligible'", [review_b["id"]]
+    )
+    await _restart(w)
+    await w.imports.resume(ben, review_b["id"])
+    again = await settle(w, "ben", review_b["id"], "review")
+    assert {i["outcome"] for i in again["items"]} == {"copy"}
+    await approve(w, "ben", again)
+    songs = await album_songs(w, "ben", "Paper Garden")
+    assert sorted(s["title"] for s in songs) == [f"Lantern {n}" for n in range(1, 5)]
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("finished", ["at the start", "when checked", "when idle"])
+async def test_copies_a_new_review_gives_up_keep_their_reservation_until_deleted(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    finished: str,
+) -> None:
+    """Reviewing again gives up the review's copies: a stop after that is recorded, before
+    their private bytes are deleted, leaves each copy's row and reservation until its bytes
+    are gone - finished at the next start, before the import is checked again, or by the
+    idle worker for an import stopped meanwhile."""
+    from tests.acceptance.test_music_import_overlap import LANTERNS, LIBRARY, settle, upload, world
+
+    nd = navidrome_factory()
+    write_album(nd.music, LIBRARY)
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "ben"
+    dated = write_album(
+        source,
+        dataclasses.replace(LIBRARY, tracks=LANTERNS[4:6], release_date="2020-03-01", folder="D"),
+    )
+    review = await upload(w, "ben", dated, source, "copies-stop")
+    assert [i["outcome"] for i in review["items"]] == ["copy", "copy"]
+    copies = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from<>''")
+    reserved = await w.store.fetchone("SELECT sum(reserved_size) AS n FROM music_import_items")
+
+    def stop(name: str) -> None:
+        raise _Stopped
+
+    monkeypatch.setattr(w.imports.storage, "discard_attempt", stop)
+    with pytest.raises(_Stopped):
+        await w.imports.review(ben, review["id"], exclude=[review["items"][0]["id"]])
+    monkeypatch.undo()
+    left = await w.store.fetchall(
+        "SELECT * FROM music_import_items WHERE derived_from<>'' ORDER BY id"
+    )
+    assert [r["state"] for r in left] == ["discarding", "discarding"]
+    assert sorted(r["reserved_size"] for r in left) == sorted(c["reserved_size"] for c in copies)
+    assert (await w.store.fetchone("SELECT sum(reserved_size) AS n FROM music_import_items"))[
+        "n"
+    ] == reserved["n"]
+    assert {c["staging_name"] for c in copies} <= _incoming(w)
+    if finished == "at the start":
+        await _restart(w)
+        assert not await w.store.fetchone("SELECT 1 FROM music_import_items WHERE derived_from<>''")
+        assert not {c["staging_name"] for c in copies} & _incoming(w)
+        again = await _finish(w, "ben", review["id"], "review")
+    elif finished == "when checked":
+        again = await settle(w, "ben", review["id"], "review")
+    else:
+        await w.imports.cancel(ben, review["id"])
+        while await w.imports.tick():
+            pass
+        assert not await w.store.fetchone("SELECT 1 FROM music_import_items WHERE derived_from<>''")
+        assert not {c["staging_name"] for c in copies} & _incoming(w)
+        await w.caller.aclose()
+        await w.imports.aclose()
+        await w.store.close()
+        return
+    assert sorted(i["state"] for i in again["items"]) == ["excluded", "joined"]
+    [copy] = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from<>''")
+    originals = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from=''")
+    assert _incoming(w) == {copy["staging_name"], *(o["staging_name"] for o in originals)}
+    total = await w.store.fetchone("SELECT sum(reserved_size) AS n FROM music_import_items")
+    assert total["n"] == copy["reserved_size"] + sum(o["reserved_size"] for o in originals)
+    assert again["copy_files"] == 1
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("finished", ["at the start", "when checked", "when idle"])
+async def test_a_copy_stopped_while_made_is_deleted_also_when_its_file_is_excluded(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    finished: str,
+) -> None:
+    """A stop after a copy's bytes are written, before it is complete; the import resumed
+    and reviewed again without that file (no longer to be copied); a stop before the
+    copy's bytes are deleted: its record keeps the copy and its reservation until its bytes
+    are gone - at the next start, before the import is checked again, or by the idle
+    worker for an import stopped meanwhile. No private file is left without a record."""
+    from shijhon.music_imports import ManifestEntry
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_overlap import LANTERNS, LIBRARY, settle, world
+
+    nd = navidrome_factory()
+    write_album(nd.music, LIBRARY)
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "ben"
+    dated = write_album(
+        source,
+        dataclasses.replace(LIBRARY, tracks=LANTERNS[4:5], release_date="2020-03-01", folder="D"),
+    )
+    job = await w.imports.create(ben, "copy-excluded")
+    job = await w.imports.declare(
+        ben, job["id"], "page", [ManifestEntry("f0", "D/" + dated[0].name, dated[0].stat().st_size)]
+    )
+    await w.imports.seal(ben, job["id"])
+    data = dated[0].read_bytes()
+
+    async def stream() -> Any:
+        yield data
+
+    item_id = job["items"][0]["id"]
+    await w.imports.receive(ben, job["id"], item_id, 0, stream())
+    await w.imports.review(ben, job["id"])
+    made = service_module.MusicImports._retag
+
+    async def stop_after(self: Any, *args: Any) -> Any:
+        await made(self, *args)
+        raise _Stopped
+
+    monkeypatch.setattr(service_module.MusicImports, "_retag", stop_after)
+    with pytest.raises(_Stopped):
+        await w.imports.tick()
+    monkeypatch.undo()
+    [copy] = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from<>''")
+    assert copy["staging_name"] in _incoming(w)
+    await w.imports.resume(ben, job["id"])
+
+    def stop(name: str) -> None:
+        raise _Stopped
+
+    monkeypatch.setattr(w.imports.storage, "discard_attempt", stop)
+    with pytest.raises(_Stopped):
+        await w.imports.review(ben, job["id"], exclude=[item_id])
+    monkeypatch.undo()
+    [left] = await w.store.fetchall("SELECT * FROM music_import_items WHERE derived_from<>''")
+    assert left["id"] == copy["id"] and left["state"] == "discarding"
+    assert left["reserved_size"] == copy["reserved_size"] > 0
+    original = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item_id])
+    assert original["state"] == "received" and original["review_excluded"] == 1
+    assert _incoming(w) == {original["staging_name"], copy["staging_name"]}
+    if finished == "at the start":
+        await _restart(w)
+        again = await _finish(w, "ben", job["id"], "review")
+    elif finished == "when checked":
+        again = await settle(w, "ben", job["id"], "review")
+    else:
+        await w.imports.cancel(ben, job["id"])
+        kept = await w.store.fetchone(
+            "SELECT reserved_size FROM music_import_items WHERE id=?", [copy["id"]]
+        )
+        assert kept["reserved_size"] == copy["reserved_size"]  # (until its bytes are gone)
+        while await w.imports.tick():
+            pass
+        again = await w.imports.status(ben, job["id"])
+    assert not await w.store.fetchone("SELECT 1 FROM music_import_items WHERE derived_from<>''")
+    assert _incoming(w) == {original["staging_name"]}
+    if finished != "when idle":
+        assert [i["state"] for i in again["items"]] == ["excluded"]
+        assert again["copy_files"] == 0
+    total = await w.store.fetchone("SELECT sum(reserved_size) AS n FROM music_import_items")
+    kept = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item_id])
+    assert total["n"] == kept["reserved_size"]
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("when", ["probed", "compared"])
+async def test_a_legacy_approved_import_stopped_at_any_step_is_compared_once(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_overlap import (
+        LANTERNS,
+        LIBRARY,
+        album_songs,
+        approve,
+        upload,
+        world,
+    )
+
+    nd = navidrome_factory()
+    write_album(nd.music, LIBRARY)
+    w = await world(nd, tmp_path, ("ben",))
+    source = tmp_path / "ben"
+    files = write_album(
+        source, dataclasses.replace(LIBRARY, tracks=LANTERNS[:2], fmt="mp3", folder="S")
+    )
+    review = await upload(w, "ben", files, source, "legacy")
+    await w.store.execute(
+        "UPDATE music_import_items SET state='eligible',facts='',outcome='',match=''"
+    )
+    await w.store.execute(
+        "UPDATE music_import_jobs SET state='approved',approved_revision=revision,"
+        "approval_key='old'"
+    )
+    if when == "probed":
+        probe = service_module.MusicImports._probe
+        calls = 0
+
+        async def stop_after(self: Any, item: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            found = await probe(self, item)
+            if calls == 2:
+                raise _Stopped
+            return found
+
+        monkeypatch.setattr(service_module.MusicImports, "_probe", stop_after)
+    else:
+        decide = service_module.MusicImports._decide
+
+        async def stop_in(self: Any, *args: Any, **kwargs: Any) -> Any:
+            await decide(self, *args, **kwargs)
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_decide", stop_in)
+    with pytest.raises(_Stopped):
+        for _ in range(10):
+            await w.imports.tick()
+    monkeypatch.undo()
+    rows = await w.store.fetchall("SELECT * FROM music_import_items")
+    assert all(r["state"] == "eligible" and r["outcome"] == "" for r in rows)
+    await _restart(w)
+    again = await _finish(w, "ben", review["id"], "review")
+    assert {i["outcome"] for i in again["items"]} == {"linked"}
+    done = await approve(w, "ben", again)
+    assert done["linked_files"] == 2 and len(await album_songs(w, "ben")) == 4
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("when", ["stopped", "deleted"])
+async def test_a_stopped_imports_linked_files_keep_their_reservation_until_deleted(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_overlap import LANTERNS, LIBRARY, upload, world
+
+    nd = navidrome_factory()
+    write_album(nd.music, LIBRARY)
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "ben"
+    files = write_album(
+        source, dataclasses.replace(LIBRARY, tracks=LANTERNS[:1], fmt="mp3", folder="S")
+    )
+    review = await upload(w, "ben", files, source, "link-cancel")
+    await w.imports.approve(ben, review["id"], review["revision"], "go")
+    assert await w.imports.tick()  # the link commits; its bytes are still there
+    await w.imports.cancel(ben, review["id"])
+    [row] = await w.store.fetchall("SELECT * FROM music_import_items")
+    assert row["state"] == "linked" and row["reserved_size"] == row["received_size"] > 0
+    assert row["staging_name"] in _incoming(w)
+    if when == "deleted":
+        discard = w.imports.storage.discard_attempt
+
+        def stop_after(name: str) -> None:
+            discard(name)
+            raise _Stopped
+
+        monkeypatch.setattr(w.imports.storage, "discard_attempt", stop_after)
+        with pytest.raises(_Stopped):
+            await w.imports.tick()
+        monkeypatch.undo()
+        [row] = await w.store.fetchall("SELECT * FROM music_import_items")
+        assert row["reserved_size"] > 0 and row["staging_name"] not in _incoming(w)
+    await _restart(w)
+    while await w.imports.tick():
+        pass
+    [row] = await w.store.fetchall("SELECT * FROM music_import_items")
+    assert row["reserved_size"] == 0 and row["staging_name"] not in _incoming(w)
+    await w.imports.aclose()
+    await w.store.close()
+    del service_module
+
+
+# --- music imports: an import's audio in catalog songs, and upgrades of own imports ---------
+
+
+async def _audio_ready(nd: Any, tmp_path: Path) -> tuple[Any, PlaceholderEngine, str, Any]:
+    """A catalog song and Ben's approved import of it, its audio still to go in."""
+    from tests.acceptance.test_music_import_audio import (
+        RELEASE,
+        approve,
+        audio_world,
+        refresh_all,
+        tracks_of,
+        upload,
+    )
+
+    w, engine = await audio_world(nd, tmp_path, ("ben",))
+    release = dataclasses.replace(RELEASE, tracks=RELEASE.tracks[:1])
+    made = await engine.materialize(release)
+    [song] = made.created.values()
+    await refresh_all(w)
+    source = tmp_path / "ben"
+    files = write_album(source, dataclasses.replace(tracks_of(release, "mp3")))
+    review = await upload(w, "ben", files, source, "audio-stop")
+    done = await approve(w, "ben", review)
+    return w, engine, song, done
+
+
+async def _repaired(engine: PlaceholderEngine) -> None:
+    """The engine's repair of swaps a stop interrupted, as the next start does it."""
+    for song in engine.interrupted():
+        await engine.recover_swap(song)
+
+
+@pytest.mark.parametrize(
+    "when", ["replacement swapped", "replacement verified", "replacement committed", "recorded"]
+)
+async def test_an_imports_audio_stopped_at_any_step_goes_into_its_catalog_song_once(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    from shijhon.music_imports import service as service_module
+    from tests.acceptance.test_music_import_audio import drain
+
+    nd = navidrome_factory()
+    w, engine, song, _ = await _audio_ready(nd, tmp_path)
+    if when == "recorded":
+
+        async def stop(*args: Any) -> None:
+            raise _Stopped
+
+        monkeypatch.setattr(service_module.MusicImports, "_audio_is", stop)
+    else:
+
+        async def step(at: str) -> None:
+            if at == when:
+                raise _Stopped
+
+        engine.step = step
+    with pytest.raises(_Stopped):
+        await drain(w)
+    monkeypatch.undo()
+    engine.step = None
+    await _repaired(engine)
+    await drain(w)
+    [row] = await w.store.fetchall("SELECT * FROM placeholders")
+    [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+    assert row["song_id"] == song and row["state"] == "delivered"
+    assert row["import_item"] == link["item_id"] and link["audio"] == "placed"
+    folder = (nd.music / row["path"]).parent
+    assert sorted(p.suffix for p in folder.iterdir()) == [".mp3"]  # no other file of it
+    assert not engine.interrupted()
+    native = await w.call("ben", "getSong", {"id": song})
+    assert native["song"]["suffix"] == "mp3"
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("left", ["pending", "low_quality"])
+async def test_an_imports_audio_in_place_before_its_record_stays_its_own_when_the_minimum_rises(
+    navidrome_factory: NavidromeFactory, tmp_path: Path, left: str
+) -> None:
+    """A stop after the engine put the import's audio in but before the link recorded it,
+    then the importer's minimum rises above the file: the song keeps playing the import's
+    audio, so the link records it as placed and keeps its copy reserved - and the import's
+    removal takes it out again. ``low_quality``: such a link without its reservation is
+    put right too."""
+    from shijhon.quality import Minimum
+    from tests.acceptance.test_music_import_audio import advance, drain
+
+    nd = navidrome_factory()
+    w, engine, song, done = await _audio_ready(nd, tmp_path)
+    ben = w.users["ben"][0]
+
+    async def step(at: str) -> None:
+        if at == "replacement committed":
+            raise _Stopped
+
+    engine.step = step
+    with pytest.raises(_Stopped):
+        await drain(w)
+    engine.step = None
+    [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+    [row] = await w.store.fetchall("SELECT * FROM placeholders")
+    assert link["audio"] == "pending" and link["reserved"] > 0
+    assert row["state"] == "delivered" and row["import_item"] == link["item_id"]
+    if left == "low_quality":
+        async with w.store.transaction() as conn:
+            await conn.execute(
+                "UPDATE music_import_items SET reserved_size=reserved_size-? WHERE id=?",
+                [link["reserved"], link["item_id"]],
+            )
+            await conn.execute("UPDATE music_import_links SET audio='low_quality',reserved=0")
+
+    async def lossless_only(user_id: str) -> Minimum:
+        return Minimum(kbps=0, lossless_only=True)
+
+    w.imports.minimum = lossless_only  # the import's MP3 is below it now
+    await _repaired(engine)
+    await drain(w)
+    [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+    [item] = await w.store.fetchall(
+        "SELECT * FROM music_import_items WHERE id=?", [link["item_id"]]
+    )
+    assert link["audio"] == "placed" and link["reserved"] > 0
+    assert item["reserved_size"] == item["received_size"] + link["reserved"]
+    [row] = await w.store.fetchall("SELECT * FROM placeholders")
+    assert row["state"] == "delivered" and row["import_item"] == link["item_id"]
+    # Removing the import takes its audio out of the catalog song, then its reservation.
+    await w.removals.review(ben, done["id"])
+    status = await advance(w.removals, ben, done["id"], "review")
+    await w.removals.approve(ben, done["id"], status["fingerprint"], "remove")
+    await advance(w.removals, ben, done["id"], "removed")
+    await drain(w)
+    [row] = await w.store.fetchall("SELECT * FROM placeholders")
+    [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+    assert row["state"] == "placeholder" and row["import_item"] is None
+    assert link["active"] == 0 and link["audio"] == "pending" and link["reserved"] == 0
+    assert (await w.call("ben", "getSong", {"id": song}))["song"]["suffix"] == "flac"
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("when", ["revert swapped", "revert verified", "revert committed"])
+async def test_a_removed_imports_audio_stopped_at_any_step_leaves_its_catalog_song(
+    navidrome_factory: NavidromeFactory, tmp_path: Path, when: str
+) -> None:
+    from tests.acceptance.test_music_import_audio import advance, drain
+
+    nd = navidrome_factory()
+    w, engine, song, done = await _audio_ready(nd, tmp_path)
+    ben = w.users["ben"][0]
+    await drain(w)
+    await w.removals.review(ben, done["id"])
+    status = await advance(w.removals, ben, done["id"], "review")
+    await w.removals.approve(ben, done["id"], status["fingerprint"], "remove")
+    await advance(w.removals, ben, done["id"], "removed")
+
+    async def step(at: str) -> None:
+        if at == when:
+            raise _Stopped
+
+    engine.step = step
+    with pytest.raises(_Stopped):
+        await drain(w)
+    engine.step = None
+    await _repaired(engine)
+    await drain(w)
+    [row] = await w.store.fetchall("SELECT * FROM placeholders")
+    [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+    assert row["state"] == "placeholder" and row["import_item"] is None
+    assert link["active"] == 0 and link["audio"] == "pending"
+    assert (await w.call("ben", "getSong", {"id": song}))["song"]["suffix"] == "flac"
+    await w.removals.restore(ben, done["id"])
+    await advance(w.removals, ben, done["id"], "restored")
+    await drain(w)
+    [row] = await w.store.fetchall("SELECT * FROM placeholders")
+    assert row["state"] == "delivered" and row["import_item"] == link["item_id"]
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize("when", ["swapped", "verified", "committed"])
+async def test_an_upgrade_stopped_at_any_step_keeps_one_song(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    from shijhon.music_imports import upgrade as upgrade_module
+    from shijhon.music_imports.upgrade import Upgrades, file_quality
+    from shijhon.quality import DEFAULT
+    from tests.acceptance.test_music_import_audio import audio_world, own_import, refresh_all
+
+    nd = navidrome_factory()
+    w, _ = await audio_world(nd, tmp_path, ("ana",), minimum=DEFAULT)
+    ana = w.users["ana"][0]
+    album = Album("Quiet Hollow", "Salt Lines", (Track("Brine", 1, seconds=4.0),), fmt="mp3",
+                  folder="Mine")  # fmt: skip
+    done, _ = await own_import(w, tmp_path, "ana", album)
+    [item] = done["items"]
+    song = item["song_id"]
+    await refresh_all(w)
+    await w.call("ana", "star", {"id": song})
+    fetched = write_album(tmp_path / "addon", dataclasses.replace(album, fmt="flac", folder="A"))[0]
+    got = file_quality(fetched)
+
+    # A hard stop: nothing after the step runs, not even the roll back.
+    async def gone(*args: Any) -> None:
+        raise _Stopped
+
+    if when == "swapped":
+        swap = Upgrades._swap_files
+
+        def swapped(self: Any, *args: Any) -> None:
+            swap(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(Upgrades, "_swap_files", swapped)
+    elif when == "verified":
+        monkeypatch.setattr(Upgrades, "_commit", gone)
+    else:
+        commit = Upgrades._commit
+
+        async def committed(self: Any, *args: Any) -> None:
+            await commit(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(Upgrades, "_commit", committed)
+    monkeypatch.setattr(Upgrades, "_roll_back", gone)
+    with pytest.raises(_Stopped):
+        await w.imports.upgrades.upgrade(ana, song, fetched, got)
+    monkeypatch.undo()
+    assert upgrade_module.Upgrades._roll_back is not gone
+    # The next start: the worker rolls back an upgrade it did not finish.
+    while await w.imports.tick():
+        pass
+    row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    assert row["upgrade"] == ""
+    incoming = {p.name for p in (nd.music / "_imports" / ".incoming").iterdir()}
+    detail = (await w.call("ana", "getSong", {"id": song}))["song"]
+    assert detail["id"] == song and detail.get("starred")
+    if when == "committed":
+        assert row["final_name"].endswith(".flac") and detail["suffix"] == "flac"
+        assert json.loads(row["upgraded_from"])["staging"] in incoming
+    else:
+        assert row["final_name"].endswith(".mp3") and detail["suffix"] == "mp3"
+        assert row["upgraded_from"] == "" and incoming == {row["staging_name"], ".ndignore"}
+        assert not (nd.music / "_imports" / row["final_name"]).with_suffix(".flac").exists()
+        # It can be upgraded after all.
+        assert await w.imports.upgrades.upgrade(ana, song, fetched, got) == ""
+        assert (await w.call("ana", "getSong", {"id": song}))["song"]["suffix"] == "flac"
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
+@pytest.mark.parametrize(
+    "when",
+    ["reserved", "carried", "same format before the swap", "same format within the swap",
+     "roll back unscanned"],
+)  # fmt: skip
+async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    when: str,
+) -> None:
+    """Before its bytes exist, while they are made, and during a swap of a file of the same
+    format (the upgraded MP3 at the imported MP3's own name): recovery puts the imported
+    file back (or keeps it), releases what the upgrade reserved and leaves no bytes. A
+    roll back whose scan did not happen is finished by a later one."""
+    from shijhon.music_imports import upgrade as upgrade_module
+    from shijhon.music_imports.upgrade import Upgrades, file_quality
+    from shijhon.quality import DEFAULT
+    from tests.acceptance.test_music_import_audio import audio_world, own_import, refresh_all
+
+    nd = navidrome_factory()
+    w, _ = await audio_world(nd, tmp_path, ("ana",), minimum=DEFAULT)
+    ana = w.users["ana"][0]
+    album = Album("Quiet Hollow", "Salt Lines", (Track("Brine", 1, seconds=4.0),), fmt="mp3",
+                  folder="Mine")  # fmt: skip
+    done, _ = await own_import(w, tmp_path, "ana", album)
+    [item] = done["items"]
+    song = item["song_id"]
+    await refresh_all(w)
+    before = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    fetched = tmp_path / "addon.mp3"  # the add-ons' audio: an MP3 at a higher bitrate
+    await anyio.run_process(
+        ["ffmpeg", "-v", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+         "sine=frequency=440:sample_rate=44100", "-t", "4", "-c:a", "libmp3lame", "-b:a",
+         "320k", str(fetched)],
+    )  # fmt: skip
+    got = file_quality(fetched)
+
+    async def gone(*args: Any) -> None:
+        raise _Stopped
+
+    if when == "reserved":
+        monkeypatch.setattr(Upgrades, "_carry", gone)
+    elif when == "carried":
+        carry = Upgrades._carry
+
+        async def carried(self: Any, *args: Any) -> Any:
+            await carry(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(Upgrades, "_carry", carried)
+    elif when == "same format before the swap":
+
+        def stopped(*args: Any) -> None:  # the swap runs in a worker thread
+            raise _Stopped
+
+        monkeypatch.setattr(Upgrades, "_swap_files", stopped)
+    elif when == "same format within the swap":
+        unlink = upgrade_module._unlink_ours
+
+        def within(*args: Any, **kwargs: Any) -> bool:
+            unlink(*args, **kwargs)
+            raise _Stopped
+
+        monkeypatch.setattr(upgrade_module, "_unlink_ours", within)
+    else:
+        swap = Upgrades._swap_files
+
+        def swapped(self: Any, *args: Any) -> None:
+            swap(self, *args)
+            raise _Stopped
+
+        monkeypatch.setattr(Upgrades, "_swap_files", swapped)
+    monkeypatch.setattr(Upgrades, "_roll_back", gone)
+    with pytest.raises(_Stopped):
+        await w.imports.upgrades.upgrade(ana, song, fetched, got)
+    monkeypatch.undo()
+    row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    assert row["upgrade"] and row["reserved_size"] > before["reserved_size"]  # reserved first
+    if when == "roll back unscanned":
+        scan = w.imports.scan
+
+        async def unscanned(folders: Any) -> None:
+            raise OSError("the scan did not run")
+
+        w.imports.scan = unscanned
+        assert await w.imports.upgrades.recover() == 0  # the files went back; not verified yet
+        row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+        assert json.loads(row["upgrade"]) == {"phase": "verify"}
+        assert row["reserved_size"] == before["reserved_size"]
+        w.imports.scan = scan
+    while await w.imports.tick():
+        pass
+    row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    assert row["upgrade"] == "" and row["reserved_size"] == before["reserved_size"]
+    assert row["final_name"] == before["final_name"] and row["digest"] == before["digest"]
+    incoming = {p.name for p in (nd.music / "_imports" / ".incoming").iterdir()}
+    assert incoming == {row["staging_name"], ".ndignore"}
+    detail = (await w.call("ana", "getSong", {"id": song}))["song"]
+    assert detail["id"] == song and detail["size"] == before["expected_size"]
+    # It can be upgraded after all.
+    assert await w.imports.upgrades.upgrade(ana, song, fetched, got) == ""
+    row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    assert row["reserved_size"] == before["reserved_size"] + row["expected_size"]
+    detail = (await w.call("ana", "getSong", {"id": song}))["song"]
+    assert detail["id"] == song and detail["bitRate"] >= 300
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()

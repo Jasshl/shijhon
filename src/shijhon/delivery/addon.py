@@ -28,7 +28,8 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
@@ -46,6 +47,8 @@ from shijhon.matching.normalize import (
     same_title,
     version_marker,
 )
+
+BULK_API_GUARD: ContextVar[Callable[[], None] | None] = ContextVar("bulk_api_guard", default=None)
 
 MAX_JSON_BYTES = 1024 * 1024
 TRANSPORTS = {"none": "direct", "hls": "hls", "dash": "dash"}
@@ -353,6 +356,14 @@ class Availability:
 
 
 @dataclass(frozen=True)
+class CachedAvailability:
+    """A ready-only cached variant, selected independently of preferred quality."""
+
+    available: bool | None
+    selector: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
 class Wanted:
     """The recording a placeholder stands for. ``version``: "clean" or "explicit" when the
     catalog says which version it is."""
@@ -541,6 +552,10 @@ class Addon:
     def _url(self, resource: str, params: Mapping[str, str] | None = None) -> httpx.URL:
         defaults = self._manifest.defaults if self._manifest else {}
         query = self.base.params.merge(defaults).merge(self.settings).merge(params or {})
+        if resource == "cached" or resource.startswith("cached-stream/"):
+            # These endpoints select an actual cached variant, whatever the preferred
+            # quality saved in this add-on's usual settings or URL.
+            query = query.remove("quality").remove("atmos")
         path = self.base.raw_path.split(b"?", 1)[0].rstrip(b"/") + b"/" + resource.encode()
         if query:
             path += b"?" + str(query).encode()
@@ -556,9 +571,14 @@ class Addon:
         asked: list[AddonPace] = []  # the limits of the origin each hop went to
 
         async def turn(url: httpx.URL) -> None:
+            guard = BULK_API_GUARD.get()
+            if guard is not None:
+                guard()
             pace = self._pace_at(url)
             if pace is not None:
                 await pace.request()
+                if guard is not None:
+                    guard()  # a sibling may have answered 429 while this waited
                 asked.append(pace)
 
         def limited(named: float | None = None) -> None:
@@ -778,6 +798,44 @@ class Addon:
         value = data.get("available")
         available = value if isinstance(value, bool) else None
         return Availability(available, text(data.get("id")), data.get("preparing") is True)
+
+    async def cached(self, wanted: Wanted) -> CachedAvailability | None:
+        """A pure check for a cached recording; absent capability stays unknown."""
+        if "cached" not in (await self.manifest()).resources:
+            return None
+        params = {
+            "title": wanted.title,
+            "artist": wanted.artist,
+            "durationMs": str(wanted.duration_ms),
+        }
+        if wanted.isrc:
+            params["isrc"] = wanted.isrc
+        if wanted.version:
+            params["version"] = wanted.version
+        try:
+            data = await self._json("cached", params)
+        except AddonError as exc:
+            if exc.kind in ("unavailable", "expired"):
+                return CachedAvailability(False)
+            raise
+        if not isinstance(data, dict):
+            return CachedAvailability(None)
+        available = data.get("available")
+        selector = text(data.get("selector"))
+        if selector is not None and (len(selector) > 512 or selector in (".", "..")):
+            selector = None
+        if available is True and selector is None:
+            return CachedAvailability(None)
+        return CachedAvailability(available if isinstance(available, bool) else None, selector)
+
+    async def cached_stream(self, selector: str) -> StreamInfo:
+        """Ready-only retrieval: a missing/expired selector never invokes normal resolve."""
+        if "cached" not in (await self.manifest()).resources:
+            raise AddonError("unavailable", "add-on has no cached retrieval")
+        data = await self._json("cached-stream/" + _segment(selector))
+        if not isinstance(data, dict):
+            raise AddonError("broken", "cached stream response is not an object")
+        return StreamInfo.parse(data)
 
     @property
     def known(self) -> Manifest | None:

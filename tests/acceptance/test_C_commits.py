@@ -20,8 +20,10 @@ import pytest
 
 from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import CatalogRef
+from shijhon.delivery import retain
 from tests.acceptance.test_C_interception import CLIENT_INFO
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import select_catalog
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_addon import FakeAddon, FakeTrack
 from tests.harness.logs import collected
@@ -39,6 +41,7 @@ SHOWN = "album-editions-remastered"  # played while the catalog fails
 AS_IS = "album-feat-anniversary"  # a format its audio already meets
 AROUND = "album-editions-super-deluxe"  # two requests around its commit, the first link failing
 UNLISTED = "album-anniversary-super-deluxe"  # named as the album of a song it does not list
+KEPT = "album-twins-edition-clean"  # streamed in full before it is in the library
 CURRENT, OTHER, THIRD = (  # a saved queue
     "album-anniversary-standard",
     "album-soundtrack-expanded",
@@ -81,7 +84,9 @@ def world(
         addon = w.addon("Source")
         w.add_source(addon)
         audio = w.audio("commit-audio")
-        for name in (ALBUM, SINGLE, FIRST_PLAY, FAILING, RETRY, TOGETHER, QUEUED, SHOWN, AS_IS):
+        for name in (
+            ALBUM, SINGLE, FIRST_PLAY, FAILING, RETRY, TOGETHER, QUEUED, SHOWN, AS_IS, KEPT,
+        ):  # fmt: skip
             for track in tracks(name):
                 addon.add(FakeTrack(isrc=track["isrc"], audio=audio))
         yield w
@@ -133,8 +138,9 @@ def test_star_unstar_rating_and_scrobble(client: SubsonicClient) -> None:
     assert entry["userRating"] == 4 and entry["playCount"] == 1
 
 
-def test_star_album_and_artist(client: SubsonicClient) -> None:
+def test_star_album_and_artist(world: DeliveryWorld, client: SubsonicClient) -> None:
     client.ok("star", {"albumId": f"sh.al.demo.{item(SINGLE)}"})
+    select_catalog(world.nd, world.server, [f"demo:{t['ref']['id']}" for t in tracks(SINGLE)])
     album = client.ok("getAlbum", {"id": f"sh.al.demo.{item(SINGLE)}"})["album"]
     assert album["id"] in starred(client)["album"]
     # The single's artist is now known to Navidrome, so the catalog artist can be starred.
@@ -239,6 +245,7 @@ def test_a_catalog_play_commits_nothing_until_the_client_reports_it(
     assert client.ok("getSong", {"id": first})["song"]["id"] == first  # still virtual
     client.ok("scrobble", {"id": first, "submission": "false"})
     assert materializations(world) == before + 1
+    select_catalog(world.nd, world.server, [f"demo:{t['ref']['id']}" for t in tracks(FIRST_PLAY)])
     one = native(client, first)  # the whole release is in the library
     album = client.ok("getSong", {"id": one})["song"]["albumId"]
     assert len(client.ok("getAlbum", {"id": album})["album"]["song"]) == len(tracks(FIRST_PLAY))
@@ -248,6 +255,46 @@ def test_a_catalog_play_commits_nothing_until_the_client_reports_it(
         seek = client.request("stream", {"id": ident}, headers={"Range": "bytes=100-"})
         assert seek.status_code == 206
     assert uses_of(addon, FIRST_PLAY, 0) == 1
+
+
+def test_a_catalog_song_streamed_in_full_is_kept_once_it_is_in_the_library(
+    world: DeliveryWorld, client: SubsonicClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With streamed songs kept: a catalog song played in full before it is in the library
+    commits nothing for that; once a use commits it, the audio received replaces its
+    placeholder - not asked of the add-on again."""
+    retention = world.services.deliverer.retention
+    assert retention is not None
+    monkeypatch.setattr(retention, "enabled", True)
+    monkeypatch.setattr(retain, "RECHECK_SECONDS", 0.2)
+    addon = world.addons[0]
+    addon.clear()
+    last = len(tracks(KEPT)) - 1  # (no song after it is opened ahead: no later requests)
+    track = song(KEPT, last)
+    before = materializations(world)
+    answer = client.request("stream", {"id": track})
+    assert answer.status_code == 200
+    time.sleep(1.0)
+    assert materializations(world) == before and not in_library(world, track)
+    client.ok("scrobble", {"id": track, "submission": "false"})
+    assert materializations(world) == before + 1
+    select_catalog(world.nd, world.server, [f"demo:{t['ref']['id']}" for t in tracks(KEPT)])
+    one = native(client, track)
+    deadline = time.monotonic() + 10
+    while True:
+        found = world.server.call(
+            lambda: world.services.store.fetchone(
+                "SELECT state FROM placeholders WHERE song_id = ?", [one]
+            )
+        )
+        assert found is not None
+        if found["state"] == "delivered":
+            break
+        assert time.monotonic() < deadline, "the streamed audio was not kept"
+        time.sleep(0.1)
+    assert uses_of(addon, KEPT, last) == 1
+    isrc = tracks(KEPT)[last]["isrc"]
+    assert len([r for r in addon.requests("audio") if r["isrc"] == isrc]) == 1
 
 
 def test_a_playback_report_commits_too(world: DeliveryWorld, client: SubsonicClient) -> None:
@@ -520,6 +567,10 @@ def test_a_song_just_shown_plays_while_the_catalog_fails(
     showed it - else every request of the play (and its reports) would be answered with an
     error, and the client would keep buffering. A failure with nothing to fall back on is
     logged."""
+    assert world.services.commits
+    # Catalog failures now have one fixed safe message, coalesced across provider
+    # status codes. Keep this test independent of earlier failures in the module.
+    world.services.commits._errors._last.clear()
     album = f"sh.al.demo.{item(SHOWN)}"
     shown = client.ok("getAlbum", {"id": album})["album"]["song"]
     assert shown[3]["id"] == song(SHOWN, 3)
@@ -539,9 +590,7 @@ def test_a_song_just_shown_plays_while_the_catalog_fails(
     assert f"catalog unavailable (HTTP 503): {title!r} as a recent answer showed it" in cache_log
     failed = unknown.json()["subsonic-response"]
     assert failed["status"] == "failed"
-    assert "stream of a catalog item answered with an error: catalog unavailable: HTTP 503" in (
-        commit_log
-    )
+    assert "stream of a catalog item answered with an error: catalog unavailable" in (commit_log)
 
 
 def test_a_request_after_the_commit_gets_the_catalog_plays_next_link(

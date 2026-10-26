@@ -1,9 +1,27 @@
 # Deployment
 
+Optional [personal music-file imports](music-imports.md) need an additional
+dedicated writable directory. In Compose, provision `MUSIC_IMPORTS_DIR`, give
+`PUID:PGID` access, add it to `.env`, then include
+[`compose.imports.yaml`](../packaging/compose.imports.yaml):
+
+```sh
+docker compose -f compose.yaml -f compose.imports.yaml up -d --build
+```
+
+Use both files for later Compose operations. The overlay refuses a missing host
+directory, exposes published originals read-only to Navidrome and enables imports
+in Shijhon. Include this entire directory and Shijhon's state in backups; it must
+not be treated as disposable catalog audio. Complete the reviewed administrator
+setup from **Collection → Import music** before accepting uploads.
+
 Shijhon runs in front of a stock Navidrome that only Shijhon reaches.
 [quick-start.md](quick-start.md) sets one up with the Compose file and the example
 configuration in [`packaging/`](../packaging); [advanced deployment](reference/advanced-deployment.md)
 has the rarer setups.
+
+[Nix and NixOS](nixos.md) describes the native package and systemd service, including
+catalog adapters and moving from an existing container installation.
 
 ## Starting from an existing Navidrome
 
@@ -55,6 +73,11 @@ The copy is then the new setup's data; do not copy the old database over it agai
   default). With that off, set `[navidrome] purge_missing = "never"` yourself.
 
 ## Network and reverse proxy
+
+For remote OAuth/MCP access, set `[agents] public_url` to the public HTTPS origin
+and forward the [agent endpoint and discovery paths](agent-access.md#enable-access),
+including the well-known paths at the origin root. Preserve the public Host header.
+This optional interface does not support URL path prefixes.
 
 The Compose file publishes Shijhon's port on every address of the machine, unencrypted,
 for a network you trust. For access from outside, put a TLS reverse proxy in front:
@@ -124,7 +147,12 @@ folder can be corrupted
 - **Shijhon**: stop it, then save its volume, the placeholder folder and the configuration
   together, so that they match. The archive holds the saved settings, secrets included:
   keep it private, outside the checkout.
-- **Your music**: as before. Shijhon writes only inside its placeholder folder.
+- **Your music**: back up your originals as you already do. With music imports enabled, also save
+  the entire dedicated imports directory, including hidden staging and retained
+  hardlinks, together with both databases and the configuration. Removed import
+  batches still contain original music and are not disposable cache. Recover into
+  the existing dedicated root so its device/inode binding stays intact; a replacement
+  root must be reviewed rather than rewriting its marker or bypassing the guard.
 
 From `packaging/` (the new archive replaces the earlier one only once it reads back
 whole; [restoring](reference/advanced-deployment.md#restoring-a-backup)):
@@ -161,6 +189,32 @@ restart_by_supervisor = true` under a service manager that restarts Shijhon afte
 - Build the new image. The line in `.env` installs its adapters again; a folder of wheels
   has to be given again.
 - Stay on the Navidrome version the Shijhon release is tested with.
+- Upgrading from 0.1.0b1: after the first start, sign in once to **Collection** on the
+  dashboard and wait until your music shows. Until this first library view is ready,
+  music apps get an error that asks for it. Apps then show each account's **All**
+  ([Your collection](collection.md)): catalog albums that 0.1.0b1 added only because a
+  song was played or put in an app's playlist are in it again once the account plays
+  them or acts on them, and **Add whole album** on the Collection page adds them.
+
+The first start at schema 24 also lists the catalog albums already in the library that no
+account's records explain (many were added before Shijhon recorded who caused them); they
+are in no account's library. To give them to one account's Shijhon library (and so its
+**All**), run `shijhon carry-over --account <name>` once after that start, with the
+account's Navidrome user name. It can run while Shijhon runs; other accounts never get them
+(`--replace` gives them to another account instead), and `shijhon carry-over` alone shows
+them and who has them.
+
+This release's database is at schema 24: playlists, collections, music imports and agent
+access add tables, and cached album matches gain a matching revision and an
+owned-metadata fingerprint, so existing negative matches are checked again when an album
+is next considered by a view or the library pass. Keep a coordinated pre-upgrade backup of
+Shijhon's and Navidrome's databases and, with music imports enabled, the complete imports
+directory, including private retained originals. Older application versions refuse the
+newer schema; rollback requires coordinated recovery and review of activity since the
+backup ([restoring a backup](reference/advanced-deployment.md#restoring-a-backup)). To
+undo an import's removal, use its **Restore** instead. A pre-upgrade backup is a rollback
+option only before newer library, playlist, import or history activity; after that,
+reconcile the current data instead of restoring an older snapshot over it.
 
 ### Docker Desktop on macOS and Windows
 

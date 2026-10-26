@@ -5,7 +5,7 @@ Where the protocol comes from, and its guides: [development.md](../development.m
 
 | Request | Used for |
 |---|---|
-| `GET /manifest.json` | `id`, `name`, `resources` (Shijhon uses `isrc`, `resolve`, `search`, `stream` and `availability`; `catalog` of the add-on that is the catalog), `settings` (their keys, defaults, types and options; a free-text setting is write-only on the dashboard unless it says `"secret": false`), `allowDownloads` ([below](#allowdownloads)) |
+| `GET /manifest.json` | `id`, `name`, `resources` (Shijhon uses `isrc`, `resolve`, `search`, `stream`, `availability`, `cached` and `catalog`), `settings` (their keys, defaults, types and options; a free-text setting is write-only on the dashboard unless it says `"secret": false`), `allowDownloads` ([below](#allowdownloads)) |
 | `GET /resolve-isrc?isrc=…` | Finding a track by its ISRC: `{"trackId": "…"}` (or `"id"`); HTTP 404 when the add-on does not have it |
 | `GET /resolve?title=…&artist=…&durationMs=…&isrc=…` | The fallback when the ISRC lookup finds nothing: the answer's `item` |
 | `GET /search?q=<artist> <title>` | The fallback at an add-on without `resolve`: its `tracks` |
@@ -23,7 +23,8 @@ An add-on needs `stream` and at least one way to find a song: `isrc`, `resolve` 
 3. At an add-on without `resolve`: `/search`, when it declares `search`. An add-on that
    declares `resolve` is never searched for a song.
 
-A song of the add-on that is the catalog is asked for by its own track ID, without a
+A song that came from an add-on's catalog (the add-on that is the catalog, or one a
+playlist import found it in) is asked of that add-on by its own track ID, without a
 lookup.
 
 **Matching.** An item of `/resolve`, or a track of `/search`, is the song only with the
@@ -106,9 +107,11 @@ only at a restart or a change of the add-on list.
 
 ## The catalog endpoints
 
-Asked of one add-on only: the one an installation chose as its catalog
-([catalogs.md](../catalogs.md#the-catalog-of-an-add-on)). Its manifest must list the
-resources `search` and `catalog` and have an `id`, which identifies its catalog.
+Asked of the add-on an installation chose as its catalog
+([catalogs.md](../catalogs.md#the-catalog-of-an-add-on)), and by
+[playlist imports](../playlist-imports.md#add-on-catalogs) of every enabled add-on that
+declares a catalog. Its manifest must list the resources `search` and `catalog` and have
+an `id`, which identifies its catalog.
 
 | Request | Read from the answer |
 |---|---|
@@ -137,9 +140,12 @@ resources `search` and `catalog` and have an `id`, which identifies its catalog.
   10 MiB at most. Apps are never given the address.
 - IDs are used exactly as sent. A song is asked for at `/stream/{id}` with the catalog's
   track ID; an ID that is refused is then looked up as any other song.
-- Catalog requests count against the API request limit, behind the song being played.
-  None are sent while the add-on is passed over or paused after a 429, and a 429 on one of
-  them pauses lookups too.
+- Catalog requests count against the API request limit, behind the song being played
+  (an import's behind every app request). None are sent while the add-on is passed over
+  or paused after a 429, and a 429 on one of them pauses lookups too.
+- An import searches for `<artist> <title>` and opens the album of the track it matches;
+  a track that names its album by title only has that album found by a search for the
+  album's title and artist.
 
 ## The availability extension
 
@@ -152,6 +158,40 @@ check must be quick and change nothing. Shijhon asks only with the routings
 when no add-on has the song ready, it adds `prepare=true` to ask one that said no to
 prepare the recording for next time.
 
+This extension reports ordinary readiness. It does not bind a cached quality or forbid
+preparation when `/stream/{id}` is later requested. A ready ID can be looked up again if
+it expires; it is not used as a cached-delivery guarantee.
+
+## The cached delivery extension
+
+Optional and separate from ordinary readiness. Standard add-ons need not implement it:
+download scheduling works with their normal lookup and stream endpoints.
+
+An add-on declaring resource `cached` answers
+`GET /cached?isrc=…&title=…&artist=…&durationMs=…` with
+`{"available": true | false | null, "selector": "<opaque cached-variant selector>"}`.
+An optional `version=clean|explicit` supplies the catalog's version flag when known.
+The check must be quick and have no side effects: it must not start a download or
+preparation. `true` means a complete cached variant of the correct recording is
+retrievable now; `false` means none is available; `null` means the add-on cannot tell.
+Any cached quality is acceptable. The selector binds the actual variant, rather than
+an ordinary recording ID or a requested quality.
+Shijhon omits `quality` and `atmos` settings on these two cached endpoints so preferred
+settings cannot replace that selection.
+
+Shijhon asks `GET /cached-stream/{selector}` for its usual stream descriptor (`url`,
+optional format, codec, expiry and headers). This request and the resulting audio link
+must serve that cached variant or fail, without preparing audio or choosing a different
+uncached quality. A missing or expired selector returns HTTP 404 or 410. Shijhon never
+replaces it through ordinary lookup within the cached path. It can check again or return
+to the separately limited ordinary acquisition path.
+
+The add-on handles backend cache calls and credentials. Shijhon uses only these generic
+endpoints and still applies download permission, network policy, recording and audio
+checks. A positive answer without a selector is unknown. The selector is treated as an
+opaque path segment and is not shown in logs or on the dashboard.
+Selectors must be nonempty, at most 512 characters, and neither `.` nor `..`.
+
 ## Limits
 
 | Limit | Default | Setting in `[delivery]` |
@@ -159,20 +199,35 @@ prepare the recording for next time.
 | API requests to one add-on | 2 a second, after 4 at once following a quiet moment | `addon_requests_per_second`, `addon_request_burst` |
 | Audio requests being opened at one add-on at once, besides the songs being played | 4 | `addon_audio_openings` |
 | Songs one user looks up at once | 4 | `user_routings` |
-| Whole-song downloads of one user at once | 2 | `user_downloads` |
-| Whole-song downloads of one user in a row | 4, then one every 30 seconds (120 an hour) | `user_download_burst`, `user_downloads_per_hour` |
+| Scheduled whole-song fetches for everyone at once | 4 | `bulk_downloads` |
+| Whole-song fetches of one add-on or shared group at once | 2 | `addon_downloads` |
+| New preparations of one add-on or shared group at once | 1 | `addon_preparations` |
+| Whole-song downloads of one user at once | 4 | `user_downloads` |
+| Optional hourly download quota | Off (0); burst 4 when a quota is set | `user_downloads_per_hour`, `user_download_burst` |
 | Warm-ahead jobs at once, for all listeners | 2 | `warm_ahead_jobs` |
 | DASH songs fetched or joined at once, for all listeners, besides the songs being played | 3 | `dash_joins_at_once` |
 
 - An add-on's own limits (`requests_per_second`, `request_burst`, `audio_openings`): 0
   requests a second, or 0 openings, is no limit; the burst is 1 or more.
+- Transfer and preparation limits are installation settings, not limits discovered in a
+  standard manifest. Add-on overrides `downloads` and `preparations` inherit when omitted;
+  0 removes that cap. Slots cover the full transfer, including a DASH background fetch.
+- Add-ons at one origin share transfer capacity. Add-ons with the same nonempty
+  `capacity_group` also share it; connected groups use the strictest nonzero limit.
+  Different origins do not prove independent accounts or workers. API pacing remains
+  per origin and does not follow an account group to other origins.
+- A source without the cached extension is unknown, not rejected. The scheduler chooses
+  one source before its normal stream request, so it does not start preparation at every
+  source while checking availability. Failures can move to another source in turn.
 - Limits are per origin as the address is written: `localhost` and `127.0.0.1` count as
   two.
 - A redirect of an API request counts as a request. A redirected audio request is one
   opening, however many redirects it follows; an opening lasts until the answer's first
   bytes.
 - A request past a limit waits its turn within its own time; if no turn comes in time, it
-  ends, and nothing retries it.
+  ends, and nothing retries it. Playlist preparation is the exception: its songs wait for
+  a transfer slot, and for add-ons paused by a rate limit or a cooldown (an hour in all
+  at most), and then ask again. The download timeout covers each transfer from its slot.
 
 **A play or a download.** The song being played has turns of its own and never waits
 for the limits per user; it takes from the hour's downloads without waiting, down to one
@@ -202,4 +257,5 @@ playing, but not saves that come one by one as streams: those look like plays.
 - Nothing is asked when albums are listed, searched or browsed, at startup or on a timer -
   except of the add-on that is the catalog: a search, an album and an artist page cost
   one request each (kept for `cache_seconds`), an artist opened from a song or an album two
-  the first time, and the library pass asks at its own pace.
+  the first time, and the library pass asks at its own pace. Playlist imports ask the
+  catalogs of add-ons only for entries they match.

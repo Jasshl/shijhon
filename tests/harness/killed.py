@@ -84,6 +84,8 @@ async def run(spec: dict[str, Any]) -> None:
         await engine.replace_with_delivered(spec["song"], Path(spec["delivered"]))
     elif action == "revert":
         await engine.revert_to_placeholder(spec["song"])
+    elif action == "redeliver":
+        await engine.redeliver(spec["song"], Path(spec["delivered"]), unused_since=float("inf"))
     elif action == "recover":
         await engine.recover_swap(spec["song"])
     elif action == "retag":

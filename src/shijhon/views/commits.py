@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Protocol
 
 import anyio
@@ -40,13 +40,14 @@ import anyio
 from shijhon.catalog.artwork import raster_type
 from shijhon.catalog.base import Catalog, CatalogError
 from shijhon.catalog.model import CatalogRef, CatalogRelease, CatalogTrack, artwork_url
+from shijhon.fill.fills import ChoiceRefused
 from shijhon.locks import KeyedLocks
 from shijhon.matching.normalize import fold
 from shijhon.navidrome.client import NavidromeError, NavidromeService
 from shijhon.placeholders.engine import MaterializeError, PlaceholderEngine
 from shijhon.proxy.app import Forward, Handler, HandlerResult, RequestContext
 from shijhon.proxy.params import RestCall
-from shijhon.proxy.responses import subsonic_error, subsonic_ok
+from shijhon.proxy.responses import callback_refused, subsonic_error, subsonic_ok
 from shijhon.views.ids import CatalogId
 from shijhon.views.virtual import NOT_FOUND, Materialized, rewrite
 
@@ -113,16 +114,29 @@ class OwnedAlbums(Protocol):
 
     async def backed(self, release_ref: str, track: CatalogRef) -> str | None: ...
 
-    async def first_use(self, release_ref: str, trigger: str) -> str | None: ...
+    async def first_use(self, release: CatalogRelease, trigger: str) -> str | None: ...
+
+    async def saved_release(self, release_ref: str) -> CatalogRelease | None: ...
+
+    async def matched_release(self, release: CatalogRelease) -> CatalogRelease | None: ...
 
     async def fill_album(self, album_id: str, trigger: str) -> object: ...
 
 
 class CommitError(Exception):
-    def __init__(self, code: int, message: str) -> None:
+    def __init__(
+        self,
+        code: int,
+        message: str,
+        *,
+        category: str = "library_preparation",
+        item: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.category = category
+        self.item = item
 
 
 class Commits:
@@ -148,6 +162,11 @@ class Commits:
         self.server = server  # Navidrome's envelope fields for Shijhon's own answers
         self.play = play
         self.committed = committed  # after a release was added (the library changed)
+        # A verified caller's successful explicit request, including reuse of an
+        # existing native item. Kept separate from release-wide materialization.
+        self.requested: (
+            Callable[[RestCall, RequestContext, HandlerResult], Awaitable[HandlerResult]] | None
+        ) = None
         self.owned: OwnedAlbums | None = None  # owned albums shown complete
         self._locks = KeyedLocks()
         self._errors = _Quiet()  # errors answered to clients, in the log
@@ -158,6 +177,8 @@ class Commits:
         keys = set(COMMITS[method])
 
         async def handle(call: RestCall, ctx: RequestContext) -> HandlerResult:
+            if (ctx.head and method != "stream") or callback_refused(call):
+                return await inner(call, ctx) if inner is not None else None
             if method in _ALBUM_ACTIONS and self.owned is not None:
                 try:
                     await self._album_action(method, call, ctx)
@@ -166,11 +187,12 @@ class Commits:
                     log.debug("fill on first use (%s) failed", method, exc_info=True)
             wanted = {v for k, v in call.params if k in keys and CatalogId.parse(v)}
             if not wanted:
-                return await inner(call, ctx) if inner is not None else None
+                result = await inner(call, ctx) if inner is not None else None
+                return await self.requested(call, ctx, result) if self.requested else result
             if await ctx.caller() is None:
                 return None  # Navidrome answers with its own credential error
             try:
-                return await self._commit(method, keys, wanted, call, ctx, inner)
+                result = await self._commit(method, keys, wanted, call, ctx, inner)
             except CommitError as exc:
                 # A client (a play) may wait on this answer for good: always in the log.
                 self._errors.note(
@@ -180,6 +202,7 @@ class Commits:
             except Exception as exc:  # never a 500 for a catalog item
                 log.warning("commit failed: %s", type(exc).__name__)
                 return subsonic_error(call, 0, "catalog item unavailable", self.server())
+            return await self.requested(call, ctx, result) if self.requested else result
 
         return handle
 
@@ -207,6 +230,22 @@ class Commits:
             played = await self._play(next(iter(wanted)), call, ctx)
             if played is not None:
                 return played
+        if ctx.head:
+            # A plain catalog probe still uses the read-only play path above.
+            # A probe that needs materialization never creates placeholders.
+            mapping = {}
+            for text in wanted:
+                cid = CatalogId.parse(text)
+                if cid is None or cid.kind != "tr":
+                    return None
+                native = await self.materialized.song(cid.ref)
+                if native is None:
+                    return None
+                mapping[text] = native
+            committed = rewrite(call, keys, mapping)
+            if inner is not None and (result := await inner(committed, ctx)) is not None:
+                return result
+            return Forward(committed)
         if method in _QUEUES:
             committed = await self._queue(method, keys, wanted, call)
         else:
@@ -310,7 +349,16 @@ class Commits:
             return subsonic_ok(call, {}, self.server())  # nothing in the library to change
         return Forward(committed)
 
-    async def natives(self, texts: set[str], trigger: str = "commit") -> dict[str, str]:
+    async def natives(
+        self,
+        texts: set[str],
+        trigger: str = "commit",
+        *,
+        catalogs: Mapping[str, Catalog] | None = None,
+    ) -> dict[str, str]:
+        """The native IDs of catalog items, materializing their releases if needed.
+        ``catalogs``: other catalogs whose items may be added, by key - a playlist import's
+        reviewed recordings from the catalogs of add-ons; never a client's request."""
         mapping: dict[str, str] = {}
         failures: list[CommitError] = []
         limiter = anyio.CapacityLimiter(_PARALLEL)
@@ -320,8 +368,9 @@ class Commits:
             assert cid is not None
             async with limiter:
                 try:
-                    mapping[text] = await self.native(cid, trigger)
+                    mapping[text] = await self.native(cid, trigger, catalogs=catalogs)
                 except CommitError as exc:
+                    exc.item = text
                     failures.append(exc)
 
         async with anyio.create_task_group() as tg:
@@ -331,78 +380,139 @@ class Commits:
             raise failures[0]
         return mapping
 
-    async def native(self, cid: CatalogId, trigger: str = "commit") -> str:
+    async def native(
+        self,
+        cid: CatalogId,
+        trigger: str = "commit",
+        *,
+        catalogs: Mapping[str, Catalog] | None = None,
+    ) -> str:
         """The native ID for a catalog item, materializing its release if needed: into
-        the owned album it is shown with, else as a catalog album."""
+        the owned album it is shown with, else as a catalog album. ``catalogs``: as for
+        ``natives``."""
         if cid.kind == "tr":
             found = await self.materialized.song(cid.ref)
             if found is not None:
                 return found
-            track = await self._fetch(lambda c: c.song(cid.ref.id), cid)
+            track = await self._fetch(lambda c: c.song(cid.ref.id), cid, catalogs)
             album = track.album
             if album is None:
                 # The catalog's answer named no album: one that can look for it does now.
-                album = await self._fetch(lambda c: _album_of(c, cid.ref.id), cid)
+                album = await self._fetch(lambda c: _album_of(c, cid.ref.id), cid, catalogs)
             if album is None:
                 raise CommitError(NOT_FOUND, "the catalog song has no album")
-            if self.owned is not None and await self.owned.first_use(str(album), trigger):
-                found = await self.materialized.song(cid.ref)
-                if found is not None:
-                    return found
-                if await self.materialized.album(album) is None:
-                    # Never a second, catalog copy of an owned album's release.
-                    raise CommitError(0, "could not add the album's missing songs")
-            await self._album(album, cid)
+            await self._album(album, cid, trigger=trigger, catalogs=catalogs)
             found = await self.materialized.song(cid.ref)
             if found is None:  # e.g. a bonus track a fill left out: add just this one
-                await self._album(album, cid, only=cid.ref)
+                await self._album(album, cid, only=cid.ref, trigger=trigger, catalogs=catalogs)
                 found = await self.materialized.song(cid.ref)
             if found is None:
                 raise CommitError(NOT_FOUND, "the song is not on its album's release")
             return found
         if cid.kind == "al":
             found = await self.materialized.album(cid.ref)
-            owned = self.owned
-            if found is None and owned is not None and await owned.first_use(str(cid.ref), trigger):
-                found = await self.materialized.album(cid.ref)
-                if found is None:
-                    raise CommitError(0, "could not add the album's missing songs")
-            return found if found is not None else await self._album(cid.ref, cid)
+            if found is not None:
+                return found
+            return await self._album(cid.ref, cid, trigger=trigger, catalogs=catalogs)
         return await self._artist(cid)
 
-    async def _fetch(self, get: Any, cid: CatalogId) -> Any:
-        catalog = self.catalog
-        if catalog is None or catalog.key != cid.ref.catalog:
+    def _catalog(self, key: str, catalogs: Mapping[str, Catalog] | None) -> Catalog | None:
+        """The catalog of the items with the key ``key``: the installation's, else one of
+        ``catalogs``."""
+        if self.catalog is not None and self.catalog.key == key:
+            return self.catalog
+        return (catalogs or {}).get(key)
+
+    async def _fetch(
+        self, get: Any, cid: CatalogId, catalogs: Mapping[str, Catalog] | None = None
+    ) -> Any:
+        catalog = self._catalog(cid.ref.catalog, catalogs)
+        if catalog is None:
             raise CommitError(NOT_FOUND, "catalog item not found")
         try:
             return await get(catalog)
         except CatalogError as exc:
             if exc.kind == "not_found":
                 raise CommitError(NOT_FOUND, "catalog item not found") from None
-            raise CommitError(0, f"catalog unavailable: {exc.reason}") from None
+            raise CommitError(0, "catalog unavailable") from None
 
     async def _album(
-        self, ref: CatalogRef, cid: CatalogId, *, only: CatalogRef | None = None
+        self,
+        ref: CatalogRef,
+        cid: CatalogId,
+        *,
+        only: CatalogRef | None = None,
+        trigger: str = "commit",
+        catalogs: Mapping[str, Catalog] | None = None,
     ) -> str:
         async with self._locks.hold(str(ref)):
             found = await self.materialized.album(ref)
             if found is not None and only is None:
                 return found
             started = time.monotonic()
-            release: CatalogRelease = await self._fetch(lambda c: c.album(ref.id), cid)
+            release = None
+            # Owned albums are matched and filled from the installation's catalog: a
+            # release of another catalog (an add-on's, for an import) is a catalog album.
+            owned = self.owned if self._catalog(ref.catalog, None) is not None else None
+            if found is None and owned is not None:
+                try:
+                    release = await owned.saved_release(str(ref))
+                except NavidromeError:
+                    raise CommitError(
+                        0, "could not inspect the owned album", category="owned_fill"
+                    ) from None
+            if release is None:
+                release = await self._fetch(lambda c: c.album(ref.id), cid, catalogs)
             # A song's commit: its album must list it - checked before anything is written
             # (the album's answer may differ from the one that named it as the song's).
             wanted = only if only is not None else cid.ref if cid.kind == "tr" else None
             if wanted is not None and wanted not in {t.ref for t in release.tracks}:
                 raise CommitError(NOT_FOUND, "the song is not on its album's release")
-            cover = await self._cover(release) if found is None else None
+            if found is None and owned is not None:
+                try:
+                    claimed = await owned.first_use(release, trigger)
+                except ChoiceRefused as exc:
+                    message = (
+                        "could not add the catalog album: it would join an owned album"
+                        if exc.category == "album_collision"
+                        else "could not add the album's missing songs"
+                    )
+                    raise CommitError(0, message, category=exc.category) from None
+                except MaterializeError as exc:
+                    category = (
+                        "selection_changed"
+                        if exc.reason == "the release differs from the saved selection"
+                        else "owned_fill"
+                    )
+                    raise CommitError(
+                        0, "could not add the album's missing songs", category=category
+                    ) from None
+                except NavidromeError:
+                    raise CommitError(
+                        0, "could not add the album's missing songs", category="owned_fill"
+                    ) from None
+                if claimed is not None:
+                    found = await self.materialized.album(ref)
+                    if found is None:
+                        raise CommitError(
+                            0, "could not add the album's missing songs", category="owned_fill"
+                        )
+                    return found
+            cover = await self._cover(release, catalogs) if found is None else None
             try:
                 result = await self.engine.materialize(
                     release, cover=cover, only=[only] if only is not None else None
                 )
             except MaterializeError as exc:
                 log.warning("commit of %s failed: %s", ref, exc.reason)
-                raise CommitError(0, f"could not add the catalog album: {exc.reason}") from None
+                category = (
+                    "album_collision"
+                    if exc.reason == "the placeholders joined another album"
+                    else "library_preparation"
+                )
+                raise CommitError(
+                    0, f"could not add the catalog album: {exc.reason}", category=category
+                ) from None
             self.materializations += 1
             if self.committed is not None:
                 self.committed()
@@ -418,13 +528,17 @@ class Commits:
         """The catalog's cover for a catalog album added back (best effort)."""
         return await self._cover(release)
 
-    async def _cover(self, release: CatalogRelease) -> bytes | None:
-        """The catalog's cover for a catalog-only album (best effort)."""
+    async def _cover(
+        self, release: CatalogRelease, catalogs: Mapping[str, Catalog] | None = None
+    ) -> bytes | None:
+        """The catalog's cover for a catalog-only album (best effort): from the catalog
+        of the release (``catalogs``: as for ``natives``)."""
         url = artwork_url(release.artwork_template, self.artwork_size)
-        if url is None or self.catalog is None:
+        catalog = self._catalog(release.ref.catalog, catalogs)
+        if url is None or catalog is None:
             return None
         try:
-            data, _ = await self.catalog.artwork(url)
+            data, _ = await catalog.artwork(url)
         except CatalogError as exc:
             log.info("no cover for %s: %s", release.ref, exc.reason)
             return None

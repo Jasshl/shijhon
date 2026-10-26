@@ -8,10 +8,12 @@ it, and a client syncing its albums, only match - each recorded as the dry run's
 (``shijhon matches`` lists them as it would fill them). The first use of the album or of
 one of its catalog songs fills it; a view in XML is a view like one in JSON.
 
-Lists - ``getArtist``, ``search3``, ``getAlbumList2``, ``getStarred2`` - carry such an
+Lists - ``getAlbumList2``, ``search3``, ``getArtist``, ``getStarred2`` - carry such an
 album's complete song count and length, as its view does (clients file an album of two
-songs under singles); its name, year and everything else stay Navidrome's, and an album
-whose songs changed since its plan keeps Navidrome's counts until it is matched again.
+songs under singles); its name, year and everything else stay as the list has them. The
+selected library still decides which albums the library lists show. An imported song
+joins the selected library after source refresh: the album keeps the list's own counts
+until its fill plan is matched again.
 
 A fill that a star or a rating starts never fails the star or the rating (it answered HTTP
 500 when the fill raised something unexpected).
@@ -31,6 +33,7 @@ from shijhon.fill.fills import FillPolicy
 from shijhon.views.bursts import Bursts
 from tests.conftest import NavidromeFactory
 from tests.harness import xsd
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
@@ -113,6 +116,7 @@ def world(
     with delivery_world(
         nd, tmp_path_factory.mktemp("pending"), catalog=replay.catalog(), fill=fill
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -131,7 +135,9 @@ def artist_id(world: DeliveryWorld, name: str) -> str:
 def row(world: DeliveryWorld, ident: str) -> dict[str, Any] | None:
     async def read() -> dict[str, Any] | None:
         found = await world.services.store.fetchone(
-            "SELECT outcome, reason, planned FROM album_matches WHERE album_id = ?", [ident]
+            "SELECT outcome, reason, planned, owned_songs, release_tracks"
+            " FROM album_matches WHERE album_id = ?",
+            [ident],
         )
         return dict(found) if found else None
 
@@ -184,8 +190,10 @@ def test_lists_carry_the_complete_counts_of_an_album_shown_complete(
     ident = album_id(world, LISTED.title)
     artist = artist_id(world, LISTED.artist)
     viewer = world.client(client="lister")
+    original = world.nd.client().ok("getAlbum", {"id": ident})["album"]
     album = viewer.ok("getAlbum", {"id": ident})["album"]
-    assert album["songCount"] == 17  # shown complete
+    assert album["songCount"] == len(album["song"]) == 17  # shown complete
+    assert viewer.ok("getAlbum", {"id": "sh.al.demo.900000021"})["album"]["songCount"] == 17
     settled(world)
     assert wait_for(world, ident, "filled")["planned"] == 1  # the dry run's plan
     assert songs(world, ident) == 2  # the dry run filled nothing, the policy aside
@@ -198,17 +206,26 @@ def test_lists_carry_the_complete_counts_of_an_album_shown_complete(
         own_xml = xml_listed(navidrome, ident, artist)
     finally:
         navidrome.ok("unstar", {"albumId": ident})
-    for mine, own in zip(ours, theirs, strict=True):
-        assert (mine["songCount"], mine["duration"]) == (17, album["duration"])
-        assert own["songCount"] == 2 and own["duration"] < mine["duration"]
+    # Every list shows the album's complete counts, as the album page shows them: the
+    # library lists (album lists, search), whose selection holds both owned songs, the
+    # artist page and favorites. Navidrome's own counts stay 2.
+    complete = (17, album["duration"])
+    # getAlbumList2, search3, getArtist, getStarred2 (as ``listed`` and ``xml_listed``)
+    expected = [complete, complete, complete, complete]
+    for index, (mine, own) in enumerate(zip(ours, theirs, strict=True)):
+        count, duration = expected[index]
+        assert (mine["songCount"], mine["duration"]) == (count, duration)
+        assert own["songCount"] == 2 and own["duration"] == original["duration"]
         # (coverArt aside: Navidrome sets it when its artwork scan gets to the album, which
         # may fall between the two lists' requests; Shijhon passes it through.)
         rest = {k: v for k, v in own.items() if k not in ("songCount", "duration", "coverArt")}
         assert {
             k: v for k, v in mine.items() if k not in ("songCount", "duration", "coverArt")
         } == rest
-    for mine, own in zip(in_xml, own_xml, strict=True):
-        assert (mine["songCount"], mine["duration"]) == ("17", str(album["duration"]))
+    for index, (mine, own) in enumerate(zip(in_xml, own_xml, strict=True)):
+        count, duration = expected[index]
+        assert (mine["songCount"], mine["duration"]) == (str(count), str(duration))
+        assert own["songCount"] == "2" and own["duration"] == str(original["duration"])
         # the attributes in Navidrome's order (coverArt aside, as below)
         assert [k for k in mine if k != "coverArt"] == [k for k in own if k != "coverArt"]
         # (coverArt aside: Navidrome sets it when its artwork scan gets to the album, which
@@ -240,9 +257,9 @@ def xml_listed(client: Any, ident: str, artist: str) -> list[dict[str, str]]:
 def test_lists_answer_as_navidrome_does_to_head_and_wrong_credentials(
     world: DeliveryWorld,
 ) -> None:
-    """Navidrome's own answer decides (its "ok" is the credential check); nothing is looked
-    up for a failed one. A client that takes gzip gets the list compressed, as from
-    Navidrome."""
+    """Rejected callers and HEAD do no completion work. Selected lists retain private
+    headers and gzip framing with or without cached completion plans; a plan is looked up
+    only for an accepted GET."""
     params = {"type": "alphabeticalByName", "size": 500}
     fills = world.services.fills
     assert fills is not None
@@ -269,12 +286,15 @@ def test_lists_answer_as_navidrome_does_to_head_and_wrong_credentials(
             return True
 
         for shown_now, counted in ((none_shown, []), (some_shown, [1])):
-            # None shown complete: Navidrome's own answer, streamed; else read and counted.
+            # None shown complete: the selected list as it is; else read and counted. A
+            # cached completion plan must not change the negotiated gzip framing.
             fills.any_shown = shown_now  # type: ignore[method-assign]
             zipped = world.client().request(
                 "getAlbumList2", params, headers={"accept-encoding": "gzip"}
             )
             assert zipped.headers.get("content-encoding") == "gzip"
+            assert zipped.headers["vary"] == "Accept-Encoding, Origin"
+            assert zipped.headers["cache-control"] == "no-store"
             assert zipped.json()["subsonic-response"]["albumList2"]["album"]  # decoded
             assert looked == counted
     finally:
@@ -329,6 +349,8 @@ def test_an_xml_view_shows_the_album_complete_and_writes_nothing(world: Delivery
     ident = album_id(world, IN_XML.title)
     viewer = world.client(client="xml-viewer")
     answer = viewer.request("getAlbum", {"id": ident}, fmt="xml")
+    discovery = {"id": "sh.al.demo.900000117"}
+    assert viewer.request("getAlbum", discovery, fmt="xml").content.count(b"<song ") == 14
     assert answer.status_code == 200 and xsd.valid(answer.content)
     assert answer.content.count(b"<song ") == 14 and answer.content.count(b'id="sh.tr.') == 13
     as_json = viewer.request("getAlbum", {"id": ident}, fmt="json").json()["subsonic-response"]
@@ -360,6 +382,7 @@ def test_a_star_or_rating_goes_on_when_the_fill_it_starts_fails(world: DeliveryW
     viewer = world.client(client="failing")
     try:
         assert viewer.ok("getAlbum", {"id": ident})["album"]["songCount"] == 14
+        assert viewer.ok("getAlbum", {"id": "sh.al.demo.900000101"})["album"]["songCount"] == 14
         settled(world)
         fills.fill = locked  # type: ignore[method-assign]
         with collected("shijhon.views.commits") as lines:
@@ -386,6 +409,8 @@ def test_an_album_whose_songs_changed_keeps_navidrome_s_counts_until_matched_aga
     viewer = world.client(client="changer")
     assert viewer.ok("getAlbum", {"id": ident})["album"]["songCount"] == 30
     settled(world)
+    assert (row(world, ident) or {})["release_tracks"] == 30
+    assert (row(world, ident) or {})["owned_songs"] == 1
 
     def counted() -> int:
         albums = viewer.ok("getAlbumList2", {"type": "alphabeticalByName", "size": 500})
@@ -395,7 +420,10 @@ def test_an_album_whose_songs_changed_keeps_navidrome_s_counts_until_matched_aga
     write_album(world.nd.music, Album(CHANGED.artist, CHANGED.title, (ADDED,),
                                       recording_date=CHANGED.recording_date))  # fmt: skip
     world.nd.scan(targets=[CHANGED.relative_folder])
+    prepare_collection(world.nd, world.server)
     assert songs(world, ident) == 2
-    assert counted() == 2  # the plan links one owned song: Navidrome's count
+    assert counted() == 2  # the plan links one owned song: the list's own count
     assert viewer.ok("getAlbum", {"id": ident})["album"]["songCount"] == 30  # matched again
     assert counted() == 30
+    assert (row(world, ident) or {})["release_tracks"] == 30
+    assert (row(world, ident) or {})["owned_songs"] == 2

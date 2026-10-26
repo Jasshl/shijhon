@@ -11,6 +11,7 @@ Two APIs are used:
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from collections.abc import Iterable
 from typing import Any
@@ -242,6 +243,38 @@ class NavidromeService:
             for t in tracks
             if isinstance(t, dict) and (t.get("mediaFileId") or t.get("id"))
         ]
+
+    async def archive_song_ids(self, kind: str, ident: str, *, limit: int = 5000) -> list[str]:
+        """A complete, bounded archive listing, with native totals as proof.
+
+        A short page alone is insufficient: Navidrome may cap a requested page.
+        Keep playlist order and repeated recordings; its entry IDs are not song IDs.
+        """
+        if kind == "playlist":
+            path, params, key = f"playlist/{segment(ident)}/tracks", {}, "mediaFileId"
+        elif kind == "album":
+            path, params, key = "song", {"album_id": ident, "_sort": "path"}, "id"
+        else:
+            raise NavidromeError("archive: unsupported resource")
+        if not 0 <= limit <= 5000:
+            raise NavidromeError("archive: inspection limit exceeded")
+        response = await self.native("GET", path, params={**params, "_start": 0, "_end": limit + 1})
+        total = response.headers.get("x-total-count", "")
+        if not re.fullmatch(r"[0-9]{1,6}", total) or int(total) > limit:
+            raise NavidromeError("archive: complete listing unavailable")
+        try:
+            entries = response.json()
+        except ValueError:
+            raise NavidromeError("archive: not JSON") from None
+        if not isinstance(entries, list) or len(entries) != int(total):
+            raise NavidromeError("archive: incomplete listing")
+        songs = []
+        for entry in entries:
+            song = entry.get(key) if isinstance(entry, dict) else None
+            if not isinstance(song, str) or not song:
+                raise NavidromeError("archive: unreadable song")
+            songs.append(song)
+        return songs
 
     async def share(self, share_id: str) -> dict[str, Any] | None:
         share = await self.native_json("GET", f"share/{segment(share_id)}")

@@ -7,6 +7,8 @@ headers and body, allowing only documented differences:
 - hop-by-hop headers (``Connection``, ``Keep-Alive``, ``Transfer-Encoding``), which belong
   to each connection;
 - Navidrome's nondeterministic order of artist ``roles`` (JSON and XML).
+- selected-library answers are re-encoded with private cache/count headers;
+- the native app shell includes the library-picker script.
 
 Repeated parameters survive GET and form POST; ranges and HEAD are correct; a client
 that disconnects mid-stream causes no error.
@@ -29,6 +31,7 @@ import pytest
 
 from shijhon.proxy.params import body_kind, is_form, unreadable
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.library import Album, Track, simple_album, write_album
 from tests.harness.navidrome import ADMIN_PASSWORD, ADMIN_USER, NavidromeInstance
 from tests.harness.running import RunningServer
@@ -38,6 +41,21 @@ IGNORED_HEADERS = {"date", "connection", "keep-alive", "transfer-encoding"}
 # Navidrome builds absolute URLs (artist images) from the request's Host, which the proxy
 # passes through; comparisons therefore send the same public host both ways.
 PUBLIC_HOST = {"host": "music.test"}
+SELECTED_READS = {
+    "getIndexes",
+    "getArtists",
+    "getArtist",
+    "getAlbum",
+    "getMusicDirectory",
+    "getAlbumList2",
+    "getAlbumList",
+    "getGenres",
+    "getSongsByGenre",
+    "getRandomSongs",
+    "search2",
+    "search3",
+    "getScanStatus",
+}
 
 
 @dataclass
@@ -82,9 +100,11 @@ def world(navidrome_factory: NavidromeFactory, shijhon_factory: Any) -> Iterator
     admin.ok("star", {"id": songs[0]})
     admin.ok("setRating", {"id": songs[1], "rating": 4})
     admin.ok("createBookmark", {"id": songs[2], "position": 1500})
+    proxy = shijhon_factory(nd)
+    prepare_collection(nd, proxy)
     world = World(
         navidrome=nd,
-        proxy=shijhon_factory(nd),
+        proxy=proxy,
         songs=songs,
         mp3_song=album_songs("Second Wind")[0]["id"],
         m4a_song=album_songs("Third Rail")[0]["id"],
@@ -130,16 +150,51 @@ def canonical_body(response: httpx.Response) -> Any:
     return _canonical_xml(ElementTree.fromstring(response.content))  # noqa: S314 - test data
 
 
-def assert_same(direct: httpx.Response, proxied: httpx.Response) -> None:
+def assert_selected_headers(
+    direct: httpx.Response, proxied: httpx.Response, *, native: bool = False
+) -> None:
+    expected = {
+        "cache-control": "no-store",
+        "content-type": direct.headers["content-type"].split(";", 1)[0],
+        "vary": "Origin",
+    }
+    # These requests negotiate gzip or identity. Generated representations of at
+    # least 1 KiB retain native gzip negotiation, including selected final answers.
+    if (
+        not native
+        and len(proxied.content) >= 1024
+        and "gzip" in proxied.request.headers.get("accept-encoding", "")
+    ):
+        expected["content-encoding"] = "gzip"
+        expected["vary"] = "Accept-Encoding, Origin"
+    if "x-total-count" in proxied.headers:
+        assert int(proxied.headers["x-total-count"]) >= 0
+        expected["x-total-count"] = proxied.headers["x-total-count"]
+    if "x-shijhon-indexed-at" in proxied.headers:
+        assert float(proxied.headers["x-shijhon-indexed-at"]) > 0
+        expected["x-shijhon-indexed-at"] = proxied.headers["x-shijhon-indexed-at"]
+    ignored = IGNORED_HEADERS | {"content-length"}
+    if native:
+        ignored |= {"x-nd-authorization"}
+    # Vary may arrive as separate equivalent header fields. Compare their combined
+    # HTTP value while keeping the complete private response-header contract exact.
+    assert {k: v for k, v in proxied.headers.items() if k not in ignored} == expected
+    assert int(proxied.headers["content-length"]) == proxied.num_bytes_downloaded
+
+
+def assert_same(direct: httpx.Response, proxied: httpx.Response, *, selected: bool = False) -> None:
     assert proxied.status_code == direct.status_code
-    if proxied.content == direct.content:
+    if selected:
+        assert canonical_body(direct) == canonical_body(proxied)
+        assert_selected_headers(direct, proxied)
+    elif proxied.content == direct.content:
         assert header_items(proxied) == header_items(direct)
         return
-    # The only documented body nondeterminism is the order of artist roles (JSON and XML).
-    # It also changes the (compressed) length, so Content-Length is checked for consistency.
-    assert canonical_body(direct) == canonical_body(proxied)
-    without_length = [h for h in header_items(direct) if h[0] != "content-length"]
-    assert [h for h in header_items(proxied) if h[0] != "content-length"] == without_length
+    else:
+        # Navidrome's role order and selected-response encoding can change the length.
+        assert canonical_body(direct) == canonical_body(proxied)
+        without_length = [h for h in header_items(direct) if h[0] != "content-length"]
+        assert [h for h in header_items(proxied) if h[0] != "content-length"] == without_length
     for response in (direct, proxied):
         if "content-length" in response.headers:
             assert int(response.headers["content-length"]) == response.num_bytes_downloaded
@@ -197,7 +252,9 @@ def test_read_endpoints_identical(world: World, fmt: str) -> None:
         for attempt in range(3):
             first = direct.request(method, params)
             try:
-                assert_same(first, proxied.request(method, params))
+                assert_same(
+                    first, proxied.request(method, params), selected=method in SELECTED_READS
+                )
                 break
             except AssertionError as exc:
                 settled = canonical_body(direct.request(method, params)) == canonical_body(first)
@@ -221,8 +278,11 @@ def test_random_endpoints_same_shape(world: World, fmt: str) -> None:
         params = {k: str(v).format(artist=world.artist) for k, v in params.items()}
         d, p = direct.request(method, params), proxied.request(method, params)
         assert p.status_code == d.status_code == 200
-        without_length = [h for h in header_items(d) if h[0] != "content-length"]
-        assert [h for h in header_items(p) if h[0] != "content-length"] == without_length
+        if method in SELECTED_READS:
+            assert_selected_headers(d, p)
+        else:
+            without_length = [h for h in header_items(d) if h[0] != "content-length"]
+            assert [h for h in header_items(p) if h[0] != "content-length"] == without_length
         if fmt == "json":
             assert d.json()["subsonic-response"].keys() == p.json()["subsonic-response"].keys()
 
@@ -238,6 +298,7 @@ def test_view_suffix_post_and_gzip(world: World) -> None:
         assert_same(
             direct.request("getAlbumList2", params, **kwargs),
             proxied.request("getAlbumList2", params, **kwargs),
+            selected=True,
         )
 
 
@@ -453,8 +514,19 @@ def test_parameters_navidrome_cannot_read_are_its_refusal(
 
 def test_non_subsonic_paths_identical(world: World) -> None:
     nd, proxy = world.navidrome.base_url, world.proxy.base_url
-    for path in ("/ping", "/app/", "/favicon.ico", "/nothing-here"):
+    for path in ("/ping", "/favicon.ico", "/nothing-here"):
         assert_same(httpx.get(nd + path), httpx.get(proxy + path))
+    direct_shell = httpx.get(nd + "/app/")
+    selected_shell = httpx.get(proxy + "/app/")
+    assert selected_shell.status_code == direct_shell.status_code == 200
+    assert selected_shell.content == direct_shell.content.replace(
+        b"</head>", b'<script src="shijhon-library.js"></script></head>', 1
+    )
+    rewritten = {"content-length", "content-encoding", "etag", "last-modified", "vary"}
+    assert "Origin" in selected_shell.headers.get("vary", "")
+    assert [h for h in header_items(selected_shell) if h[0] not in rewritten] == [
+        h for h in header_items(direct_shell) if h[0] not in rewritten
+    ]
     login = httpx.post(
         proxy + "/auth/login", json={"username": ADMIN_USER, "password": ADMIN_PASSWORD}
     )
@@ -470,12 +542,9 @@ def test_non_subsonic_paths_identical(world: World) -> None:
             break
         time.sleep(0.2)
     # Navidrome refreshes the token on every native API call.
-    ignored = {"x-nd-authorization"}
     assert p.status_code == d.status_code == 200
-    assert [h for h in header_items(p) if h[0] not in ignored] == [
-        h for h in header_items(d) if h[0] not in ignored
-    ]
-    assert p.content == d.content
+    assert_selected_headers(d, p, native=True)
+    assert p.json() == d.json()
 
 
 def test_wrong_credentials_get_navidromes_error(world: World) -> None:

@@ -13,18 +13,23 @@ import socket
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 import anyio
 import httpx
 import pytest
+from mutagen.mp4 import MP4
 
+from shijhon.delivery.download_first import track_of
 from shijhon.delivery.playback import _Changed, _Error
 from shijhon.navidrome.client import NavidromeError
 from tests.conftest import NavidromeFactory
 from tests.harness.delivery import DeliveryWorld, delivery_world
-from tests.harness.fake_addon import FakeAddon
+from tests.harness.fake_addon import FakeAddon, FakeTrack
+from tests.harness.fragmented import fragmented_mp4, is_fragmented
+from tests.harness.library import frequency_for
 from tests.harness.navidrome import ADMIN_PASSWORD, ADMIN_USER
 from tests.harness.subsonic import SubsonicClient
 
@@ -447,6 +452,54 @@ def test_download_first_for_other_formats_keeps_the_delivered_format(
     a.clear()
     raw = stream(world, song)
     assert raw.headers["content-type"] == "audio/mp4" and a.requests() == []
+
+
+def test_download_first_puts_a_fragmented_mp4_in_one_piece(
+    world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon], tmp_path: Path
+) -> None:
+    """A song the add-on has as a fragmented MP4 (its header tells no length; Navidrome
+    reads none from it), downloaded for a conversion: the same AAC goes in as an ordinary
+    M4A, under the same song ID, and Navidrome reads its length."""
+    a, _ = a_and_b
+    song, _, _ = world.placeholder_track("k-fragmented", [], seconds=6)
+    isrc = world.server.call(
+        lambda: world.services.store.fetchone(
+            "SELECT isrc FROM placeholders WHERE song_id = ?", [song]
+        )
+    )
+    assert isrc is not None
+    sample = fragmented_mp4(tmp_path / "fragmented.m4a", frequency_for(song), 6)
+    a.add(FakeTrack(isrc=str(isrc["isrc"]), audio=sample, content_type="audio/mp4"))
+    response = stream(world, song, maxBitRate=96, format="mp3")
+    assert response.status_code == 200 and response.headers["content-type"] == "audio/mpeg"
+    native = world.server.call(lambda: world.services.navidrome.song(song))
+    assert native is not None and native["id"] == song and native["suffix"] == "m4a"
+    assert abs(native["duration"] - 6) < 0.5
+    assert not is_fragmented(world.services.engine.layout.absolute(native["path"]))
+
+
+def test_audio_fetched_for_an_import_upgrade_comes_in_one_piece(
+    world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon], tmp_path: Path
+) -> None:
+    """``DownloadFirst.fetch`` - the add-ons' audio an imported song is upgraded with: a
+    fragmented MP4 comes as the same AAC in an ordinary M4A, whose length tag readers read."""
+    a, _ = a_and_b
+    song, _, _ = world.placeholder_track("k-fetched", [], seconds=6)
+    row = world.server.call(
+        lambda: world.services.store.fetchone(
+            "SELECT * FROM placeholders WHERE song_id = ?", [song]
+        )
+    )
+    assert row is not None
+    sample = fragmented_mp4(tmp_path / "fragmented.m4a", frequency_for(song), 6)
+    a.add(FakeTrack(isrc=str(row["isrc"]), audio=sample, content_type="audio/mp4"))
+    fetched = world.server.call(lambda: world.services.download_first.fetch(track_of(row)))
+    assert isinstance(fetched, Path), fetched
+    try:
+        assert fetched.suffix == ".m4a" and not is_fragmented(fetched)
+        assert abs(MP4(fetched).info.length - 6) < 0.5
+    finally:
+        fetched.unlink()
 
 
 def test_disconnect_stops_the_upstream_download(

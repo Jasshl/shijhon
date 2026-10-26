@@ -1,7 +1,7 @@
 """The Library page's data: the album matches' counts, the library pass's progress, the
-review list with the releases it considered, the albums matched by an automatic pick, and
-the review actions that run in the background (a fill waits for Navidrome's scan: up to a
-couple of minutes).
+review list with the releases it considered, the albums matched by an automatic pick,
+albums without a match, and actions that run in the background (a fill waits for
+Navidrome's scan: up to a couple of minutes).
 
 Everything is read from ``album_matches`` (one scope: the running catalog and region)
 and done through ``Fills``' public methods; nothing here matches or fills by itself.
@@ -20,7 +20,7 @@ import anyio
 from shijhon.matching.matcher import NUMBERED_DIFFERENTLY, SEVERAL
 from shijhon.store import Store
 
-PAGE = 25  # review rows a page
+PAGE = 25  # albums a page in each list
 DESCRIBE_SECONDS = 5.0  # a page's wait for the catalog to describe candidate releases
 DESCRIBED_SECONDS = 86400.0
 UNDESCRIBED_SECONDS = 900.0  # a release the catalog could not describe: asked again later
@@ -206,6 +206,46 @@ async def review(store: Store, scope: str, page: int) -> tuple[list[ReviewRow], 
 
 
 @dataclass
+class NoMatchRow:
+    album_id: str
+    title: str
+    artist: str
+    owned: int
+    headline: str
+    sentence: str
+
+
+async def no_matches(store: Store, scope: str, page: int) -> tuple[list[NoMatchRow], int, int]:
+    """One page of current-scope negative matches, with no catalog lookup or write."""
+    total_row = await store.fetchone(
+        "SELECT COUNT(*) AS n FROM album_matches WHERE scope = ? AND outcome = 'none'",
+        [scope],
+    )
+    total = int(total_row["n"]) if total_row else 0
+    page = min(max(1, page), max(1, -(-total // PAGE)))
+    rows = await store.fetchall(
+        "SELECT album_id, title, artist, owned_songs, reason FROM album_matches"
+        " WHERE scope = ? AND outcome = 'none'"
+        " ORDER BY artist COLLATE NOCASE, title COLLATE NOCASE, album_id LIMIT ? OFFSET ?",
+        [scope, PAGE, (page - 1) * PAGE],
+    )
+    found = []
+    for row in rows:
+        headline, sentence, _ = explain(row["reason"] or "")
+        found.append(
+            NoMatchRow(
+                row["album_id"],
+                row["title"] or f"Unknown album ({row['album_id']})",
+                row["artist"] or "Unknown artist",
+                int(row["owned_songs"] or 0),
+                headline,
+                sentence,
+            )
+        )
+    return found, total, page
+
+
+@dataclass
 class PickRow:
     album_id: str
     title: str
@@ -321,11 +361,11 @@ class Describer:
 
 @dataclass
 class Job:
-    """A review action running in the background, or its result."""
+    """An album action running in the background, or its result."""
 
     album_id: str
     title: str
-    action: str  # fill | rematch
+    action: str  # fill | rematch | recheck
     started: float
     done: float | None = None
     ok: bool = False

@@ -41,10 +41,12 @@ numbering: a track it adds may share a disc and number with an owned song.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 
 from shijhon.catalog.base import Catalog, CatalogError, SearchResults
@@ -59,6 +61,8 @@ from shijhon.matching.normalize import (
 
 log = logging.getLogger(__name__)
 
+# Increment when matching or normalization changes can turn a negative into a match.
+MATCH_REVISION = 1
 DURATION_MS = 3000  # an owned track and its catalog version differ at most this much
 MAX_CANDIDATES = 6  # releases with the album's title fetched in detail
 MAX_ELSEWHERE = 3  # releases under other titles fetched, when none with the title fits
@@ -112,6 +116,24 @@ class OwnedAlbum:
     year: int | None
     songs: tuple[OwnedSong, ...]
     clean: bool | None = None  # None: the owned files do not say
+
+
+def owned_fingerprint(owned: OwnedAlbum) -> str:
+    """Every input to matching, independent of native enumeration order.
+
+    Kept separately from saved plans' historical fingerprint format.
+    """
+    data = {
+        "title": owned.title,
+        "artist": owned.artist,
+        "year": owned.year,
+        "clean": owned.clean,
+        "songs": sorted(
+            (asdict(song) for song in owned.songs),
+            key=lambda song: json.dumps(song, sort_keys=True),
+        ),
+    }
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
 @dataclass

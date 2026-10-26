@@ -29,6 +29,7 @@ from shijhon.fill.library_pass import LibraryPass
 from shijhon.fill.report import report
 from shijhon.matching.matcher import Matcher
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_addon import FakeTrack
 from tests.harness.library import Album, Track, write_album
@@ -105,6 +106,7 @@ def world(
     with delivery_world(
         nd, tmp_path_factory.mktemp("pass"), catalog=replay.catalog(), fill=fill
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 

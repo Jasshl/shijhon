@@ -32,6 +32,7 @@ CONTENT_TYPE = b"application/xml"  # Navidrome's, without a charset
 _Q = "{" + NAMESPACE + "}"
 
 ATTR, LIST, TEXTS, STRUCT, TEXT = "attr", "list", "texts", "struct", "text"
+CHARDATA = "chardata"
 _SCALARS = {"s": str, "i": int, "b": bool, "f": float}
 
 
@@ -75,11 +76,17 @@ def _fields(spec: str) -> tuple[Field, ...]:
 TYPES: dict[str, tuple[Field, ...]] = {
     "Subsonic": _fields(
         "status:s!* version:s!* type:s!* serverVersion:s!* openSubsonic:b"
-        " error:Error directory:Directory albumList2:AlbumList2 searchResult3:SearchResult3"
-        " starred2:Starred2 song:Child randomSongs:Songs artist:ArtistWithAlbumsID3"
+        " error:Error indexes:Indexes directory:Directory albumList:AlbumList albumList2:AlbumList2"
+        " playlists:Playlists playlist:PlaylistWithSongs"
+        " searchResult2:SearchResult2 searchResult3:SearchResult3"
+        " starred:Starred starred2:Starred2 nowPlaying:NowPlaying"
+        " song:Child randomSongs:Songs artist:ArtistWithAlbumsID3"
+        " songsByGenre:Songs genres:Genres artists:Artists"
         " album:AlbumWithSongsID3 albumInfo:AlbumInfo artistInfo:ArtistInfo"
         " artistInfo2:ArtistInfo2 similarSongs:Songs similarSongs2:Songs topSongs:Songs"
-        " lyricsList:LyricsList"
+        " playQueue:PlayQueue shares:Shares bookmarks:Bookmarks"
+        " scanStatus:ScanStatus lyricsList:LyricsList playQueueByIndex:PlayQueueByIndex"
+        " sonicMatch:[SonicMatch]"
     ),
     "Error": _fields("code:i!* message:s!*"),
     "Child": _fields(
@@ -97,6 +104,15 @@ TYPES: dict[str, tuple[Field, ...]] = {
         " movements:[Movement]*"
     ),
     "Songs": _fields("song:[Child]"),
+    "Indexes": _fields("index:[Index] lastModified:i!* ignoredArticles:s!*"),
+    "Index": _fields("name:s!* artist:[Artist]"),
+    "Artists": _fields("index:[IndexID3] lastModified:i!* ignoredArticles:s!*"),
+    "IndexID3": _fields("name:s!* artist:[ArtistID3]"),
+    "Genres": _fields("genre:[Genre]"),
+    "Genre": (Field("value", CHARDATA, "s"), *_fields("songCount:i!* albumCount:i!*")),
+    "ScanStatus": _fields(
+        "scanning:b!* count:i!* folderCount:i!* lastScan:s error:s scanType:s elapsedTime:i"
+    ),
     "LyricsList": (),  # written empty only; lyrics Navidrome writes are kept as they came
     "Directory": _fields(
         "child:[Child] id:s!* name:s!* parent:s starred:s playCount:i played:s userRating:i"
@@ -122,6 +138,8 @@ TYPES: dict[str, tuple[Field, ...]] = {
         " explicitStatus:s* version:s*"
     ),
     "AlbumList2": _fields("album:[AlbumID3]"),
+    "AlbumList": _fields("album:[Child]"),
+    "SearchResult2": _fields("artist:[Artist] album:[Child] song:[Child]"),
     "SearchResult3": _fields("artist:[ArtistID3] album:[AlbumID3] song:[Child]"),
     "Starred2": _fields("artist:[ArtistID3] album:[AlbumID3] song:[Child]"),
     "AlbumInfo": _fields(
@@ -147,10 +165,40 @@ TYPES: dict[str, tuple[Field, ...]] = {
         "trackGain:f! albumGain:f! trackPeak:f! albumPeak:f! baseGain:f! fallbackGain:f!"
     ),
     "Contributor": _fields("role:s!* subRole:s artist:ArtistID3Ref*"),
+    # Read (and written back with songs left out) for accounts that get real audio only.
+    "Playlist": _fields(
+        "id:s!* name:s!* comment:s songCount:i!* duration:i!* public:b! owner:s created:s!*"
+        " changed:s!* coverArt:s readonly:b* validUntil:s"
+    ),
+    "Playlists": _fields("playlist:[Playlist]"),
+    "Starred": _fields("artist:[Artist] album:[Child] song:[Child]"),
+    "NowPlaying": _fields("entry:[NowPlayingEntry]"),
+    "PlayQueue": _fields(
+        "entry:[Child] current:s position:i username:s!* changed:s!* changedBy:s!*"
+    ),
+    "PlayQueueByIndex": _fields(
+        "entry:[Child] currentIndex:i! position:i username:s!* changed:s!* changedBy:s!*"
+    ),
+    "Bookmarks": _fields("bookmark:[Bookmark]"),
+    "Bookmark": _fields("entry:Child* position:i username:s!* comment:s!* created:s!* changed:s!*"),
+    "Shares": _fields("share:[Share]"),
+    "Share": _fields(
+        "entry:[Child] id:s!* url:s!* description:s username:s!* created:s!* expires:s"
+        " lastVisited:s visitCount:i!*"
+    ),
+    "SonicMatch": _fields("entry:Child* similarity:text"),
 }
 # ArtistWithAlbumsID3 and AlbumWithSongsID3 embed ArtistID3 and AlbumID3.
 TYPES["ArtistWithAlbumsID3"] = (*TYPES["ArtistID3"], *_fields("album:[AlbumID3]"))
 TYPES["AlbumWithSongsID3"] = (*TYPES["AlbumID3"], *_fields("song:[Child]"))
+TYPES["PlaylistWithSongs"] = (*TYPES["Playlist"], *_fields("entry:[Child]"))
+TYPES["NowPlayingEntry"] = (
+    *TYPES["Child"],
+    *_fields(
+        "username:s!* minutesAgo:i!* playerId:i!* playerName:s! state:s!* positionMs:i!*"
+        " playbackRate:f!*"
+    ),
+)
 
 _MISSING: Any = object()
 
@@ -262,7 +310,9 @@ def build(value: dict[str, Any], type_name: str, name: str) -> Element:
             if text is not None:
                 element.set(field.key, text)
     for field in fields:
-        if field.kind != ATTR and field.key in value:
+        if field.kind == CHARDATA and field.key in value:
+            element.text = str(value[field.key])
+        elif field.kind != ATTR and field.key in value:
             element.extend(_elements(value[field.key], field))
     return element
 
@@ -389,6 +439,10 @@ def _read(element: Element, type_name: str, origins: dict[int, _Origin]) -> dict
     for child in element:
         groups.setdefault(_local(child.tag), []).append(child)
     for field in fields:
+        if field.kind == CHARDATA:
+            if element.text:
+                value[field.key] = element.text
+            continue
         if field.kind == ATTR:
             raw = attributes.get(field.key)
             if raw is not None:
@@ -493,7 +547,10 @@ def _sync_field(
 ) -> None:
     now = value.get(field.key, _MISSING)
     was = before.get(field.key, _MISSING)
-    if field.kind == LIST:
+    if field.kind == CHARDATA:
+        if not _same(now, was):
+            element.text = str(now) if now is not _MISSING and now is not None else None
+    elif field.kind == LIST:
         items = [i for i in now if isinstance(i, dict)] if isinstance(now, list) else []
         mine = {id(c) for c in element if _local(c.tag) == field.key}
         if _same_entries(now, was):

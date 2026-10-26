@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% set title = "Downloads" %}
+{% block main %}
+<div class="page-head">
+  <div class="page-title">
+    <h1>Downloads</h1>
+    <p class="page-summary">Get a playlist's audio ready on the server, then download it to your device with your music app.</p>
+  </div>
+  <details class="page-about"><summary>How preparing works</summary>
+    <p>Preparing fetches each missing song's audio through the add-ons into the server library. It prepares server files only; your music app still saves its own copies on your device. The song list is fixed when you start: later edits to the playlist don't change it.</p>
+    <p>Cancelling keeps completed audio and lets current songs finish. Unfinished work pauses after a restart until you resume it. Automatic cleanup can remove prepared audio.</p>
+  </details>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+<section class="group" aria-labelledby="account-title">
+  <div class="group-head"><h2 id="account-title">Your Navidrome account</h2><p class="group-meta">{% if connected %}<span class="status"><span class="led led-ok" aria-hidden="true"></span><span>Connected as {{ user }}</span></span>{% else %}<span class="status"><span class="led led-off" aria-hidden="true"></span><span>Not connected</span></span>{% endif %}</p>
+  <p class="group-help">{% if connected %}Enter your password again only if preparing stops working.{% else %}Connect as {{ user }} so Shijhon can read your playlists and prepare their audio.{% endif %} Your password is not saved.</p></div>
+  <div class="rows music-card">
+{% if connected %}<details class="form-more"><summary>Reconnect with your password</summary>{% endif %}
+  <form method="post" action="{{ prefix }}/downloads/connection">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="inline-form downloads-connect"><label class="visually-hidden" for="downloads-password">Your Navidrome password</label><input id="downloads-password" type="password" name="password" autocomplete="current-password" required maxlength="1024" placeholder="Your Navidrome password"><button{% if not connected %} class="btn-primary"{% endif %}>{{ 'Reconnect' if connected else 'Connect' }}</button></div>
+  </form>
+{% if connected %}</details>{% endif %}
+{% if connected %}
+  <details class="confirm">
+    <summary class="btn btn-danger btn-small"><span class="if-closed">Disconnect downloads…</span><span class="if-open">Stay connected</span></summary>
+    <div class="confirm-body">
+      <p>Cancel preparation and wait for current songs to finish first. Prepared audio stays until cleanup removes it.</p>
+      <form method="post" action="{{ prefix }}/downloads/disconnect"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-danger-fill">Disconnect downloads</button></form>
+    </div>
+  </details>
+{% endif %}
+  </div>
+</section>
+{% if connected %}
+<section class="group" aria-labelledby="prepare-title">
+  <div class="group-head"><h2 id="prepare-title">Prepare a playlist</h2><p class="group-help">Choose one of your playlists. Its songs are fixed when you start.</p></div>
+  <div class="rows music-card">
+{% if playlists %}
+  <form method="post" action="{{ prefix }}/downloads/prepare">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="inline-form"><label class="visually-hidden" for="downloads-playlist">Playlist</label><select id="downloads-playlist" name="playlist" required>{% for playlist in playlists %}<option value="{{ playlist.id }}">{{ playlist.name }} · {{ playlist.songCount }} songs</option>{% endfor %}</select><button class="btn-primary">Prepare audio</button></div>
+  </form>
+{% else %}<p>You have no playlists of your own yet. <a href="{{ prefix }}/playlists">Make one on Playlists</a>.</p>{% endif %}
+  </div>
+</section>
+{% endif %}
+<section class="group" aria-labelledby="progress-title">
+  <div class="group-head"><h2 id="progress-title">Progress</h2><p class="group-meta"><a href="{{ prefix }}/downloads">Refresh</a></p></div>
+{% for batch in batches %}
+  <article class="rows music-card downloads-batch" aria-labelledby="batch-{{ batch.id }}">
+    <div class="downloads-batch-head"><h3 id="batch-{{ batch.id }}">{{ batch.title }} · {{ batch.state|capitalize }}</h3><p class="field-help">Started {{ batch.created|when }}. {{ batch.total }} songs, {{ batch.unique }} different songs.</p></div>
+    <div class="meter"><div class="meter-head"><p role="status">{{ batch.available }} of {{ batch.total }} songs ready{% if batch.failed %}; {{ batch.failed }} failed{% endif %}.</p></div><progress max="{{ batch.total or 1 }}" value="{{ batch.available }}" aria-label="Songs ready in {{ batch.title }}"></progress></div>
+{% if batch.error %}<div class="notice notice-warn"><p>{{ batch.error }}</p></div>{% endif %}
+    <details class="form-more"><summary>Songs</summary><ol class="mix-tracks">
+{% for item in batch['items'][:50] %}<li><div><strong>{{ item.title }}</strong>{% if item.artist %} · {{ item.artist }}{% endif %}</div><p class="field-help">{{ item.state|capitalize }}{% if item.entries > 1 %} · {{ item.entries }} times in playlist{% endif %}{% if item.error %}: {{ item.error }}{% endif %}</p></li>{% endfor %}
+    </ol>{% if batch.unique > 50 %}<p class="field-help">Showing the first 50 different songs. Totals include repeats.</p>{% endif %}</details>
+    <form class="form-actions" method="post" action="{{ prefix }}/downloads/{{ batch.id }}/action"><input type="hidden" name="csrf" value="{{ csrf }}">
+{% if batch.state in ['queued','running'] %}<button name="action" value="cancel">Cancel</button>
+{% elif batch.state == 'cancelling' %}<p class="field-help">Waiting for current songs to finish.</p>
+{% else %}
+{% if connected and batch.state in ['paused','cancelled'] %}<button class="btn-primary" name="action" value="resume">Resume</button>{% endif %}
+{% if connected and batch.failed %}<button name="action" value="retry">Retry failed songs</button>{% endif %}
+<button class="btn-quiet" name="action" value="forget">Remove from list</button>
+{% endif %}</form>
+  </article>
+{% else %}
+  <p class="empty">Nothing prepared yet.</p>
+{% endfor %}
+</section>
+{% endblock %}

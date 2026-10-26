@@ -49,6 +49,7 @@ from shijhon.placeholders import tags as tagging
 from shijhon.placeholders.engine import MaterializeError, ReplaceError, _Planned, _row_track
 from shijhon.views.ids import CatalogId
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection, select_catalog
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.engine import catalog_release
 from tests.harness.fake_addon import FakeTrack
@@ -74,11 +75,24 @@ def world(
         navidrome_database=nd.data / "navidrome.db",
         cleanup={"mode": "on"},
     ) as w:
+        w.app.dashboard.attempts.limit = 10_000
+        prepare_collection(nd, w.server)
         yield w
 
 
 def call(world: DeliveryWorld, work: Any) -> Any:
     return world.server.call(work)
+
+
+def select_release(world: DeliveryWorld, ref: str, *, saved: bool = True) -> None:
+    """Only cleanup cases comparing library views opt their named release in."""
+    rows = call(
+        world,
+        lambda: world.services.store.fetchall(
+            "SELECT track_ref FROM placeholders WHERE release_ref=?", [ref]
+        ),
+    )
+    select_catalog(world.nd, world.server, [row["track_ref"] for row in rows], saved=saved)
 
 
 def listener(world: DeliveryWorld) -> SubsonicClient:
@@ -487,6 +501,7 @@ def sharing(
         navidrome_database=nd.data / "navidrome.db",
         cleanup={"mode": "dry_run"},
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -658,6 +673,7 @@ def test_a_view_of_an_old_id_shows_the_album_as_it_was_and_writes_nothing(
     try:
         song, _, audio = world.placeholder_track("m-old", [addon])
         release = release_of(world, song)
+        select_release(world, release)
         admin = world.client()
         album = admin.ok("getSong", {"id": song})["song"]["albumId"]
         before = views(admin, album, song)
@@ -665,8 +681,13 @@ def test_a_view_of_an_old_id_shows_the_album_as_it_was_and_writes_nothing(
         three = catalog_release("m-old-3", "Album m-old-3", "Artist m-old-3", 3, discs=2)
         made3 = world.materialize(three)
         songs3 = [made3.created[t.ref] for t in three.tracks]
+        select_catalog(world.nd, world.server, [str(t.ref) for t in three.tracks])
         before3 = views(admin, made3.album_id, songs3[2])
         texts3 = raw_texts(admin, made3.album_id)
+        # Saved releases are intentionally retained by cleanup. Remove only these
+        # fixture selections before exercising removal and the cached old-ID views.
+        select_release(world, release, saved=False)
+        select_catalog(world.nd, world.server, [str(t.ref) for t in three.tracks], saved=False)
         removed_now = sweep(world).removed
         assert "Artist m-old - Title m-old" in removed_now
         assert "Artist m-old-3 - Album m-old-3" in removed_now
@@ -714,7 +735,9 @@ def test_a_view_of_an_old_id_is_the_whole_album_or_an_error(
     songs = [made3.created[t.ref] for t in release.tracks]
     album = made3.album_id
     admin = world.client()
+    select_release(world, release_of(world, songs[0]))
     whole = admin.ok("getAlbum", {"id": album})["album"]
+    select_release(world, release_of(world, songs[0]), saved=False)
     assert "Artist m-old-whole - Album m-old-whole" in sweep(world).removed
     as_xml = admin.request("getAlbum", {"id": album}, fmt="xml").text
     assert as_xml.count("<song ") == 3
@@ -757,7 +780,20 @@ def test_a_view_of_an_old_id_is_the_whole_album_or_an_error(
         text = admin.request("getAlbum", {"id": album}, fmt=fmt).text  # type: ignore[arg-type]
         assert "failed" in text and "songCount" not in text, fmt
     monkeypatch.undo()
-    assert admin.ok("getAlbum", {"id": album})["album"] == whole  # whole again
+    # Native artwork resolution can remove an optimistic cover ID while these
+    # lookups run. Keep the complete original album exact, and bracket its artwork
+    # with current native answers rather than requiring the earlier cover state.
+    native = world.nd.client()
+    before = native.ok("getAlbum", {"id": album})["album"]
+    restored = admin.ok("getAlbum", {"id": album})["album"]
+    after = native.ok("getAlbum", {"id": album})["album"]
+    assert {k: v for k, v in restored.items() if k != "coverArt"} == {
+        k: v for k, v in whole.items() if k != "coverArt"
+    }  # whole again, including exact songs, order, count and duration
+    assert {k: v for k, v in restored.items() if k == "coverArt"} in (
+        {k: v for k, v in before.items() if k == "coverArt"},
+        {k: v for k, v in after.items() if k == "coverArt"},
+    )
 
 
 def test_an_old_id_plays_from_its_record_while_navidrome_cannot_be_asked(
@@ -1076,6 +1112,7 @@ def test_an_add_back_a_stop_interrupted_is_finished_or_undone(world: DeliveryWor
     # A client uses the first one before the start's repair: it is added back.
     ref, songs, album = halfway["m-half-asked"]
     world.client().ok("scrobble", {"id": songs[0], "submission": "false"})
+    select_release(world, ref)
     found = world.client().ok("getAlbum", {"id": album})["album"]
     assert sorted(s["id"] for s in found["song"]) == sorted(songs) and in_library(world, ref)
     assert call(world, lambda: engine.removed_record(ref)) is None
@@ -1159,6 +1196,7 @@ def test_an_old_album_id_the_owner_now_has_brings_nothing_back(world: DeliveryWo
     world.audio("m-taken-real").replace(owned)
     tagging.write_flac(owned, comments)
     world.nd.scan(full=True)
+    prepare_collection(world.nd, world.server)
     # A use while placeholders may not be written: nothing is added back, and the record
     # goes (not a failure): the IDs are the owner's songs now.
     engine = world.services.engine
@@ -1200,6 +1238,7 @@ def test_a_view_of_an_album_the_owner_now_has_drops_its_record(world: DeliveryWo
     world.audio("m-taken-view-real").replace(owned)
     tagging.write_flac(owned, comments)
     world.nd.scan(full=True)
+    prepare_collection(world.nd, world.server)
     view = world.client().request("getAlbum", {"id": album}, fmt="xml").text
     assert view == world.nd.client().request("getAlbum", {"id": album}, fmt="xml").text
     assert world.services.engine.removed_release(song) is None and not in_library(world, release)
@@ -1283,6 +1322,7 @@ def fills_world(
         navidrome_database=nd.data / "navidrome.db",
         cleanup={"mode": "on"},
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -1347,6 +1387,8 @@ def test_a_fill_taken_out_is_shown_complete_and_filled_again_on_its_next_use(
         call(world, changed)
         assert not call(world, lambda: fills.due(album)), change
     view = client.ok("getAlbum", {"id": album})["album"]
+    assert view["songCount"] == len(view["song"]) == 17
+    view = client.ok("getAlbum", {"id": "sh.al.demo.900000021"})["album"]
     # ... but shown complete: the owned songs and the release's other tracks.
     assert view["songCount"] == 17 and len(view["song"]) == 17
     call(world, fills.wait_idle)
@@ -1517,7 +1559,7 @@ def test_a_removed_catalog_albums_cover_comes_from_its_record(
     album = call(world, lambda: commits.native(wanted, "a test's commit"))
     release = "demo:900000133"
     assert in_library(world, release)
-    song = world.client().ok("getAlbum", {"id": album})["album"]["song"][0]["id"]
+    song = world.nd.client().ok("getAlbum", {"id": album})["album"]["song"][0]["id"]
     assert "Jonah Fairbanks - wild stones" in sweep(world).removed
     blue = cover_image("blue").read_bytes()
     client = world.client()

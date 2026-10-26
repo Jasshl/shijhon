@@ -50,6 +50,8 @@ def _noting[T](
 
     if hasattr(call, "cache_clear"):
         noted.cache_clear = call.cache_clear  # type: ignore[attr-defined]
+    if hasattr(call, "cache_invalidate"):
+        noted.cache_invalidate = call.cache_invalidate  # type: ignore[attr-defined]
     return noted
 
 
@@ -106,6 +108,12 @@ class CachedCatalog:
         self.artists_of = alru_cache(maxsize=maxsize, ttl=ttl)(self._artists_of)
         # Images are larger: fewer are kept (clients' covers are kept on disk).
         self.artwork = alru_cache(maxsize=64, ttl=ttl)(self._artwork)
+
+    async def fresh_album(self, ident: str) -> CatalogRelease:
+        """The album as the catalog answers it now, past the cache, which then keeps
+        this answer: a check before adding the album and the addition read the same."""
+        self.album.cache_invalidate(ident)  # type: ignore[attr-defined]
+        return await self.album(ident)
 
     async def aclose(self) -> None:
         await self.inner.aclose()

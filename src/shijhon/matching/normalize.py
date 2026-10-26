@@ -128,6 +128,22 @@ _WORDS = re.compile(r"[\w'\u2019]+")
 _CLEAN_OR_EXPLICIT = re.compile(rf"\s*{_VERSION}\s*", re.IGNORECASE)
 
 
+def recording_edition_marked(title: str | None) -> bool:
+    """Whether recording normalization can discard an explicit edition qualifier.
+
+    Use the recording parser's brackets, Unicode dashes and marker words, while
+    ignoring credits. A caller's requested edition must survive that normalization.
+    """
+    text = _CREDIT.sub(" ", _KIND_SUFFIX.sub("", title or ""))
+    qualifiers = [match.group(1) for match in _BRACKET.finditer(text)]
+    if suffix := _DASH_SUFFIX.search(_BRACKET.sub(" ", text)):
+        qualifiers.append(suffix.group(1))
+    return any(
+        _EDITION.intersection(_WORDS.findall(inner.lower())) or _CLEAN_OR_EXPLICIT.fullmatch(inner)
+        for inner in qualifiers
+    )
+
+
 def _part_words(part: str) -> list[str]:
     """A qualifier's part as a recording title keeps it: "version" goes from any
     part ("(Live Version)" is "(Live)"); an edition's label keeps only its version words;

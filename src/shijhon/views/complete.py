@@ -13,15 +13,22 @@ The same album in lists - ``getArtist``, ``search3``, ``getAlbumList2``, ``getSt
 (JSON and XML; the ID3 methods, whose albums open with ``getAlbum``) - carries the
 same complete ``songCount`` and ``duration`` (clients file an album with few songs under
 singles), from a local lookup of the saved plans; its name, type, year and everything else
-stay Navidrome's. Only while Navidrome counts exactly the songs the plan links: an album whose
-songs changed since keeps Navidrome's counts. The folder-based lists (``getAlbumList``,
+stay Navidrome's. Only while the list counts exactly the songs the plan links: an album whose
+songs changed since keeps Navidrome's counts. ``getAlbumList2`` and ``search3`` list the
+selected library (``collection/visibility.py``): which albums, their order, paging and
+``X-Total-Count`` stay the selection's, and an album carries the plan's counts there only
+while its original songs (not added by Shijhon), as the library index has them, are the
+plan's owned songs, all selected; else its selected counts. Once filled, such an album
+listed with all of its original songs has Navidrome's whole-album counts there, its
+placeholders unselected (``collection/query_index.py``). The folder-based lists (``getAlbumList``,
 ``getStarred``, ``search2``, ``getMusicDirectory``) stay Navidrome's, like the album's
 directory view.
 
 A catalog album ID of a release matched to an owned album opens that album. A match that
 is not ready within the open budget (a slow or unavailable catalog) leaves Navidrome's
 answer as it is, and the reason is logged. A view writes nothing in any format (XML
-views too); JSONP and HEAD requests get Navidrome's own answer, nothing looked at.
+views too); JSONP and HEAD requests get Navidrome's own answer (a selected list: the
+selection's), nothing looked at.
 """
 
 from __future__ import annotations
@@ -96,6 +103,11 @@ class CompleteAlbums:
                 await self.fills.any_shown()
             ):
                 return result  # no album entries, or none shown complete: nothing to count
+            if await ctx.caller() is None:
+                return result  # current credentials and library grant before metadata work
+            # A ready reply of the selected library (catalog additions to a search): sent
+            # as it came unless a count changes, also a refusal's encoded bytes and headers.
+            unchanged: HandlerResult = None
             if isinstance(result, Forward | None):
                 if ctx.refusal is not None:
                     return result  # Navidrome refused the credentials: its answer
@@ -103,30 +115,41 @@ class CompleteAlbums:
                 if answer is None:
                     return result  # Navidrome unreachable: the forward says so
             else:
+                if getattr(result, "selected_view", False):
+                    unchanged = result
                 answer = await captured(result)
             try:
                 document = await self._counted(answer, key)
             except Exception as exc:  # the list as it came
                 log.warning("album list counts failed: %s", type(exc).__name__)
                 document = None
+            if document is None and unchanged is not None:
+                return unchanged
             # Compressed as Navidrome compresses it (a sync's pages are large).
             return answer.reply(document=document, compress=accepts_gzip(call))
 
         return handle
 
     async def _counted(self, answer: LibraryAnswer, key: str) -> dict[str, Any] | None:
-        """The answer's document with the complete counts, or None when nothing changed."""
+        """The answer's document with the complete counts, or None when nothing changed.
+        A selected library list counts the selected songs, which can match the plan's
+        number while other songs are left out: there the album's original songs, as the
+        list's snapshot has them, must be the plan's owned songs, all selected."""
         found = await answer.parsed(key)
         if found is None:
             return None
         document, container = found
         albums = [a for a in container.get("album") or [] if isinstance(a, dict)]
         shown = await self.fills.shown(str(a.get("id") or "") for a in albums)
+        originals = answer.original_songs
         changed = False
         for album in albums:
-            plan = shown.get(str(album.get("id") or ""))
-            # Navidrome counts exactly the plan's owned songs, as the view requires.
+            ident = str(album.get("id") or "")
+            plan = shown.get(ident)
+            # The list counts exactly the plan's owned songs, as the view requires.
             if plan is None or _int(album.get("songCount"), -1) != plan.owned:
+                continue
+            if answer.selected_view and (originals is None or originals.get(ident) != plan.songs):
                 continue
             album["songCount"] = plan.owned + len(plan.missing)
             album["duration"] = _int(album.get("duration"), 0) + sum(map(seconds, plan.missing))
@@ -158,6 +181,10 @@ class CompleteAlbums:
         if answer is None:
             return as_it_is
         found = await answer.parsed("album")
+        if answer.selected_view:
+            if why and found is not None:
+                log.info("album view: %s: %s; the owned songs only", _named(found[1]), why)
+            return answer.reply(compress=accepts_gzip(call))
         if decision is None or decision.release is None or found is None:
             if why and found is not None:
                 log.info("album view: %s: %s; the owned songs only", _named(found[1]), why)
@@ -168,6 +195,12 @@ class CompleteAlbums:
         )
         if not complete(album, decision, library):
             return answer.reply(compress=accepts_gzip(call))
+        answer.headers = [
+            (key, str(album["songCount"]).encode())
+            if key.lower() == b"x-total-count"
+            else (key, value)
+            for key, value in answer.headers
+        ]
         return answer.reply(document=document, compress=accepts_gzip(call))
 
 

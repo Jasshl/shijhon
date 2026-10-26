@@ -1,0 +1,3 @@
+ALTER TABLE sources ADD COLUMN downloads INTEGER;
+ALTER TABLE sources ADD COLUMN preparations INTEGER;
+ALTER TABLE sources ADD COLUMN capacity_group TEXT NOT NULL DEFAULT '';

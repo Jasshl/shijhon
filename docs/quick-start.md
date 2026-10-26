@@ -32,6 +32,19 @@ interface is at `/app` (to add other people's accounts), the dashboard at `/shij
 check the installation, play something from your library and look at the dashboard's
 Diagnostics page.
 
+Before first using a music app, sign in to **Collection** in the dashboard to prepare your
+library. Apps default to **All**: everything you collected - whole albums of your imports,
+your imported playlists and your favorites (**Original imported library**), and of what
+Shijhon added from the catalog because you played it, favorited it, put it into a
+playlist, downloaded it or got it in a playlist Shijhon made for you (**Shijhon library**)
+- plus music you add on that page ([Your collection](collection.md)).
+
+To upload your own music files, enable the optional
+[music-import storage](deployment.md) and open **Collection → Import music**.
+An administrator first reviews who imported the existing server music. After
+that setup, new accounts start empty; each person's uploads join their Original
+and All libraries. Other people can choose shared music without receiving import credit.
+
 The connection is not encrypted, as with a plain Navidrome, so this is for a network you
 trust. For access from outside, put a TLS reverse proxy in front
 ([deployment.md](deployment.md#network-and-reverse-proxy)).

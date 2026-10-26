@@ -37,8 +37,14 @@ import shutil
 import sqlite3
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
-from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from contextlib import (
+    AbstractAsyncContextManager,
+    AsyncExitStack,
+    asynccontextmanager,
+    contextmanager,
+)
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -53,7 +59,9 @@ from shijhon.catalog.model import (
     CatalogRelease,
     CatalogTrack,
     release_data,
+    release_from_data,
 )
+from shijhon.collection.retention import KEPT_RELEASE
 from shijhon.locks import KeyedLocks
 from shijhon.navidrome.client import NavidromeError, NavidromeService
 from shijhon.navidrome.scans import ScanCoordinator
@@ -68,7 +76,7 @@ from shijhon.store import Store
 log = logging.getLogger(__name__)
 
 
-_AUDIO_SUFFIXES = {".flac", ".m4a", ".mp4", ".mp3", ".ogg", ".opus"}
+_AUDIO_SUFFIXES = tagging.DELIVERED_SUFFIXES
 
 
 class MaterializeError(RuntimeError):
@@ -77,6 +85,11 @@ class MaterializeError(RuntimeError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class ApprovalRefused(MaterializeError):
+    """The operation's own approval (``guard_materializations``) refused the release:
+    nothing was written, and no album's fill failed."""
 
 
 class ReplaceError(RuntimeError):
@@ -176,6 +189,14 @@ class PlaceholderEngine:
         self.store = store
         self.clock = clock
         self._locks = KeyedLocks()
+        # A task-local approval check for a caller publishing a reviewed selection.
+        # Concurrent normal commits retain their own context and are unaffected.
+        self._approval: ContextVar[Callable[[CatalogRelease], None] | None] = ContextVar(
+            "materialization_approval", default=None
+        )
+        self._write_guards: ContextVar[tuple[Callable[[], Awaitable[None]], ...]] = ContextVar(
+            "library_write_guards", default=()
+        )
         # New placeholders of recordings the owner has on other albums play those files.
         self.backing = backing
         # Test hook: adjust tags before writing, e.g. to force a split.
@@ -497,6 +518,43 @@ class PlaceholderEngine:
 
     # --- materialize ------------------------------------------------------------------
 
+    @contextmanager
+    def guard_materializations(self, check: Callable[[CatalogRelease], None]) -> Iterator[None]:
+        """Check the actual release at the write boundary, including first-use fills.
+
+        Child tasks inherit this guard; exit resets it even on cancellation. No process-
+        global replacement of the catalog or engine is needed for an approved operation.
+        """
+        token = self._approval.set(check)
+        try:
+            yield
+        finally:
+            self._approval.reset(token)
+
+    @contextmanager
+    def guard_writes(self, authorize: Callable[[], Awaitable[None]]) -> Iterator[None]:
+        """Reauthorize this operation at existing write gates, after internal waits.
+
+        Task-local guards compose and reach first-use fills and restorations. Recovery
+        compensation retains its ungated path so a refusal cannot prevent rollback.
+        """
+        token = self._write_guards.set((*self._write_guards.get(), authorize))
+        try:
+            yield
+        finally:
+            self._write_guards.reset(token)
+
+    def _approve(self, release: CatalogRelease) -> None:
+        check = self._approval.get()
+        if check is None:
+            return
+        try:
+            check(release)
+        except ApprovalRefused:
+            raise
+        except MaterializeError as exc:
+            raise ApprovalRefused(exc.reason) from None
+
     async def materialize(
         self,
         release: CatalogRelease,
@@ -531,6 +589,7 @@ class PlaceholderEngine:
         ``share_positions``: a new track may take a disc and number an owned song of the
         album has (the release's numbering kept, as an automatic pick accepts it) - also
         when its record of being taken out is added back."""
+        self._approve(release)
         links = dict(links or {})
         only = list(only) if only is not None else None
         await self._writable()
@@ -636,6 +695,8 @@ class PlaceholderEngine:
     async def _writable(self) -> None:
         if why := await self.refused():
             raise MaterializeError(why)
+        for authorize in self._write_guards.get():
+            await authorize()
 
     async def _swappable(self) -> None:
         if why := await self.refused():
@@ -1583,6 +1644,38 @@ class PlaceholderEngine:
         recorded = str(stored["owned_album_id"] or "") or None
         record = json.loads(stored["record"])
         release, rows = record["release"], record["placeholders"]
+        if self._approval.get() is not None:
+            saved = release_from_data(json.loads(release["data"]))
+            self._approve(saved)
+            # Later additions can leave more rows than the release's original data.
+            # Check the actual restored recordings, not just that saved description.
+            tracks = {track.ref: track for track in saved.tracks}
+            for row in rows:
+                actual = _row_track(row)
+                expected = tracks.get(actual.ref)
+                fields = ("title", "artist", "duration_ms", "disc", "number", "isrc")
+                if expected is None or any(
+                    getattr(actual, key) != getattr(expected, key) for key in fields
+                ):
+                    raise MaterializeError(
+                        "the restoration contains recordings outside the approved preview"
+                    )
+                expected_tags = tagging.placeholder_tags({}, expected, saved)
+                actual_tags = json.loads(row["tags"])
+                keys = (
+                    "title",
+                    "artist",
+                    "isrc",
+                    "tracknumber",
+                    "discnumber",
+                    "itunesadvisory",
+                    tagging.MARKER_TRACK,
+                    tagging.MARKER_RELEASE,
+                )
+                if any(actual_tags.get(key, []) != expected_tags.get(key, []) for key in keys):
+                    raise MaterializeError(
+                        "the restoration's recording tags differ from the approved preview"
+                    )
         owned = {str(t) for t in owned_now or ()}
         if (added_as is not None and (added_as[0] or None) != recorded) or any(
             str(r["track_ref"]) in owned for r in rows
@@ -1838,6 +1931,10 @@ class PlaceholderEngine:
             )
             return True
 
+    async def placeholder_row(self, song_id: str) -> Any:
+        """A catalog song's placeholder row (None: the song is no placeholder)."""
+        return await self.store.fetchone("SELECT * FROM placeholders WHERE song_id = ?", [song_id])
+
     async def set_backing(self, song_id: str, owned_song_id: str | None) -> None:
         """Back a placeholder with an owned recording of the same track (or clear it)."""
         await self._placeholder(song_id)
@@ -1848,10 +1945,22 @@ class PlaceholderEngine:
 
     # --- delivered audio in place of a placeholder ---------------------------------
 
-    async def replace_with_delivered(self, song_id: str, delivered: Path) -> str:
+    async def replace_with_delivered(
+        self,
+        song_id: str,
+        delivered: Path | None = None,
+        *,
+        source_fd: int | None = None,
+        suffix: str | None = None,
+        pin: str | None = None,
+    ) -> str:
         """Put delivered audio where the placeholder is, keeping the delivered format.
         Returns the new library-relative path. On any failure before the row says so, the
-        placeholder is restored and :class:`ReplaceError` raised."""
+        placeholder is restored and :class:`ReplaceError` raised. ``source_fd`` and
+        ``suffix``: the audio read from an open descriptor instead of ``delivered``
+        (a music import's retained file, never opened by name). ``pin``: the music
+        import item whose own audio this is - never expired as a cache, reverted only for
+        that import (``revert_to_placeholder``)."""
         async with self.lock_for(f"song:{song_id}"):
             await self._recover(song_id)  # a swap of it a stop interrupted, first
             row = await self._placeholder(song_id)
@@ -1860,14 +1969,26 @@ class PlaceholderEngine:
             await self._swappable()
             comments: dict[str, list[str]] = json.loads(row["tags"])
             old: str = row["placeholder_path"]
-            suffix = delivered.suffix.lower()
+            if delivered is not None:
+                suffix = delivered.suffix
+            suffix = (suffix or "").lower()
+            if (source_fd is None and delivered is None) or not suffix.startswith("."):
+                raise ReplaceError("no delivered audio")
             new = str(Path(old).with_suffix(suffix)) if suffix != ".flac" else old
             self.layout.ensure()
             await self._reconcile_placeholder(row, comments)
             staged = self.layout.staging / f"{uuid.uuid4().hex}{suffix}"
             backup = self._backup_path(song_id, ".flac")
             source, target = self._inside(old), self._inside(new)
-            await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
+            if new != old and (target.is_symlink() or target.exists()):
+                # Another file where its audio would go: never replaced (it is not Shijhon's
+                # to remove; the backup of a swap holds only the silent file).
+                raise ReplaceError(f"another file is at {Path(new).name}: left as it is")
+            if source_fd is not None:
+                await anyio.to_thread.run_sync(_copy_descriptor, source_fd, staged)
+            else:
+                assert delivered is not None
+                await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
             try:
                 size = source.stat().st_size if new == old else None
                 await anyio.to_thread.run_sync(
@@ -1893,9 +2014,9 @@ class PlaceholderEngine:
                 staged=staged,
                 backup=backup,
                 update=(
-                    "UPDATE placeholders SET state = 'delivered', path = ?, delivered_at = ?"
-                    " WHERE song_id = ?",
-                    [new, self.clock(), song_id],
+                    "UPDATE placeholders SET state = 'delivered', path = ?, delivered_at = ?,"
+                    " import_item = ? WHERE song_id = ?",
+                    [new, self.clock(), pin, song_id],
                 ),
                 done=lambda r: r["state"] == "delivered" and r["path"] == new,
                 unconfirmed="the song ID changed; the placeholder was restored",
@@ -1903,14 +2024,97 @@ class PlaceholderEngine:
             )
             return new
 
+    async def redeliver(self, song_id: str, delivered: Path, *, unused_since: float) -> bool:
+        """Delivered audio replaced by the same audio in another container (one whose length
+        Navidrome reads: ``delivery/lengths.py``), as a replacement puts audio in place:
+        tagged from the row, the song ID checked by a targeted scan. Only add-on audio
+        Shijhon put there - a file with its marker of this track, never a link, never a music
+        import's own audio - and only if it was not used after ``unused_since`` (checked
+        under the song's lock, which every request for its audio takes: a play that comes
+        meanwhile waits, and is served the new file). Returns whether it was replaced. On a
+        failure before the row's update, the file the row names is put back as for any swap
+        (at the same path, the one in place stays - both are the song's delivered audio -,
+        its backup when none is) and :class:`ReplaceError` raised."""
+        async with self.lock_for(f"song:{song_id}"):
+            await self._recover(song_id)  # a swap of it a stop interrupted, first
+            row = await self._placeholder(song_id)
+            if row["state"] != "delivered" or row["import_item"]:
+                return False
+            if float(row["last_used_at"] or 0) > unused_since:
+                return False
+            await self._swappable()
+            comments: dict[str, list[str]] = json.loads(row["tags"])
+            current: str = row["path"]
+            suffix = delivered.suffix.lower()
+            new = str(Path(current).with_suffix(suffix))
+            source, target = self._inside(current), self._inside(new)
+            if source.is_symlink() or not source.exists():
+                raise ReplaceError("its delivered file is a link or gone: left as it is")
+            marker = await anyio.to_thread.run_sync(tagging.marker_of, source)
+            if marker is None or marker.silence or marker.track != str(row["track_ref"]):
+                raise ReplaceError("its file is not Shijhon's delivered audio: left as it is")
+            if new != current and (target.is_symlink() or target.exists()):
+                raise ReplaceError(f"another file is at {Path(new).name}: left as it is")
+            self.layout.ensure()
+            staged = self.layout.staging / f"{uuid.uuid4().hex}{suffix}"
+            await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
+            try:
+                size = source.stat().st_size if new == current else None
+                await anyio.to_thread.run_sync(
+                    lambda: tagging.write_delivered(staged, comments, not_size=size)
+                )
+                await anyio.to_thread.run_sync(durable.sync_file, staged)
+            except Exception as exc:
+                staged.unlink(missing_ok=True)
+                raise ReplaceError(
+                    f"cannot tag the delivered file ({type(exc).__name__})"
+                ) from None
+            # (A name of its own: "backup-<id>.flac" is always the silent placeholder.)
+            backup = self._backup_path(song_id, ".delivered" + Path(current).suffix)
+
+            def swap() -> None:
+                os.replace(source, backup)
+                os.replace(staged, target)
+                durable.sync_dirs(target.parent, self.layout.staging)
+
+            await self._swap(
+                song_id,
+                "redelivery",
+                swap=swap,
+                at=new,
+                staged=staged,
+                backup=backup,
+                update=(
+                    "UPDATE placeholders SET path = ? WHERE song_id = ? AND state = 'delivered'",
+                    [new, song_id],
+                ),
+                # At the same path the row says the same before and after: it never tells a
+                # failure the swap was recorded (its backup would go, unconfirmed) - the
+                # files are put right from the backup (``_recover``) whatever failed.
+                done=(lambda r: False)
+                if new == current
+                else (lambda r: r["state"] == "delivered" and r["path"] == new),
+                unconfirmed="the song ID changed; its delivered audio is as its row says",
+                failed="putting its audio in one piece failed ({}); its delivered audio is as"
+                " its row says",
+            )
+            return True
+
     async def revert_to_placeholder(
-        self, song_id: str, *, unused_since: float | None = None, only_if_missing: bool = False
+        self,
+        song_id: str,
+        *,
+        unused_since: float | None = None,
+        only_if_missing: bool = False,
+        pinned: str | None = None,
     ) -> bool:
         """Put the silent placeholder back in place of delivered audio (cache expiry).
         ``unused_since``: only if the audio was not used after then (checked under the
         song's lock, so a use meanwhile keeps it); ``only_if_missing``: only if the delivered
-        file is gone (checked there too). Returns whether it was reverted."""
-        if (await self._placeholder(song_id))["state"] != "delivered":
+        file is gone (checked there too). A music import's own audio (``import_item``) is
+        no cache: it is reverted only for that import (``pinned``), or when its file is
+        gone. Returns whether it was reverted."""
+        if not _revertible(await self._placeholder(song_id), pinned, only_if_missing):
             return False  # (looked at again under the lock)
         # The silent file comes into the library while the row still says "delivered": as a
         # write of new placeholders, it waits for the archives being listed, and an archive
@@ -1927,7 +2131,7 @@ class PlaceholderEngine:
         try:
             async with self.lock_for(f"song:{song_id}"):
                 row = await self._placeholder(song_id)
-                if row["state"] != "delivered":
+                if not _revertible(row, pinned, only_if_missing):
                     return False
                 if unused_since is not None and float(row["last_used_at"] or 0) > unused_since:
                     return False
@@ -2192,7 +2396,7 @@ class PlaceholderEngine:
                     # audio is not to be had: the row follows the file - a "delivered" row
                     # over silence would have its plays forwarded to the silence. Then as
                     # for any placeholder: confirmed by a scan before the backups go.
-                    if _other_suffixes(original):
+                    if any(await anyio.to_thread.run_sync(_beside, original, row)):
                         # Not with the song in another format beside it: that may be its
                         # audio, and a placeholder's repair would take it away. Nor is the
                         # song settled then: its backups stay (what every later repair
@@ -2234,7 +2438,7 @@ class PlaceholderEngine:
                 # reading it again).
                 os.utime(target)
                 durable.sync_file(target)
-            for stray in _other_suffixes(target):
+            for stray in _other_suffixes(target, row):
                 stray.unlink(missing_ok=True)  # the other kind, another suffix
             durable.sync_dirs(target.parent, self.layout.staging)
 
@@ -2282,11 +2486,25 @@ class PlaceholderEngine:
         interrupted is put right before, ``_recover``): one that is missing is written anew
         from its row."""
         original = self._inside(row["placeholder_path"])
+        if original.is_symlink():
+            # Never moved or followed: the swap would take the linked file's place in the
+            # backup, and remove it once done.
+            raise ReplaceError("its placeholder's file is a link: left as it is")
         if original.exists():
+            marker = await anyio.to_thread.run_sync(tagging.marker_of, original)
+            if marker is None or not marker.silence:
+                # Not a silent file Shijhon wrote (someone else's audio put there): the swap
+                # would remove it once done.
+                raise ReplaceError("its placeholder's file is not its silent file: left as it is")
             return
+        ours, others = await anyio.to_thread.run_sync(_beside, original, row)
+        if others:
+            # Someone's own file of its name (another format): never removed, and no song
+            # of Shijhon's is written beside it.
+            raise ReplaceError(f"another file is at {others[0].name}: left as it is")
         silent = await self._silent_file(row["duration_ms"], comments)
         await self._still_swappable(silent)  # (making it took a moment: asked once more)
-        for stray in _other_suffixes(original):
+        for stray in ours:
             stray.unlink(missing_ok=True)
         os.replace(silent, original)
         durable.sync_dirs(original.parent, self.layout.staging)
@@ -2355,6 +2573,10 @@ def used_here(rows: list[Any]) -> list[str]:
 async def _used_meanwhile(conn: aiosqlite.Connection, ref: str) -> list[str]:
     """A use Shijhon recorded since the last check (in the removal's transaction): a
     stream or download it served, a use a check saw in Navidrome's records."""
+    for sql, why in KEPT_RELEASE:
+        async with conn.execute(sql, [ref]) as cursor:
+            if await cursor.fetchone() is not None:
+                return [why]
     async with conn.execute(
         "SELECT 1 FROM placeholders WHERE release_ref = ?"
         " AND (last_used_at IS NOT NULL OR state != 'placeholder') LIMIT 1",
@@ -2371,9 +2593,30 @@ async def _used_meanwhile(conn: aiosqlite.Connection, ref: str) -> list[str]:
 # The delivery stays a use (the cleanup never takes a used release out).
 _MARK_PLACEHOLDER = (
     "UPDATE placeholders SET state = 'placeholder', path = placeholder_path,"
-    " last_used_at = COALESCE(last_used_at, delivered_at), delivered_at = NULL"
-    " WHERE song_id = ?"
+    " last_used_at = COALESCE(last_used_at, delivered_at), delivered_at = NULL,"
+    " import_item = NULL WHERE song_id = ?"
 )
+
+
+def _revertible(row: Any, pinned: str | None, only_if_missing: bool) -> bool:
+    """Whether ``revert_to_placeholder`` may put this placeholder back: delivered audio,
+    and an import's own audio only for that import (or when its file is gone)."""
+    if row["state"] != "delivered":
+        return False
+    own = row["import_item"]
+    return not own or only_if_missing or own == pinned
+
+
+def _copy_descriptor(source_fd: int, target: Path) -> None:
+    """Copy an open file from its start, leaving the descriptor as it was."""
+    with open(target, "xb") as out:
+        offset, size = 0, os.fstat(source_fd).st_size
+        while offset < size:
+            chunk = os.pread(source_fd, min(1 << 20, size - offset), offset)
+            if not chunk:
+                break
+            out.write(chunk)
+            offset += len(chunk)
 
 
 def _bound(exc: BaseException) -> float | None:
@@ -2383,15 +2626,27 @@ def _bound(exc: BaseException) -> float | None:
     return COMPENSATION_SECONDS if isinstance(exc, anyio.get_cancelled_exc_class()) else None
 
 
-def _other_suffixes(path: Path) -> list[Path]:
-    """The audio files beside ``path`` with its exact name and another suffix (the same
-    song in another format) - never a file whose name merely starts like it ("1-01 Mr"
-    and "1-01 Mr. Jones" are two songs)."""
-    return [
-        other
-        for other in path.parent.glob(f"{glob.escape(path.stem)}.*")
-        if other != path and other.stem == path.stem and other.suffix.lower() in _AUDIO_SUFFIXES
-    ]
+def _other_suffixes(path: Path, row: Any) -> list[Path]:
+    """The song of ``row`` in another format beside ``path`` (``_beside``: Shijhon's own)."""
+    return _beside(path, row)[0]
+
+
+def _beside(path: Path, row: Any) -> tuple[list[Path], list[Path]]:
+    """The audio files beside ``path`` with its exact name and another suffix (never one
+    whose name merely starts like it: "1-01 Mr" and "1-01 Mr. Lantern" are two songs): those
+    that are Shijhon's files of this very track - its marker says so - and the others. A
+    file without it (someone's own audio of that name, in any format) or a link is never
+    taken for the song, and so never removed."""
+    ours, others = [], []
+    for other in path.parent.glob(f"{glob.escape(path.stem)}.*"):
+        if other == path or other.stem != path.stem or other.suffix.lower() not in _AUDIO_SUFFIXES:
+            continue
+        marker = None if other.is_symlink() else tagging.marker_of(other)
+        if marker is not None and marker.track == str(row["track_ref"]):
+            ours.append(other)
+        else:
+            others.append(other)
+    return ours, others
 
 
 def _copy_in_place(backup: Path, target: Path) -> None:

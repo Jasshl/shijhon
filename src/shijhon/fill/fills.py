@@ -21,10 +21,12 @@ one at a time with a pause in between, ahead of the paced pass over the whole li
 (``library_pass.py``), which waits for them; a client whose pages show many albums in a
 short time gets no more of them queued for a while.
 
-Each album is matched once per catalog and region; the outcome is kept in
+Each album's outcome is kept per catalog and region in
 ``album_matches``: ``filled``, ``complete``, ``review`` (the review list), ``none``,
 ``failed`` (tried again later, waiting twice as long each time) or ``kept`` (the owner
-chose to keep it as it is). A dry run records what it would do as a plan (``planned``)
+chose to keep it as it is). Only negative matches expire: after a matcher revision,
+changed owned metadata, or seven days. Fresh negatives never query the catalog again.
+A dry run records what it would do as a plan (``planned``)
 without writing anything; acting on the album later follows the plan without asking the
 catalog again, unless the owned songs changed (their IDs, positions, titles, lengths or
 totals). Albums that are catalog releases, and
@@ -52,6 +54,14 @@ songs (3) or a share (a quarter) of the release; the others are matched and kept
 library pass is a dry run nothing is filled automatically: every album a view, search,
 artist page or sync matches is kept as ``deferred``.
 
+**Never two albums of one name**: a catalog release first used while an owned album of
+its name is the same album (``matching/albums.py``) but has a recording the release does
+not - so no fill - adds the release's songs that album lacks into it, at the release's
+numbers, instead of an album beside it (``first_use``); an album of the release's very
+name that is complete takes a bigger edition's other songs the same way on their first use
+(automatic fills never pad a complete album); where that album
+cannot take them, the use is refused.
+
 **One release, one album**: owned files of one release can form several albums (a
 song tagged "Album", five tagged "Album (Remastered)"). When a release fills an
 album, the other owned albums of the same artist and title (edition words aside) whose
@@ -68,22 +78,29 @@ import logging
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine, Iterable
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
 import anyio
+import mutagen
 
 from shijhon.catalog.base import CatalogError
 from shijhon.catalog.model import (
     CatalogRef,
     CatalogRelease,
+    artwork_url,
     release_data,
     release_from_data,
 )
 from shijhon.locks import KeyedLocks
+from shijhon.matching import covers
+from shijhon.matching.albums import Album, Song, pairs, same_album, same_name
 from shijhon.matching.matcher import (
     INCOMPLETE,
+    MATCH_REVISION,
     PICKABLE,
     Match,
     Matcher,
@@ -95,10 +112,12 @@ from shijhon.matching.matcher import (
     confirm,
     displaced,
     doubled,
+    owned_fingerprint,
+    unfit,
 )
-from shijhon.matching.normalize import fold, same_artist, title_key
+from shijhon.matching.normalize import core_title, credit_names, fold, same_artist, title_key
 from shijhon.navidrome.client import NavidromeError, NavidromeService
-from shijhon.placeholders.engine import MaterializeError, PlaceholderEngine
+from shijhon.placeholders.engine import ApprovalRefused, MaterializeError, PlaceholderEngine
 from shijhon.store import Store
 from shijhon.views.bursts import Burst, Bursts, Client
 
@@ -109,8 +128,16 @@ PER_ANSWER = 5  # albums of one search result or artist page queued
 MAX_RETRY = 30 * 86400.0  # the longest wait before a failed album is tried again
 IDLE_POLL = 0.5  # seconds: how often the library pass checks whether it is its turn
 IN_LIBRARY = "the release is in the library as another album"  # a review reason
+# A first use's fill of the same album that has an owned recording the release does not.
+JOINED = "the same album: the release's other songs added beside the owned ones"
+COVER_SIZE = 600  # the catalog cover asked for when two albums' covers are compared
+_COVER_NAMES = ("cover", "folder", "front")  # Navidrome's default cover art priority
+_PICTURE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
 SHOWN_PLANS = 20_000  # plans kept read for album lists (a few hundred bytes each)
 ANY_SHOWN_SECONDS = 10.0  # how long "no album is shown complete" is believed
+NEGATIVE_SECONDS = 7 * 86400.0
+LOOKUP_LIMIT = 20_000  # albums the owned-album lookup reads at most, all searches (more: refused)
+LOOKUP_NAMES = 8  # credited names it searches at most (more: refused)
 _OUTCOMES = {
     Outcome.FILL: "filled",
     Outcome.COMPLETE: "complete",
@@ -134,19 +161,22 @@ class FillPolicy:
 @dataclass(frozen=True)
 class Shown:
     """An owned album shown complete before its fill, as its list entries count it:
-    the ``owned`` songs its plan links (Navidrome's song count while the plan fits) and the
-    lengths (ms) of the release's ``missing`` tracks, which its view adds."""
+    the ``owned`` songs its plan links (Navidrome's song count while the plan fits), the
+    lengths (ms) of the release's ``missing`` tracks, which its view adds, and the IDs of
+    the owned ``songs`` (a selected library list checks the album's own songs by them)."""
 
     owned: int
     missing: tuple[int, ...]
+    songs: frozenset[str] = frozenset()
 
 
 class ChoiceRefused(Exception):
     """A release the owner chose from the review list cannot fill the album; ``reason``."""
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, *, category: str = "owned_fill") -> None:
         super().__init__(reason)
         self.reason = reason
+        self.category = category
 
 
 @dataclass
@@ -230,6 +260,7 @@ class Fills:
         auto_fill: bool = True,
         auto_pick: bool = True,
         clock: Callable[[], float] = time.time,
+        negative_seconds: float = NEGATIVE_SECONDS,
     ) -> None:
         self.store = store
         self.navidrome = navidrome
@@ -240,6 +271,7 @@ class Fills:
         self.retry_seconds = retry_seconds
         self.spawn = spawn
         self.clock = clock
+        self.negative_seconds = negative_seconds
         self.syncs = syncs  # clients opening many unmatched albums: syncing
         self.exposures = exposures or Bursts(20, 60.0)  # clients shown many albums
         self.pause = pause_seconds  # between background matches (about 1 request/s)
@@ -261,6 +293,7 @@ class Fills:
         self._any_shown: tuple[float, bool] | None = None  # (checked at, any album shown)
         # The plans of albums shown complete in lists, by row: the most recently listed kept.
         self._shown_plans: OrderedDict[tuple[str, float], Shown | None] = OrderedDict()
+        self.lookup_limit = LOOKUP_LIMIT
         self.fills = 0  # observable in tests
 
     # --- views and first use ------------------------------------------------------
@@ -268,13 +301,20 @@ class Fills:
     async def viewable(self, album_id: str) -> bool:
         """Whether a view of this album may have something to add (no work, one or two
         small queries): not a catalog album, not filled, and a plan that fills it (checked
-        against the owned songs then), no match yet, a failure whose wait is over, or a
-        review an automatic pick may settle now. A dry run's other plans (complete, review,
-        no match) add nothing: a view leaves them to the library pass."""
+        against the owned songs then), no match yet, a negative that may be stale, a failure
+        whose wait is over, or a review an automatic pick may settle now. No native I/O
+        before authentication. Fresh dry-run negatives add nothing; a view leaves those
+        plans to the library pass."""
         if not album_id or "." in album_id or await self._filled(album_id):
             return False
         row = await self._row(album_id)
-        return row is None or _has_plan(row) or self._retry_due(row) or self._repick(row)
+        return (
+            row is None
+            or _has_plan(row)
+            or row["outcome"] == "none"
+            or self._retry_due(row)
+            or self._repick(row)
+        )
 
     async def view(self, album_id: str, client: Client) -> tuple[Decision | None, str | None]:
         """(What to show the owned album complete with, why not): the release whose missing
@@ -323,6 +363,9 @@ class Fills:
         """The album's saved plan, when it still fits the owned songs and a release fills
         it; an album the fill policy allows is then filled in the background (not while
         the library pass is a dry run)."""
+        row = await self._row(album_id)
+        if row is None or not _has_plan(row):
+            return None
         owned = await self._owned(album_id)
         if owned is None:
             return None
@@ -445,14 +488,332 @@ class Fills:
             return None
         return str(song) if song else None
 
-    async def first_use(self, release_ref: str, trigger: str) -> str | None:
-        """The release's tracks were used (``trigger``: the request): the owned album it
-        is shown with is filled now. Its album ID, or None when no owned album waits for
-        this release."""
+    async def first_use(self, release: CatalogRelease, trigger: str) -> str | None:
+        """Claim an owned album for this exact release before a standalone commit.
+
+        Existing plans retain priority. Otherwise the owned albums of the release's artist
+        and title (``_same_title``: all of them, or refused) that have every owned
+        recording on it are compatible: exactly one is claimed; several are refused (the
+        owner resolves duplicates). With none, an owned album that is the same album as the
+        release (``matching/albums.py``: the same name and a shared recording, else the same
+        year and covers that do not clearly differ; of several, the one with the most songs)
+        is claimed all the same: the release's songs it lacks are added into it, its own
+        songs - also those the release has in another recording - staying as they are, so
+        that apps never show two albums of one name. Without one
+        (another album of the same name and another year, another edition): None, and the
+        caller commits the release as its own album - unless Navidrome could put its songs
+        into one of those owned albums (``_would_group``): refused before anything is
+        written. Once an album is claimed, every refusal propagates: the caller must never
+        retry it as a standalone catalog album.
+        """
+        ref = str(release.ref)
+        album_id = await self.owner(ref)
+        if album_id is not None and await self._owned(album_id) is None:
+            album_id = None  # a saved plan outlived its owned files
+        if album_id is None:
+            found = await self._same_title(release)
+            compatible = [o for _, o in found if confirm(o, release) is not None]
+            if len(compatible) > 1:
+                raise ChoiceRefused(
+                    "the exact release fits several owned albums", category="owned_ambiguous"
+                )
+            if compatible:
+                album_id = compatible[0].id
+            else:
+                same = [o for _, o in found if await self._same_album(o, release)]
+                if same:
+                    # Several albums of one name (already in the library): the fullest.
+                    album_id = max(same, key=lambda o: (len(o.songs), o.id)).id
+                    log.info("first use of %s: the same album as %s, its songs added there",
+                             ref, _named(next(o for o in same if o.id == album_id)))  # fmt: skip
+                else:
+                    grouped = next((o for e, o in found if _would_group(e, release)), None)
+                    if grouped is not None:
+                        # Navidrome keeps a rolled-back placeholder as a missing song of
+                        # the album it joined: refused before writing, not undone after.
+                        log.info("first use of %s refused: its songs would join %s",
+                                 ref, _named(grouped))  # fmt: skip
+                        raise ChoiceRefused(
+                            "the release's songs would join an owned album",
+                            category="album_collision",
+                        )
+                    return None  # no owned album fits: the release is an album of its own
+        group = await self._group_key(album_id)
+        # Same order as ordinary fills/choices/keep; never hold the engine lock first.
+        async with self._locks.hold(group), self._locks.hold(album_id):
+            if await self._in_library(ref):
+                return album_id  # another first use or normal fill won the race
+            if await self._filled(album_id):
+                raise ChoiceRefused(
+                    "the owned album is already filled from another release", category="owned_plan"
+                )
+            owned = await self._owned(album_id)
+            if owned is None:
+                return None  # no owned files remain: ordinary standalone commit is safe
+            if (
+                title_key(owned.title) != title_key(release.title)
+                or not same_artist(owned.artist, release.artist)
+                or group != f"group:{title_key(owned.title)}"
+            ):
+                raise ChoiceRefused(
+                    "the owned album changed during preparation", category="owned_plan"
+                )
+            row = await self._row(album_id)
+            # An album of the release's very name that its files or a match found complete
+            # takes the bigger edition's other songs on their first use (a star, a playlist
+            # entry), never a second album beside it; automatic fills still never pad it.
+            named = same_name(album_facts(owned), release_facts(release))
+            completing = named and (
+                complete_by_tags(owned) or (row is not None and row["outcome"] == "complete")
+            )
+            if row is not None:
+                settled = row["outcome"] not in ("none", "deferred", "failed")
+                if settled and not _has_plan(row) and not completing:
+                    raise ChoiceRefused(
+                        "the owned album has a settled match or owner decision",
+                        category="owned_decision",
+                    )
+                if row["outcome"] == "failed" and not self._retry_due(row):
+                    raise ChoiceRefused(
+                        "the owned album is waiting after a failed fill", category="owned_retry"
+                    )
+            # A saved plan still fits while the owned songs are as it saw them and each is
+            # still its track's recording (``_planned``), as views and the library pass ask:
+            # a new year, or an ISRC that does not contradict the release, keeps the album
+            # shown complete and fillable. Every owned recording is checked again below.
+            if await self._part_of(owned) is not None:
+                raise ChoiceRefused(
+                    "the owned album is part of an existing filled release", category="owned_plan"
+                )
+            if complete_by_tags(owned) and not completing:
+                raise ChoiceRefused(
+                    "the owned files' track totals say every track is there",
+                    category="owned_complete",
+                )
+            if owned.clean is not None and (
+                (owned.clean and release.explicit) or (not owned.clean and release.clean)
+            ):
+                raise ChoiceRefused(
+                    "the exact release has a different clean or explicit edition",
+                    category="owned_incompatible",
+                )
+            links = confirm(owned, release)
+            joining = links is None
+            if links is None:
+                # Not every owned recording is on it: the same album all the same takes the
+                # release's other songs beside its own (``_same_album``).
+                if not await self._same_album(owned, release):
+                    raise ChoiceRefused(
+                        "an owned recording is not on the exact release",
+                        category="owned_incompatible",
+                    )
+                links = joined_links(owned, release)
+            # (Completing: the match that found the album complete is no plan to keep.)
+            planned = None if completing else await self._planned(album_id, owned, recover=True)
+            if planned is not None and planned.release is not None:
+                if _release_identity(planned.release) != _release_identity(release):
+                    raise ChoiceRefused(
+                        "the exact release differs from the owned album plan", category="owned_plan"
+                    )
+                # (Joining: the plan the cleanup left when it took this release's songs
+                # out of the album - they come back as they were.)
+                decision = planned
+                decision.shares = decision.shares or joining
+            else:
+                if row is not None and row["plan"] and row["outcome"] != "none" and not completing:
+                    # A plan whose files changed, or a fill failure retaining its plan:
+                    # do not discard its recovery/numbering/part decisions implicitly.
+                    raise ChoiceRefused(
+                        "the owned album plan needs to be matched again", category="owned_plan"
+                    )
+                reason = JOINED if joining or completing else ""
+                decision = Decision("filled", reason, release, links, [ref], ref)
+                # The same album keeps the release's numbering: an added song may share a
+                # disc and number with an owned song (another recording of it, say).
+                decision.shares = joining
+            if (why := unfit(owned, release, links, picking=decision.shares)) is not None:
+                raise ChoiceRefused(why, category="owned_incompatible")
+            decision.release = release
+            # Every current owned recording on the exact release (joining: those it has).
+            decision.links = links
+            if len(links) == len(release.tracks):
+                # Native completeness does not establish a catalog mapping. Preserve the
+                # complete owned album instead of materializing another album beside it.
+                raise ChoiceRefused(
+                    "every recording of the exact release is already owned",
+                    category="owned_complete",
+                )
+            try:
+                await self._materialize(album_id, owned, decision, trigger)
+            except ApprovalRefused:
+                # A playlist's or collection's own approval: the album's fill did not fail
+                # (no wait before it is filled, by this operation or another).
+                raise
+            except (CatalogError, NavidromeError, MaterializeError):
+                # Preserve the old plan/ref and ordinary failure backoff for recovery.
+                await self._record(
+                    album_id, Decision("failed", "the owned album fill failed"), owned
+                )
+                raise
+            if decision.outcome != "filled":
+                raise ChoiceRefused("the owned album could not be filled from the exact release")
+            await self._record(album_id, decision, owned)
+            await self._record_parts(owned, decision, planned=False)
+            return album_id
+
+    async def _same_title(self, release: CatalogRelease) -> list[tuple[dict[str, Any], OwnedAlbum]]:
+        """(Navidrome's album entry, the owned album) for every owned album of the
+        release's artist and title (edition words aside): Navidrome's album searches for
+        each credited name ("A feat. B": A and B) and for the release's core title, merged.
+        The artist search finds a title written otherwise ("NightLetters"), the title search
+        an artist written otherwise ("ACDC" for "AC/DC"). Each search is one request for
+        all of its albums (one consistent answer, never pages a library change can shift).
+        Refused beyond ``lookup_limit`` albums in all, beyond ``LOOKUP_NAMES`` names, or
+        with nothing Navidrome would search for (it ignores a one-letter search): an
+        incomplete list cannot show that no other owned album fits. An uncredited release
+        is looked for by its title alone (no album is compatible with it, but one may be
+        grouped with it)."""
+        names = list({fold(n): n for n in credit_names(release.artist) if fold(n)}.values())
+        if not names and fold(release.artist):
+            names = [release.artist]
+        if len(names) > LOOKUP_NAMES:
+            raise ChoiceRefused("the owned album lookup is too large", category="owned_ambiguous")
+        queries = {" ".join(q.split()).lower(): q for q in (*names, core_title(release.title))}
+        searchable = [query for query in queries.values() if len(fold(query)) >= 2]
+        if not searchable:
+            raise ChoiceRefused(
+                "the owned album lookup has nothing to search for", category="owned_ambiguous"
+            )
+        entries: dict[str, dict[str, Any]] = {}
+        read = 0
+        for query in searchable:
+            left = self.lookup_limit - read
+            albums = await self._found(query, left + 1)
+            if len(albums) > left:
+                raise ChoiceRefused(
+                    "the owned album lookup is too large", category="owned_ambiguous"
+                )
+            read += len(albums)
+            for entry in albums:
+                entries.setdefault(str(entry.get("id") or ""), entry)
+        found: list[tuple[dict[str, Any], OwnedAlbum]] = []
+        for ident, entry in entries.items():
+            if (
+                ident
+                and title_key(entry.get("name")) == title_key(release.title)
+                and (not names or same_artist(entry.get("artist"), release.artist))
+                and (owned := await self._owned(ident)) is not None
+            ):
+                found.append((entry, owned))
+        return found
+
+    async def _same_album(self, owned: OwnedAlbum, release: CatalogRelease) -> bool:
+        """Whether the owned album is the release's album (``matching/albums.py``): the
+        same name as apps show it and a shared recording, else the same year and covers
+        that do not clearly differ. A clean or explicit edition the owned album says it is
+        not is another edition (an album of its own, as before)."""
+        if owned.clean is not None and (
+            (owned.clean and release.explicit) or (not owned.clean and release.clean)
+        ):
+            return False
+        mine, theirs = album_facts(owned), release_facts(release)
+        if not same_name(mine, theirs):
+            return False
+        if pairs(theirs.songs, mine.songs):
+            return True
+        if mine.year and theirs.year and mine.year != theirs.year:
+            return False
+        try:
+            differ = covers.differ(
+                await self._owned_cover(owned), await self._release_cover(release)
+            )
+        except (NavidromeError, CatalogError, OSError) as exc:
+            log.info("covers not compared: %s", type(exc).__name__)
+            differ = None  # cannot tell: the same year decides
+        return same_album(mine, theirs, covers_differ=lambda: differ)
+
+    async def _owned_cover(self, owned: OwnedAlbum) -> int | None:
+        """The owned album's cover fingerprint, as Navidrome picks the picture by default:
+        a cover, folder or front image beside its first song, else the picture in that
+        file (None: none, or it cannot be read)."""
+        album = await self.engine.owned_album(owned.id)
+        if not album.songs:
+            return None
+        first = sorted(album.songs, key=lambda s: (s.get("discNumber", 0), s.get("trackNumber", 0)))
+        path = self.engine.layout.absolute(str(first[0]["path"]))
+        try:
+            picture = await anyio.to_thread.run_sync(_album_picture, path)
+        except OSError:
+            return None
+        return await covers.fingerprint(picture) if picture else None
+
+    async def _release_cover(self, release: CatalogRelease) -> int | None:
+        url = artwork_url(release.artwork_template, COVER_SIZE)
+        if url is None:
+            return None
+        try:
+            data, _ = await self.matcher.catalog.artwork(url)
+        except CatalogError:
+            return None
+        return await covers.fingerprint(data)
+
+    async def _found(self, query: str, count: int) -> list[dict[str, Any]]:
+        """Navidrome's first ``count`` albums for a search, in one request."""
+        answer = await self.navidrome.subsonic(
+            "search3",
+            [
+                ("query", " ".join(query.split())),
+                ("albumCount", str(count)),
+                ("artistCount", "0"),
+                ("songCount", "0"),
+            ],
+        )
+        return list(answer.get("searchResult3", {}).get("album", []))
+
+    async def saved_release(self, release_ref: str) -> CatalogRelease | None:
+        """A valid saved owned plan, without a catalog request or any library write.
+
+        First use rechecks it under the group/album locks, and the engine still checks
+        the actual release against any frozen approval. Legacy plans retain their
+        historical fingerprint validation; newer plans also check all matcher inputs.
+        """
         album_id = await self.owner(release_ref)
-        if album_id is not None:
-            await self.fill_album(album_id, trigger)
-        return album_id
+        if album_id is None:
+            return None
+        owned = await self._owned(album_id)
+        if owned is None:
+            return None
+        row = await self._row(album_id)
+        if row is None or (
+            row["owned_fingerprint"] and row["owned_fingerprint"] != owned_fingerprint(owned)
+        ):
+            return None
+        decision = await self._planned(album_id, owned, recover=True)
+        if decision is None or decision.release is None or str(decision.release.ref) != release_ref:
+            return None
+        return decision.release
+
+    async def matched_release(self, release: CatalogRelease) -> CatalogRelease | None:
+        """An existing, still-valid owned-album plan for this title and artist.
+
+        This lookup is read-only: unlike showing a complete album, it never
+        queues an automatic fill. A preview may prefer this edition's recordings.
+        """
+        rows = await self.store.fetchall(
+            "SELECT album_id FROM album_matches WHERE scope=? AND plan IS NOT NULL"
+            " AND json_valid(plan) AND outcome IN ('filled','deferred')"
+            " AND json_extract(plan, '$.release.title')=?"
+            " AND json_extract(plan, '$.release.artist')=? ORDER BY album_id",
+            [self.scope, release.title, release.artist],
+        )
+        for row in rows:
+            owned = await self._owned(str(row["album_id"]))
+            if owned is None:
+                continue
+            decision = await self._planned(owned.id, owned)
+            if decision and decision.outcome == "filled" and decision.release:
+                return decision.release
+        return None
 
     async def fill_album(self, album_id: str, trigger: str) -> Decision | None:
         """Fill an owned album shown complete, on its first use."""
@@ -557,16 +918,20 @@ class Fills:
         mind_rest: bool = True,
         auto: bool = False,
         songs: int = 0,
+        owned: OwnedAlbum | None = None,
+        act_negative_plan: bool = False,
+        navidrome_errors: bool = True,
     ) -> bool:
-        """Worth matching: not a catalog release, not filled, not matched (a failure is
-        tried again after a while, a review an automatic pick settles once picks are on);
+        """Worth matching: not a catalog release, not filled, not matched, or a stale
+        negative (a failure is tried again after a while, a review an automatic pick
+        settles once picks are on);
         not while the catalog rests after failing (unless
         ``mind_rest`` is off: the caller waits for the rest itself). A dry run's plan is
         acted on (``dry_run``: it is already planned). A deferred album is filled on first
         use (not ``auto``), and automatically (``auto``) only once the fill policy allows
         it (``songs``: how many it has now, when the caller knows). With automatic fills off
         (a dry run of the library pass) nothing saved is acted on automatically: only new
-        matches and failures whose wait is over."""
+        matches, stale negatives and failures whose wait is over."""
         if not album_id or "." in album_id or (mind_rest and self.resting):
             return False  # nothing, a catalog ID, or resting
         if await self._filled(album_id):
@@ -576,9 +941,24 @@ class Fills:
             return True
         if auto and row["cleaned_at"] is not None:
             return False  # its fill was taken out as unused: its next use fills it
+        if row["outcome"] == "none":
+            try:
+                stale = await self._negative_stale(album_id, row, owned)
+            except NavidromeError:
+                if not navidrome_errors:
+                    raise
+                return False  # an outage is not new metadata or a negative match
+            # Switching the pass on settles a fresh dry-run negative without another
+            # catalog query. Views still leave plans with nothing to add to the pass.
+            return stale or (
+                act_negative_plan
+                and bool(row["planned"])
+                and not dry_run
+                and (not auto or self.auto_fill)
+            )
         if row["outcome"] == "deferred":
-            owned = max(int(row["owned_songs"]), songs)
-            allowed = self.auto_fill and self.policy.allows(owned, int(row["release_tracks"]))
+            owned_count = max(int(row["owned_songs"]), songs)
+            allowed = self.auto_fill and self.policy.allows(owned_count, int(row["release_tracks"]))
             return not dry_run and (not auto or allowed)
         if row["outcome"] == "failed":
             return self._retry_due(row)
@@ -596,13 +976,29 @@ class Fills:
     async def _row(self, album_id: str) -> Any:
         return await self.store.fetchone(
             "SELECT outcome, reason, attempts, checked_at, planned, plan, owned_songs,"
-            " release_tracks, cleaned_at FROM album_matches WHERE album_id = ? AND scope = ?",
+            " release_tracks, cleaned_at, match_revision, owned_fingerprint, release_ref"
+            " FROM album_matches WHERE album_id = ? AND scope = ?",
             [album_id, self.scope],
         )
 
     def _repick(self, row: Any) -> bool:
         """A review an automatic pick settles, while picks are on: matched again."""
         return self.auto_pick and row["outcome"] == "review" and row["reason"] in PICKABLE
+
+    async def _negative_stale(
+        self, album_id: str, row: Any, owned: OwnedAlbum | None = None
+    ) -> bool:
+        """Only negatives expire; no catalog I/O, and all callers use this same gate."""
+        if row["outcome"] != "none":
+            return False
+        if (
+            row["match_revision"] != MATCH_REVISION
+            or not row["owned_fingerprint"]
+            or self.clock() - float(row["checked_at"]) >= self.negative_seconds
+        ):
+            return True
+        owned = owned if owned is not None else await self._owned(album_id)
+        return owned is not None and row["owned_fingerprint"] != owned_fingerprint(owned)
 
     def _retry_due(self, row: Any) -> bool:
         """A failed match whose wait (doubling with each failure) is over."""
@@ -635,7 +1031,13 @@ class Fills:
         """Whether the library pass has anything to do for this album (a rest of the
         catalog aside: the pass waits for it)."""
         return await self._candidate(
-            album_id, dry_run=dry_run, mind_rest=False, auto=True, songs=songs
+            album_id,
+            dry_run=dry_run,
+            mind_rest=False,
+            auto=True,
+            songs=songs,
+            act_negative_plan=True,
+            navidrome_errors=False,
         )
 
     async def fill(
@@ -665,105 +1067,163 @@ class Fills:
         except NavidromeError:
             if not navidrome_errors:
                 raise
-            group = f"album:{album_id}"
-        async with self._locks.hold(group), self._locks.hold(album_id):
-            # A saved plan is followed also while the catalog rests (it needs no catalog
-            # request); a new match waits for the rest to end.
-            if not await self._candidate(album_id, dry_run=dry_run, auto=auto, mind_rest=False):
-                return None
-            owned: OwnedAlbum | None = None
-            target: OwnedAlbum | None = None
+            return None  # never mutate another group without its lock during an outage
+        async with self._locks.hold(group), self._locks.hold(album_id), AsyncExitStack() as members:
+            return await self._fill_held(
+                album_id,
+                members=members,
+                group=group,
+                matcher=matcher,
+                dry_run=dry_run,
+                navidrome_errors=navidrome_errors,
+                auto=auto,
+                hold=hold,
+                trigger=trigger,
+            )
+
+    async def _fill_held(
+        self,
+        album_id: str,
+        *,
+        members: AsyncExitStack,
+        group: str,
+        matcher: Matcher | None = None,
+        dry_run: bool = False,
+        navidrome_errors: bool = True,
+        auto: bool = False,
+        hold: bool = False,
+        trigger: str | None = None,
+        recheck: bool = False,
+    ) -> Decision | None:
+        """The ordinary match/fill with the group and album locks held."""
+        # A saved plan is followed also while the catalog rests (it needs no catalog
+        # request); a new match waits for the rest to end.
+        owned: OwnedAlbum | None = None
+        target: OwnedAlbum | None = None
+        row = await self._row(album_id)
+        if row is not None and row["outcome"] == "none":
             try:
                 owned = await self._owned(album_id)
-                if owned is None:
-                    return None  # not an owned album (or no longer there)
-                target = owned
-                part = await self._part_of(owned)
-                if part is not None:
-                    # Its songs are on a filled album's release: matched again (the
-                    # review list's "Match again"), another edition of that release would
-                    # put the same songs in two albums.
-                    as_part = Decision("review", part[0], None, {}, [part[2]], part[2])
-                    await self._record(album_id, as_part, owned, planned=dry_run)
-                    return as_part
-                decision = None if dry_run else await self._planned(album_id, owned)
-                fresh = decision is None  # matched now (not a saved plan)
-                if decision is None:
-                    if self.resting:
-                        return None
-                    target, decision = await self._match_group(owned, matcher or self.matcher)
-                    if auto and target.id != album_id:
-                        chosen = await self._row(target.id)
-                        if chosen is not None and chosen["cleaned_at"] is not None:
-                            # The release's album is one whose fill the cleanup took out:
-                            # only its own use fills it again, never automatically.
-                            # This album is its part (not matched again at each occasion).
-                            held = Decision("deferred", "", release_ref=decision.release_ref)
-                            held.parts = decision.parts
-                            await self._record_parts(target, held, planned=dry_run)
-                            return None
-                if (
-                    decision.outcome == "filled"
-                    and decision.release is not None
-                    and decision.release.incomplete
-                ):
-                    # A track of it could not be read: filling would leave a gap for good.
-                    decision.outcome = "review"
-                    decision.reason = INCOMPLETE
-                if decision.outcome == "filled" and await self._in_library(decision.release_ref):
-                    # Committed as a catalog album (or filling another owned album):
-                    # filling this one too would show the release twice.
-                    decision.outcome = "review"
-                    decision.reason = IN_LIBRARY
-                if decision.outcome == "filled":
-                    allowed = self.policy.allows(decision.owned, decision.tracks)
-                    if allowed and not self.auto_fill and not dry_run and (hold or auto):
-                        # While the pass is a dry run: recorded as its plan (it would fill
-                        # the album), shown complete, filled on first use.
-                        decision.planned = True
-                    elif hold or (auto and not allowed):
-                        decision.outcome = "deferred"
-                        decision.reason = f"{decision.owned_text}: " + (
-                            "filled automatically" if allowed
-                            else "shown complete, filled on first use"
-                        )  # fmt: skip
-                planned = dry_run or decision.planned
-                if fresh and decision.picked and decision.outcome in ("filled", "deferred"):
-                    others = len(set(decision.candidates) - {decision.release_ref})
-                    log.info(
-                        "album matched by an automatic pick: %s (%d owned): %s, %d other"
-                        " release(s) plausible (%s)%s",
-                        _named(target),
-                        len(target.songs),
-                        decision.release_ref,
-                        others,
-                        decision.picked,
-                        " (dry run)" if planned else "",
-                    )
-                if decision.outcome == "filled" and not planned:
-                    await self._materialize(target.id, target, decision, trigger)
-                elif decision.outcome == "review" and not planned:
-                    log.info(
-                        "album match needs review: %s (%d owned): %s",
-                        _named(target),
-                        len(target.songs),
-                        decision.reason,
-                    )
-            except (CatalogError, NavidromeError, MaterializeError) as exc:
-                if isinstance(exc, NavidromeError) and not navidrome_errors:
+            except NavidromeError:
+                if not navidrome_errors:
                     raise
-                reason = getattr(exc, "reason", None) or str(exc)
-                if isinstance(exc, CatalogError) and exc.kind != "not_found":
-                    self.resting_until = self.clock() + self.rest_seconds
-                named = f" for {_named(owned)}" if owned is not None else ""
-                log.info("album match failed%s: %s", named, reason)
-                await self._record(album_id, Decision("failed", reason), owned, planned=dry_run)
-                return Decision("failed", reason)
+                return None  # leave the negative intact during a native outage
+            if owned is None:
+                return None
+        if not recheck and not await self._candidate(
+            album_id,
+            dry_run=dry_run,
+            auto=auto,
+            mind_rest=False,
+            owned=owned,
+            act_negative_plan=not hold,
+            navidrome_errors=navidrome_errors,
+        ):
+            return None
+        try:
+            owned = owned if owned is not None else await self._owned(album_id)
+            if owned is None:
+                return None  # not an owned album (or no longer there)
+            if group != f"group:{title_key(owned.title)}":
+                return None  # retagged while acquiring the group: retry under its new lock
+            target = owned
+            member_states: dict[str, dict[str, Any] | None] = {}
+            part = await self._part_of(owned)
+            if part is not None:
+                # Its songs are on a filled album's release: matched again (the
+                # review list's "Match again"), another edition of that release would
+                # put the same songs in two albums.
+                as_part = Decision("review", part[0], None, {}, [part[2]], part[2])
+                await self._record(album_id, as_part, owned, planned=dry_run)
+                return as_part
+            decision = None if dry_run or recheck else await self._planned(album_id, owned)
+            fresh = decision is None  # matched now (not a saved plan)
+            if decision is None:
+                if self.resting:
+                    return None
+                target, decision = await self._match_group(
+                    owned,
+                    matcher or self.matcher,
+                    member_locks=members,
+                    states=member_states,
+                    preserve_decisions=row is not None and row["outcome"] == "none",
+                )
+                await self._check_member_states(member_states)
+                if target.id != album_id and await self._filled(target.id):
+                    return None  # recovery filled the target while the match waited
+                if auto and target.id != album_id:
+                    chosen = await self._row(target.id)
+                    if chosen is not None and chosen["cleaned_at"] is not None:
+                        # The release's album is one whose fill the cleanup took out:
+                        # only its own use fills it again, never automatically.
+                        # This album is its part (not matched again at each occasion).
+                        held = Decision("deferred", "", release_ref=decision.release_ref)
+                        held.parts = decision.parts
+                        await self._record_parts(target, held, planned=dry_run)
+                        return None
+            if (
+                decision.outcome == "filled"
+                and decision.release is not None
+                and decision.release.incomplete
+            ):
+                # A track of it could not be read: filling would leave a gap for good.
+                decision.outcome = "review"
+                decision.reason = INCOMPLETE
+            if decision.outcome == "filled" and await self._in_library(decision.release_ref):
+                # Committed as a catalog album (or filling another owned album):
+                # filling this one too would show the release twice.
+                decision.outcome = "review"
+                decision.reason = IN_LIBRARY
+            if decision.outcome == "filled":
+                allowed = self.policy.allows(decision.owned, decision.tracks)
+                if allowed and not self.auto_fill and not dry_run and (hold or auto):
+                    # While the pass is a dry run: recorded as its plan (it would fill
+                    # the album), shown complete, filled on first use.
+                    decision.planned = True
+                elif hold or (auto and not allowed):
+                    decision.outcome = "deferred"
+                    decision.reason = f"{decision.owned_text}: " + (
+                        "filled automatically" if allowed
+                        else "shown complete, filled on first use"
+                    )  # fmt: skip
             planned = dry_run or decision.planned
-            await self._record(target.id, decision, target, planned=planned)
-            if decision.outcome in ("filled", "deferred", "complete"):
-                await self._record_parts(target, decision, planned=planned)
-            return decision
+            if fresh and decision.picked and decision.outcome in ("filled", "deferred"):
+                others = len(set(decision.candidates) - {decision.release_ref})
+                log.info(
+                    "album matched by an automatic pick: %s (%d owned): %s, %d other"
+                    " release(s) plausible (%s)%s",
+                    _named(target),
+                    len(target.songs),
+                    decision.release_ref,
+                    others,
+                    decision.picked,
+                    " (dry run)" if planned else "",
+                )
+            if decision.outcome == "filled" and not planned:
+                await self._materialize(target.id, target, decision, trigger)
+            elif decision.outcome == "review" and not planned:
+                log.info(
+                    "album match needs review: %s (%d owned): %s",
+                    _named(target),
+                    len(target.songs),
+                    decision.reason,
+                )
+        except (CatalogError, NavidromeError, MaterializeError) as exc:
+            if isinstance(exc, NavidromeError) and not navidrome_errors:
+                raise
+            reason = getattr(exc, "reason", None) or str(exc)
+            if isinstance(exc, CatalogError) and exc.kind != "not_found":
+                self.resting_until = self.clock() + self.rest_seconds
+            named = f" for {_named(owned)}" if owned is not None else ""
+            log.info("album match failed%s: %s", named, reason)
+            await self._record(album_id, Decision("failed", reason), owned, planned=dry_run)
+            return Decision("failed", reason)
+        planned = dry_run or decision.planned
+        await self._check_member_states(member_states)
+        await self._record(target.id, decision, target, planned=planned)
+        if decision.outcome in ("filled", "deferred", "complete"):
+            await self._record_parts(target, decision, planned=planned)
+        return decision
 
     async def _materialize(
         self, album_id: str, owned: OwnedAlbum, decision: Decision, trigger: str | None = None
@@ -815,19 +1275,27 @@ class Fills:
     # --- one release, one album ------------------------------------------------------
 
     async def _group_key(self, album_id: str) -> str:
-        """The lock of the album's group: its artist and title apart from edition words
-        (never the album's own lock, which is held with it)."""
+        """Serialize every compatible credit under one normalized-title lock.
+
+        Shared-artist membership is not an equivalence relation: full artist credits
+        cannot safely key group locks. Different artists sharing a title may wait too.
+        """
         try:
             album = await self.navidrome.album(album_id)
         except NavidromeError as exc:
             if exc.code == 70:
                 return f"album:{album_id}"  # not in Navidrome: nothing to group
             raise
-        artist = fold(str(album.get("artist") or album.get("displayArtist") or ""))
-        return f"group:{artist}:{title_key(str(album.get('name') or ''))}"
+        return f"group:{title_key(str(album.get('name') or ''))}"
 
     async def _match_group(
-        self, owned: OwnedAlbum, matcher: Matcher
+        self,
+        owned: OwnedAlbum,
+        matcher: Matcher,
+        *,
+        member_locks: AsyncExitStack,
+        states: dict[str, dict[str, Any] | None],
+        preserve_decisions: bool = False,
     ) -> tuple[OwnedAlbum, Decision]:
         """(The album the match concerns, the decision.) With other owned albums of the same
         release, the one with the most songs (the anchor) is matched; its release fills
@@ -836,6 +1304,27 @@ class Fills:
         album is matched as it is."""
         pick = self.auto_pick
         others = await self._group(owned)
+        # The title lock is already held. Keep every compatible member locked through
+        # matching, materialization and recording, including a target other than owned.
+        for other in sorted(others, key=lambda album: album.id):
+            await member_locks.enter_async_context(self._locks.hold(other.id))
+        for member in (owned, *others):
+            row = await self._row(member.id)
+            states[member.id] = dict(row) if row is not None else None
+        if preserve_decisions:
+            # Reconsidering a negative is not permission to replace another member's
+            # review, saved plan, cleanup record or failure/backoff. The group may have
+            # settled while this album's negative was cached. Leave that decision intact.
+            for other in others:
+                settled = await self._row(other.id)
+                if (
+                    settled is not None
+                    and settled["outcome"] != "none"
+                    and not self._repick(settled)
+                ):
+                    return owned, Decision(
+                        "review", "another owned album in this group has a settled match"
+                    )
         if not others:
             return owned, Decision.of(await matcher.match(owned, pick=pick))
         members = [owned, *others]
@@ -882,6 +1371,15 @@ class Fills:
         decision.parts = [m for m, _ in confirmed if m.id != best.id]
         return best, decision
 
+    async def _check_member_states(self, states: dict[str, dict[str, Any] | None]) -> None:
+        """Do not replace a member's decision changed during an awaited match/write."""
+        for album_id, before in states.items():
+            row = await self._row(album_id)
+            if (dict(row) if row is not None else None) != before:
+                raise ChoiceRefused(
+                    "the album group changed; retry after checking Library", category="owned_plan"
+                )
+
     async def _group(self, owned: OwnedAlbum) -> list[OwnedAlbum]:
         """The other owned albums of the same album artist and title (edition words aside):
         filled ones, catalog albums and those the owner keeps as they are aside."""
@@ -908,7 +1406,12 @@ class Fills:
                 [ident, ident, ident, self.scope],
             )
             other = None if excluded else await self._owned(ident)
-            if other is not None and other.songs:
+            if (
+                other is not None
+                and other.songs
+                and title_key(other.title) == wanted
+                and same_artist(other.artist, owned.artist)
+            ):
                 found.append(other)
         return found
 
@@ -973,17 +1476,22 @@ class Fills:
         row = await self.store.fetchone("SELECT 1 FROM releases WHERE ref = ?", [release_ref])
         return row is not None
 
-    async def _planned(self, album_id: str, owned: OwnedAlbum) -> Decision | None:
+    async def _planned(
+        self, album_id: str, owned: OwnedAlbum, *, recover: bool = False
+    ) -> Decision | None:
         """A dry run's plan for the album, as long as its owned songs are as they were then
         (a retag - track totals, numbers, titles - can change what the album needs)."""
         row = await self.store.fetchone(
-            "SELECT outcome, reason, release_ref, candidates, plan, picked FROM album_matches"
-            " WHERE album_id = ? AND scope = ? AND outcome != 'failed'"
-            " AND (planned = 1 OR outcome = 'deferred')",
-            [album_id, self.scope],
+            "SELECT outcome, reason, release_ref, candidates, plan, picked, checked_at,"
+            " match_revision, owned_fingerprint FROM album_matches"
+            " WHERE album_id = ? AND scope = ? AND (outcome != 'failed' OR ?)"
+            " AND (planned = 1 OR outcome = 'deferred' OR (outcome = 'failed' AND ?))",
+            [album_id, self.scope, recover, recover],
         )
         if row is None or not row["plan"] or self._repick(row):
             return None  # (a dry run's review a pick may settle now: matched again)
+        if await self._negative_stale(album_id, row, owned):
+            return None  # a dry run's old negative must not bypass the freshness gate
         try:
             plan = json.loads(row["plan"])
             if plan["owned"] != _fingerprint(owned):
@@ -995,9 +1503,25 @@ class Fills:
         except (ValueError, KeyError, TypeError, AttributeError) as exc:
             log.info("album plan unreadable: %s", type(exc).__name__)
             return None
+        if (
+            release is not None
+            and row["owned_fingerprint"]
+            and row["owned_fingerprint"] != owned_fingerprint(owned)
+            and (
+                not isinstance(plan.get("evidence"), dict)
+                or _replaced(owned, links, plan["evidence"])
+                or _isrc_conflict(owned, release, links)
+                or confirm(owned, release) != links
+            )
+        ):
+            # Retagged since the match so that a linked song is another recording: its
+            # known ISRCs replaced by others, an ISRC its track does not have, or another
+            # track's. Matched again; so is a plan saved without the ISRCs it saw. A new
+            # year, or an ISRC where none was known, keeps the plan.
+            return None
         # A deferred album is filled now (its first use; an automatic fill or a view defers
         # it again), without the reason it was deferred for.
-        deferred = row["outcome"] == "deferred"
+        deferred = row["outcome"] in ("deferred", "failed")
         outcome = "filled" if deferred else row["outcome"]
         if outcome == "filled" and release is None:
             return None
@@ -1021,10 +1545,7 @@ class Fills:
         catalog = self.matcher.catalog
         if ref.catalog != catalog.key:
             raise ChoiceRefused("a release of another catalog")
-        try:
-            group = await self._group_key(album_id)
-        except NavidromeError:
-            group = f"album:{album_id}"
+        group = await self._group_key(album_id)
         # The group's lock, then the album's, as a fill takes them (the pass may be filling
         # this album from the group's release at this moment).
         async with self._locks.hold(group), self._locks.hold(album_id):
@@ -1084,7 +1605,8 @@ class Fills:
         """The owner keeps the album as it is: it is not matched again (in this scope).
         Raises ``ChoiceRefused`` for an album that is filled, a catalog album, or not an
         owned album."""
-        async with self._locks.hold(album_id):
+        group = await self._group_key(album_id)
+        async with self._locks.hold(group), self._locks.hold(album_id):
             filled = await self.store.fetchone(
                 "SELECT 1 FROM releases WHERE album_id = ? OR owned_album_id = ?",
                 [album_id, album_id],
@@ -1142,6 +1664,7 @@ class Fills:
             "release": data,
             "links": links,
             "backing": backing,
+            "evidence": _evidence(owned, {CatalogRef.parse(k): v for k, v in links.items()}),
         }
         # Added back as it was: where a track shares a disc and number with an owned song
         # (a picked release keeps its numbering), it shares them again.
@@ -1175,12 +1698,47 @@ class Fills:
 
         return write
 
+    async def recheck(self, album_id: str) -> Decision | None:
+        """Recheck only a current negative, without filling or scheduling a fill.
+
+        A concurrent keep, positive match, fill or cleanup wins unchanged. This action
+        does not delete the old row/plan, so failures retain normal recovery provenance.
+        """
+        group = await self._group_key(album_id)
+        async with self._locks.hold(group), self._locks.hold(album_id), AsyncExitStack() as members:
+            row = await self._row(album_id)
+            if row is None or row["outcome"] != "none" or await self._filled(album_id):
+                return None
+            if row["cleaned_at"] is not None:
+                return None
+            return await self._fill_held(
+                album_id, members=members, group=group, hold=True, recheck=True
+            )
+
     async def rematch(self, album_id: str) -> None:
-        """Forget the album's match: it is matched again when viewed, shown or passed (a
-        filled album stays as it is)."""
-        await self.store.execute(
-            "DELETE FROM album_matches WHERE album_id = ? AND scope = ?", [album_id, self.scope]
-        )
+        """Forget the current match for a later view/pass, serialized with owner actions.
+
+        A decision changed while this action waited is never erased. Filled albums and
+        their recovery records stay as they are.
+        """
+        before = await self._row(album_id)
+        group = await self._group_key(album_id)
+        async with self._locks.hold(group), self._locks.hold(album_id), AsyncExitStack() as held:
+            row = await self._row(album_id)
+            if row is not None and row["release_ref"]:
+                # Cleanup/restoration owns this release lock, without taking group locks.
+                # Wait in the same group -> album -> release order as a normal fill.
+                await held.enter_async_context(self.engine.lock_for(str(row["release_ref"])))
+                row = await self._row(album_id)
+            if await self._filled(album_id):
+                return
+            if (dict(row) if row else None) != (dict(before) if before else None):
+                raise ChoiceRefused("the album match changed; reload Library before matching again")
+            await self.store.execute(
+                "DELETE FROM album_matches WHERE album_id = ? AND scope = ?",
+                [album_id, self.scope],
+            )
+            self._any_shown = None
 
     async def _owned(self, album_id: str) -> OwnedAlbum | None:
         try:
@@ -1222,15 +1780,16 @@ class Fills:
                 data["release"] = release_data(decision.release)
                 data["links"] = {str(k): v for k, v in decision.links.items()}
                 data["backing"] = {str(k): v for k, v in decision.backing.items()}
+                data["evidence"] = _evidence(owned, decision.links)
                 if decision.shares:
                     data["shares"] = True
             plan = json.dumps(data)
         await self.store.execute(
             "INSERT INTO album_matches (album_id, scope, outcome, release_ref, reason,"
             " candidates, attempts, checked_at, planned, plan, title, artist, owned_songs,"
-            " release_tracks, picked) VALUES"
+            " release_tracks, picked, match_revision, owned_fingerprint) VALUES"
             " (?, ?, ?, ?, ?, ?, CASE WHEN ? = 'failed' THEN 1 ELSE 0 END, ?, ?, ?, ?, ?, ?, ?,"
-            " ?) ON CONFLICT (album_id, scope) DO UPDATE SET outcome = excluded.outcome,"
+            " ?, ?, ?) ON CONFLICT (album_id, scope) DO UPDATE SET outcome = excluded.outcome,"
             # A failure keeps the release and plan the album had (it is still shown with
             # them after the wait, and their songs never become a catalog copy).
             " release_ref = CASE WHEN excluded.outcome = 'failed'"
@@ -1246,6 +1805,10 @@ class Fills:
             " title = COALESCE(NULLIF(excluded.title, ''), album_matches.title),"
             " artist = COALESCE(NULLIF(excluded.artist, ''), album_matches.artist),"
             " owned_songs = excluded.owned_songs, release_tracks = excluded.release_tracks,"
+            " match_revision = CASE WHEN excluded.outcome = 'failed'"
+            " THEN album_matches.match_revision ELSE excluded.match_revision END,"
+            " owned_fingerprint = CASE WHEN excluded.outcome = 'failed'"
+            " THEN album_matches.owned_fingerprint ELSE excluded.owned_fingerprint END,"
             " attempts = CASE WHEN excluded.outcome = 'failed'"
             " THEN album_matches.attempts + 1 ELSE 0 END,"
             # A fill taken out as unused is not filled automatically until it is
@@ -1268,6 +1831,8 @@ class Fills:
                 _owned_count(decision, owned),
                 decision.tracks,
                 decision.picked if decision.outcome in ("filled", "deferred") else "",
+                MATCH_REVISION,
+                owned_fingerprint(owned) if owned is not None else None,
             ],
         )
 
@@ -1298,7 +1863,8 @@ def _shown(plan: str) -> Shown | None:
     except (ValueError, KeyError, TypeError):
         return None
     missing = tuple(t.duration_ms for t in release.tracks if t.ref not in links)
-    return Shown(len(set(links.values())), missing) if missing else None
+    songs = frozenset(links.values())
+    return Shown(len(songs), missing, songs) if missing else None
 
 
 def _printable(text: str) -> str:
@@ -1327,6 +1893,183 @@ def _fingerprint(owned: OwnedAlbum) -> list[list[Any]]:
         [s.id, s.disc, s.number, s.title, s.duration_ms, s.track_total, s.disc_total]
         for s in owned.songs
     )
+
+
+def _release_identity(release: CatalogRelease) -> dict[str, Any]:
+    """The approved release contents; artwork locations do not identify recordings."""
+    data = release_data(release)
+    data.pop("artwork_template", None)
+    for track in data["tracks"]:
+        track.pop("artwork_template", None)
+    return data
+
+
+def _isrc_conflict(
+    owned: OwnedAlbum, release: CatalogRelease, links: dict[CatalogRef, str]
+) -> bool:
+    """Whether a linked owned song and its catalog track both have ISRCs, none shared."""
+    songs = {song.id: song for song in owned.songs}
+    for track in release.tracks:
+        song = songs.get(links.get(track.ref, ""))
+        code = "".join(ch for ch in track.isrc or "" if ch.isalnum()).upper()
+        if song is not None and code and song.isrcs and code not in song.isrcs:
+            return True
+    return False
+
+
+def album_facts(owned: OwnedAlbum) -> Album:
+    """The owned album as the shared same-album rule compares it."""
+    return Album(
+        owned.title,
+        owned.artist,
+        owned.year,
+        tuple(
+            Song(s.title, s.artist, s.duration_ms, s.disc, s.number, s.isrcs) for s in owned.songs
+        ),
+    )
+
+
+def release_facts(release: CatalogRelease) -> Album:
+    """The release as the shared same-album rule compares it, named as Navidrome names
+    the album Shijhon adds for it ("Title (Clean)" for a clean edition)."""
+    name = f"{release.title} (Clean)" if release.clean else release.title
+    return Album(
+        name,
+        release.artist,
+        release.year,
+        tuple(
+            Song(
+                t.title,
+                t.artist,
+                t.duration_ms,
+                t.disc,
+                t.number,
+                (t.isrc,) if t.isrc else (),
+                clean=True if t.clean else False if t.explicit else None,
+            )
+            for t in release.tracks
+        ),
+    )
+
+
+def joined_links(owned: OwnedAlbum, release: CatalogRelease) -> dict[CatalogRef, str]:
+    """Catalog track -> owned song for the release's songs the owned album already has
+    (``matching/albums.pairs``: unambiguous, one to one); the others are added."""
+    found = pairs(release_facts(release).songs, album_facts(owned).songs)
+    return {release.tracks[i].ref: owned.songs[j].id for i, j in found.items()}
+
+
+def _album_picture(first: Path) -> bytes | None:
+    """A cover, folder or front picture in the folder of ``first`` (letter case aside, in
+    that order), else the picture in that file; at most ``covers.MAX_IMAGE`` bytes."""
+    try:
+        entries = sorted(first.parent.iterdir())
+    except OSError:
+        entries = []
+    for stem in _COVER_NAMES:
+        for entry in entries:
+            if (
+                entry.stem.lower() == stem
+                and entry.suffix.lower() in _PICTURE_SUFFIXES
+                and entry.is_file()
+                and entry.stat().st_size <= covers.MAX_IMAGE
+            ):
+                return entry.read_bytes()
+    try:
+        audio = mutagen.File(first)
+    except mutagen.MutagenError:
+        return None
+    if audio is None:
+        return None
+    pictures = getattr(audio, "pictures", None)  # FLAC, Ogg
+    if pictures:
+        return bytes(pictures[0].data)
+    tags = audio.tags
+    if tags is None:
+        return None
+    if isinstance(tags, dict) or hasattr(tags, "get"):
+        covr = tags.get("covr")  # MP4
+        if covr:
+            return bytes(covr[0])
+    getall = getattr(tags, "getall", None)  # ID3
+    if getall is not None:
+        frames = getall("APIC")
+        if frames:
+            return bytes(frames[0].data)
+    return None
+
+
+def _would_group(entry: dict[str, Any], release: CatalogRelease) -> bool:
+    """Whether Navidrome could put the release's placeholders, added as an album of its
+    own, into this album of its title and artist (the caller compared those, edition
+    words aside). Navidrome 0.64.2 tells albums apart by the MusicBrainz album ID, else by
+    the album artist and album tags (``_identity``: letter case, Unicode quotation marks
+    and dashes aside; spacing and other punctuation counted),
+    the version tag and the release date tag; placeholders carry no MusicBrainz ID, the
+    version "Clean" only for a clean edition, and the release's date. In doubt: yes."""
+    if entry.get("musicBrainzId"):
+        return False  # that album is told apart by its ID
+    name, version = str(entry.get("name") or ""), str(entry.get("version") or "")
+    if version and name.lower().endswith(f" ({version.lower()})"):
+        name = name[: -len(version) - 3]  # Navidrome names a versioned album "Title (Clean)"
+    if _identity(name) != _identity(release.title):
+        return False  # another album tag ("Title (Deluxe Edition)"): a separate album
+    if release.artist.strip() and _identity(entry.get("artist")) != _identity(release.artist):
+        return False  # another album artist: "Tide Paper" and "TidePaper" are two artists
+    if fold(version) != ("clean" if release.clean else ""):
+        return False
+    date, wanted = entry.get("releaseDate"), _date_parts(release.release_date)
+    return not isinstance(date, dict) or wanted is None or date == wanted
+
+
+# Navidrome 0.64.2's str.Clear: the quotation marks and dashes it makes plain.
+_CLEAR = str.maketrans(
+    dict.fromkeys("\u2018\u2019\u201b\u2032", "'")
+    | dict.fromkeys(
+        "\uff02\u3003\u02ee\u05f2\u1cd3\u2033\u2036\u02f6\u02ba\u201c\u201d\u02dd\u201f", '"'
+    )
+    | dict.fromkeys("\u2010\u2013\u2014\u2212\u2015", "-")
+)
+
+
+def _identity(tag: Any) -> str:
+    """An album or album artist tag as Navidrome 0.64.2's album identity compares it:
+    str.Clear(strings.ToLower(tag)) - lower case rune by rune (no final-sigma context:
+    each character alone), the quotation marks and dashes above made plain. Spaces at
+    either end aside (in doubt: the same)."""
+    lowered = "".join(ch.lower()[:1] or ch for ch in str(tag or ""))
+    return lowered.translate(_CLEAR).strip()
+
+
+def _evidence(owned: OwnedAlbum, links: dict[CatalogRef, str]) -> dict[str, list[str]]:
+    """The recordings a plan saw: each linked owned song's ISRCs (its length is in the
+    plan's owned fingerprint)."""
+    songs = {song.id: song for song in owned.songs}
+    return {sid: list(songs[sid].isrcs) for sid in links.values() if sid in songs}
+
+
+def _replaced(owned: OwnedAlbum, links: dict[CatalogRef, str], evidence: dict[str, Any]) -> bool:
+    """Whether a linked owned song's known ISRCs were replaced by others: another
+    recording, whatever the catalog knows. Also when the plan did not see the song."""
+    songs = {song.id: song for song in owned.songs}
+    for sid in links.values():
+        before, song = evidence.get(sid), songs.get(sid)
+        if not isinstance(before, list) or song is None:
+            return True
+        if before and song.isrcs and not set(before) & set(song.isrcs):
+            return True
+    return False
+
+
+def _date_parts(date: str | None) -> dict[str, int] | None:
+    """A release date as Navidrome describes an album's (year, month, day; {}: none).
+    None: a date it may read otherwise."""
+    if not date:
+        return {}
+    parts = date.split("-")
+    if len(parts) > 3 or not all(part.isdigit() for part in parts):
+        return None
+    return dict(zip(("year", "month", "day"), map(int, parts), strict=False))
 
 
 def _owned_song(song: dict[str, Any]) -> OwnedSong:

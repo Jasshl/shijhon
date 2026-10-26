@@ -140,6 +140,8 @@ def test_past_fills_are_listed_then_undone(
     # Viewed again: complete at once; the album below the policy stays as it is until its
     # first use.
     view = world.client(client="again-1").ok("getAlbum", {"id": few})["album"]
+    assert view["songCount"] == 19
+    view = world.client().ok("getAlbum", {"id": "sh.al.demo.900000182"})["album"]
     assert view["songCount"] == 19 and len(songs(world, few)) == 1
 
 

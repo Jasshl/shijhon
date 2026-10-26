@@ -1,0 +1,254 @@
+/* Import music and Manage music imports: panels on the dashboard's tokens. */
+
+.music-imports > * + * {
+  margin-top: var(--space-5);
+}
+.music-imports > .page-head + * {
+  margin-top: 0;
+}
+.music-imports [hidden] {
+  display: none !important;
+}
+
+.music-import-panel {
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+}
+.music-import-panel > * + * {
+  margin-top: var(--space-3);
+}
+.music-import-panel h2 {
+  font-size: var(--text-xl);
+}
+.music-import-panel p {
+  max-width: 64ch;
+}
+.music-import-off .actions {
+  margin-top: var(--space-4);
+}
+.music-import-shared {
+  color: var(--muted);
+}
+
+/* The two pickers in a dashed drop area, then what happens to the files. */
+.music-import-drop {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--control);
+  border-radius: var(--radius-group);
+  background: var(--sunken);
+  text-align: center;
+}
+.music-import-drop .music-import-buttons {
+  justify-content: center;
+}
+.music-import-drop .music-import-more {
+  text-align: left;
+}
+.music-import-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.music-import-buttons .btn {
+  cursor: pointer;
+}
+.music-imports input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+.music-imports .btn:has(+ input[type="file"]:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.music-import-muted {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.music-import-selection,
+.music-import-summary {
+  font-weight: 600;
+}
+.music-import-summary:empty {
+  display: none;
+}
+
+/* Rarely needed explanations, folded. */
+.music-import-more {
+  font-size: var(--text-sm);
+}
+.music-import-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.music-import-more > summary::-webkit-details-marker {
+  display: none;
+}
+.music-import-more > summary::before {
+  content: "";
+  border-left: 0.3125rem solid currentColor;
+  border-top: 0.3125rem solid transparent;
+  border-bottom: 0.3125rem solid transparent;
+  transition: transform 120ms ease-out;
+}
+.music-import-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+.music-import-more > p {
+  margin-top: var(--space-2);
+  color: var(--muted);
+}
+
+/* An import's progress and its files. */
+.music-import-stage-heading,
+.music-import-review-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+}
+.music-import-stage-heading > span {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.music-import-review {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+.music-import-review-heading label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.music-import-review-heading select {
+  width: auto;
+}
+.music-import-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.music-import-files li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.music-import-files li > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.music-import-files strong {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.music-import-files small {
+  display: block;
+  margin-top: 0.125rem;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.music-import-file-state {
+  max-width: 45%;
+  font-size: var(--text-sm);
+  text-align: right;
+}
+.music-import-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+}
+.music-import-pagination span:empty {
+  display: none;
+}
+.music-import-files:empty + .music-import-pagination {
+  display: none;
+}
+.music-import-used {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+.music-import-used input {
+  margin-top: 0.125rem;
+}
+
+/* Lists of imports (yours, or every batch for an administrator). */
+.music-import-history h2 {
+  margin-bottom: var(--space-3);
+  font-size: var(--text-lg);
+}
+.music-import-history ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+}
+.music-import-history li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+.music-import-history li + li {
+  border-top: 1px solid var(--rule);
+}
+.music-import-history li[aria-current] {
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--accent-soft);
+}
+.music-import-history a {
+  font-weight: 600;
+}
+.music-import-history span {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.music-import-history .music-import-pagination {
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 40rem) {
+  .music-import-panel {
+    padding: var(--space-4);
+  }
+  .music-import-drop {
+    padding: var(--space-5) var(--space-3);
+  }
+  .music-import-files li {
+    display: block;
+  }
+  .music-import-file-state {
+    max-width: 100%;
+    margin-top: var(--space-1);
+    text-align: left;
+  }
+}

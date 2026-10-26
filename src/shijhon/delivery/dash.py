@@ -59,10 +59,10 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 import anyio
 import anyio.to_thread
@@ -99,12 +99,14 @@ _STRONG = re.compile(r'"[\x21\x23-\x7e]{1,200}"')
 _PROBED = re.compile(r"bytes 0-0/(\d{1,15})")
 _T = TypeVar("_T")
 # What a joined file of each kind of audio is written as: its suffix, its content type,
-# ffmpeg's output options.
+# ffmpeg's output options. ("mp4": any other audio an MP4 carries, from a fragmented file
+# an add-on's link gave - ``copy_out``; never a DASH representation's.)
 _OUTPUTS = {
     "flac": (".flac", "audio/flac", ["-f", "flac"]),
     "mp3": (".mp3", "audio/mpeg", ["-f", "mp3"]),
     "aac": (".m4a", "audio/mp4", ["-movflags", "+faststart", "-f", "mp4"]),
     "alac": (".m4a", "audio/mp4", ["-movflags", "+faststart", "-f", "mp4"]),
+    "mp4": (".m4a", "audio/mp4", ["-movflags", "+faststart", "-f", "mp4"]),
 }
 
 
@@ -120,8 +122,8 @@ class DashError(Exception):
     limited a while ago) | denied (the network policy) | error (an HTTP 5xx, a broken
     connection or answer, a remux that failed) | failed (another answer) | timeout | paced
     (its time ran out at the add-on's limits) | changed (a segment is not the one its probe
-    told: another file) | whole (not to be served at once: joined instead). The reason
-    names no address."""
+    told: another file) | whole (not to be served at once: joined instead) | capacity
+    (a reused admission cannot start a different job). The reason names no address."""
 
     def __init__(
         self, kind: str, reason: str, *, status: int | None = None, seconds: float | None = None
@@ -137,6 +139,17 @@ class _Broken(Exception):
     """An HTTP 5xx, or a connection that broke: the part is asked for once more."""
 
 
+class CapacityLease(Protocol):
+    active: bool
+    owner: object | None
+
+    def retain(self) -> Callable[[], None]: ...
+
+    def prepared(self) -> None: ...
+
+    def network_done(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class Link:
     """An add-on's DASH link, as a join needs it. ``key``: the add-on's track (and the
@@ -148,6 +161,8 @@ class Link:
     http: httpx.AsyncClient = field(repr=False)
     pace: AddonPace | None = field(repr=False)
     name: str  # the add-on's, for the log
+    lease: CapacityLease | None = field(default=None, repr=False, compare=False)
+    reuse_only: bool = False  # this admission belongs to an existing job, never a new one
 
 
 @dataclass(eq=False)
@@ -209,10 +224,45 @@ class _Job:
     planned: anyio.Event = field(default_factory=anyio.Event)  # (served at once: its file)
     result: Joined | None = None
     error: DashError | None = None
+    release: Callable[[], None] | None = None
+    upstream_done: bool = False
+    capacity: CapacityLease | None = field(default=None, repr=False)
+    capacities: list[CapacityLease] = field(default_factory=list, repr=False)
+    owner: object = field(default_factory=object, repr=False)
     outlived = False  # a request waiting for it ran out of time while it went on
 
     def wanted_until(self, deadline: float) -> None:
         self.scope.deadline = max(self.scope.deadline, deadline)
+
+    def attach(self, capacity: CapacityLease | None) -> None:
+        if capacity is not None:
+            _bind(capacity, self.owner, done=self.upstream_done)
+            if self.upstream_done:
+                capacity.network_done()
+            elif not any(held is capacity for held in self.capacities):
+                self.capacities.append(capacity)
+
+    def fetched(self) -> None:
+        self.upstream_done = True
+        for capacity in self.capacities:
+            capacity.network_done()
+        self.capacities.clear()
+
+
+def _bind(capacity: CapacityLease, owner: object, *, done: bool = False) -> None:
+    """A lease can belong to only one upstream acquisition, even before its EOF."""
+    if capacity.owner is not None and capacity.owner is not owner:
+        raise DashError("capacity", "another acquisition owns this admission")
+    if not capacity.active and not done:
+        raise DashError("capacity", "the upstream admission has ended")
+    capacity.owner = owner
+
+
+def _new_admission(link: Link) -> None:
+    if link.reuse_only or (
+        link.lease is not None and (not link.lease.active or link.lease.owner is not None)
+    ):
+        raise DashError("capacity", "a new acquisition needs its own upstream admission")
 
 
 @dataclass(eq=False)
@@ -239,6 +289,8 @@ class Stream:
     used: int = 0
     shown: bool = False  # its shape logged
     relinking: anyio.Lock = field(default_factory=anyio.Lock)
+    capacities: list[CapacityLease] = field(default_factory=list, repr=False)
+    owner: object = field(default_factory=object, repr=False)
 
 
 @dataclass
@@ -250,6 +302,9 @@ class Dash:
     # (False: it was not started - Shijhon is stopping).
     spawn: Callable[[Callable[[], Coroutine[Any, Any, None]]], bool | None] | None = None
     clock: Callable[[], float] = time.monotonic
+    # Told of a file served at once once all its segments are there (its fetching ended
+    # without a failure): ``delivery/retain.py`` puts it in the library for its plays.
+    completed: Callable[[Served], None] | None = None
     _files: OrderedDict[str, Joined] = field(default_factory=OrderedDict)  # oldest use first
     _jobs: dict[str, _Job] = field(default_factory=dict)
     _turns: pacing.Turns = field(default_factory=lambda: pacing.Turns(JOINS_AT_ONCE, TURN))
@@ -287,6 +342,22 @@ class Dash:
             return None
         said, job.outlived = ("again" if job.outlived else "first"), True
         return said
+
+    def lease(self, kept: Joined | Served) -> Callable[[], None] | None:
+        """A kept file held as by a reader - never removed until the call returned is made
+        (once) - or None when it is no longer kept."""
+        if kept.gone:
+            return None
+        kept.readers += 1
+        done = False
+
+        def release() -> None:
+            nonlocal done
+            if not done:
+                done = True
+                self._done_reading(kept)
+
+        return release
 
     def clear(self) -> int:
         """Files a stop left behind - half-done joins and kept files alike - go (at start,
@@ -326,19 +397,26 @@ class Dash:
         while True:
             kept = self._kept(link.key)
             if kept is not None:
+                if link.lease and link.lease.owner is None and not link.reuse_only:
+                    link.lease.network_done()
                 return kept
             job = self._jobs.get(link.key)
             work = None
             if job is not None:
                 job.wanted_until(until)
             else:
+                _new_admission(link)
                 now = anyio.current_time()
                 job = self._jobs[link.key] = _Job(
-                    anyio.CancelScope(deadline=max(until, now + max(0.0, lasting))), began=now
+                    anyio.CancelScope(deadline=max(until, now + max(0.0, lasting))),
+                    began=now,
+                    release=link.lease.retain() if link.lease else None,
+                    capacity=link.lease,
                 )
                 work = partial(
                     self._run, job, link, quality, max(1, at_once), seconds, tolerance, limited
                 )
+            job.attach(link.lease)
             watching = pacing.watching()
             began = job.waits.joined()
             with job.urgency.wanted(mine):
@@ -347,6 +425,8 @@ class Dash:
                         await work()
                     elif self.spawn(work) is False:
                         del self._jobs[link.key]
+                        if job.release:
+                            job.release()
                         raise DashError("failed", "Shijhon is stopping")
                 try:
                     await job.done.wait()
@@ -372,6 +452,26 @@ class Dash:
         if stream is not None and stream.file.etag == etag:
             return "at_once"
         return None
+
+    def continuing(self, key: str, start: str, capacity: CapacityLease) -> bool:
+        """Only the exact fetching job can share its existing upstream admission."""
+        whole = self._whole.get(key)
+        if start == "at_once" and whole is not None and whole[1] > self.clock():
+            start = "complete"
+        if start == "complete":
+            job = self._jobs.get(key)
+        else:
+            stream = self._served.get(key)
+            job = self._planning.get(key) or (
+                stream.job if stream is not None and stream.file.filling else None
+            )
+        return (
+            job is not None
+            and capacity.active
+            and capacity.owner is job.owner
+            and not job.upstream_done
+            and not job.done.is_set()
+        )
 
     # --- served at once -----------------------------------------------------------------
 
@@ -403,12 +503,25 @@ class Dash:
                 raise DashError("whole", whole[0])
             stream = self._served.get(link.key)
             if stream is not None:
+                if not stream.file.complete and link.lease is not None:
+                    _bind(link.lease, stream.owner)
+                    if stream.job is not None and stream.file.filling:
+                        stream.job.attach(link.lease)
                 self._served.move_to_end(link.key)
                 stream.used = next(self._uses)
                 if not stream.file.complete and stream.link.url != link.url:
                     # Another link of the song (a new one, or another listener's): taken
                     # when the segments' own one stops working.
                     stream.spare = link
+                if link.lease is not None:
+                    # A cached file outlives its previous reader's capacity lease.
+                    # Every new reader takes its own current lease, also once complete.
+                    stream.link = replace(stream.link, lease=link.lease)
+                    if stream.file.complete:
+                        if link.lease.owner is None and not link.reuse_only:
+                            link.lease.network_done()
+                    elif not any(capacity is link.lease for capacity in stream.capacities):
+                        stream.capacities.append(link.lease)
                 if not stream.file.complete:
                     self._fill(stream, until)
                 return stream
@@ -417,19 +530,26 @@ class Dash:
             if job is not None:
                 job.wanted_until(until)
             else:
+                _new_admission(link)
                 now = anyio.current_time()
                 job = self._planning[link.key] = _Job(
-                    anyio.CancelScope(deadline=max(until, now + max(0.0, lasting))), began=now
+                    anyio.CancelScope(deadline=max(until, now + max(0.0, lasting))),
+                    began=now,
+                    release=link.lease.retain() if link.lease else None,
+                    capacity=link.lease,
                 )
                 work = partial(
                     self._plan_and_fill, job, link, quality, max(1, at_once), seconds,
                     tolerance, lasting, limited,
                 )  # fmt: skip
+            job.attach(link.lease)
             watching = pacing.watching()
             began = job.waits.joined()
             with job.urgency.wanted(mine):
                 if work is not None and (self.spawn is None or self.spawn(work) is False):
                     del self._planning[link.key]
+                    if job.release:
+                        job.release()
                     raise DashError("failed", "Shijhon is stopping")
                 try:
                     await job.planned.wait()
@@ -467,12 +587,7 @@ class Dash:
         """A file served at once (``source``, read whole), its audio copied as it is into
         ``out`` as a join's is - a native FLAC, an MP3 or a fast-start M4A (``kind``): what
         the library gets. Its length (seconds). Raises ``DashError``."""
-        inspected = await anyio.to_thread.run_sync(_inspect, source)
-        if inspected.encrypted:
-            raise DashError("unsupported", "encrypted audio")
-        if kind not in _OUTPUTS:
-            raise DashError("unsupported", "audio of another kind")
-        return await self._remux(source, out, kind, inspected)
+        return await copy_out(self.ffmpeg, source, out, kind)
 
     async def _segment_at(self, stream: Stream, index: int, mine: pacing.Urgency) -> None:
         """A reader's wait for a segment in the middle of its answer: for up to the
@@ -509,14 +624,22 @@ class Dash:
             return
         if self._served.get(stream.key) is not stream:  # (dropped: another file now)
             raise DashError("changed", "the file served is not the link's any more")
+        if stream.link.lease is not None:
+            _bind(stream.link.lease, stream.owner)
         now = anyio.current_time()
         job = stream.job = _Job(
             anyio.CancelScope(deadline=max(until, now + max(0.0, stream.lasting))),
             began=now,
             urgency=stream.urgency,
+            release=stream.link.lease.retain() if stream.link.lease else None,
+            capacity=stream.link.lease,
+            owner=stream.owner,
         )
+        job.attach(stream.link.lease)
         stream.file.started()
         if self.spawn is None or self.spawn(partial(self._filling, stream, job)) is False:
+            if job.release:
+                job.release()
             stream.job = None
             failure = DashError("failed", "Shijhon is stopping")
             stream.file.stopped(failure)
@@ -602,6 +725,15 @@ class Dash:
                 if job.error.kind == "unsupported":  # (the join says why, from now on)
                     self._joined_instead(stream.key, str(job.error))
             if stream.file.complete and job.error is None:
+                if self.completed is not None:
+                    try:
+                        self.completed(stream.file)
+                    except Exception as exc:  # (its capacities are released all the same)
+                        log.warning("keeping a DASH song failed: %s", type(exc).__name__)
+                job.fetched()
+                for capacity in stream.capacities:
+                    capacity.network_done()
+                stream.capacities.clear()
                 log.debug(
                     "DASH from %s: all %d segment(s) in %.2fs, %d bytes kept",
                     link.name,
@@ -619,6 +751,8 @@ class Dash:
             )
         job.planned.set()
         job.done.set()
+        if job.release:
+            job.release()
 
     async def _plan(
         self,
@@ -695,6 +829,7 @@ class Dash:
             link.key, file, link, plan, init, job.urgency, at_once, lasting, limited, began,
             (sum(1 for part in media if part.first is None), probed), quality=quality,
             seconds=length, track_scale=inspected.timescale, job=job,
+            capacities=[link.lease] if link.lease else [], owner=job.owner,
         )  # fmt: skip
         file.started()
         self._keep_stream(stream)
@@ -915,7 +1050,14 @@ class Dash:
             # (Its requests at the add-on and its turn as urgent as the requests waiting.)
             with pacing.watched(job.waits), pacing.urgent(job.urgency):
                 job.result = await self._join(
-                    link, quality, at_once, seconds, tolerance, job.scope, limited
+                    link,
+                    quality,
+                    at_once,
+                    seconds,
+                    tolerance,
+                    job.scope,
+                    limited,
+                    on_fetched=job.fetched,
                 )
         except DashError as exc:
             job.error = exc
@@ -939,6 +1081,8 @@ class Dash:
                     job.error,
                 )
             job.done.set()
+            if job.release:
+                job.release()
 
     async def _join(
         self,
@@ -949,6 +1093,8 @@ class Dash:
         tolerance: float,
         scope: anyio.CancelScope,
         limited: Callable[[float | None], None],
+        *,
+        on_fetched: Callable[[], None] | None = None,
     ) -> Joined:
         self.folder.mkdir(parents=True, exist_ok=True)
         name = uuid.uuid4().hex
@@ -969,6 +1115,8 @@ class Dash:
                     if plan.seconds is not None and _short(plan.seconds, seconds, tolerance):
                         raise DashError("short", "a preview", seconds=plan.seconds)
                     await self._fetch(link, plan, part, at_once, limited)
+                    if on_fetched is not None:
+                        on_fetched()
                     fetched = self.clock()
                     inspected = await anyio.to_thread.run_sync(_inspect, part)
                     if inspected.encrypted:
@@ -1222,35 +1370,50 @@ class Dash:
             begun()
 
     async def _remux(self, part: Path, out: Path, kind: str, inspected: mpd.Inspected) -> float:
-        """The joined MP4's audio (``kind``), copied as it is into ``out``: a native FLAC,
-        an MP3, or a fast-start M4A (AAC, ALAC). Its length (seconds), read back."""
-        flac = kind == "flac"
-        args = [
-            self.ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-xerror",
-            # Local input only, read as MP4 whatever its bytes say.
-            "-protocol_whitelist", "file", "-f", "mp4", "-i", str(part),
-            "-map", "0:a:0", "-c", "copy", "-map_metadata", "-1", "-fflags", "+bitexact",
-            *_OUTPUTS[kind][2],
-            "-y", str(out),
-        ]  # fmt: skip
-        try:
-            code, said = await _process(args, REMUX_SECONDS)
-        except TimeoutError:  # (on this machine: not the add-on's error)
-            raise DashError("failed", "the remux took too long") from None
-        except OSError as exc:
-            raise DashError(
-                "failed", f"ffmpeg could not be started ({type(exc).__name__})"
-            ) from None
-        if code != 0:
-            last = said.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
-            log.debug("DASH remux failed (exit %d): %s", code, last[0][:200])
-            raise DashError("error", "the audio could not be remuxed")
-        if flac:
-            await anyio.to_thread.run_sync(_count_samples, out, inspected)
-        length = await anyio.to_thread.run_sync(_length, out, kind)
-        if length is None or length <= 0:
-            raise DashError("error", "no audio after the remux")
-        return length
+        return await _remux(self.ffmpeg, part, out, kind, inspected)
+
+
+async def copy_out(ffmpeg: str, source: Path, out: Path, kind: str) -> float:
+    """A fragmented MP4 (``source``, read whole: a DASH file served at once, or a file an
+    add-on's link gave) - its audio of ``kind`` copied as it is into ``out``, as a join's
+    is: a native FLAC, an MP3, or a fast-start M4A (AAC, ALAC; "mp4": any other audio),
+    whose length tag readers read. Its length (seconds). Raises ``DashError``."""
+    inspected = await anyio.to_thread.run_sync(_inspect, source)
+    if inspected.encrypted:
+        raise DashError("unsupported", "encrypted audio")
+    if kind not in _OUTPUTS:
+        raise DashError("unsupported", "audio of another kind")
+    return await _remux(ffmpeg, source, out, kind, inspected)
+
+
+async def _remux(ffmpeg: str, part: Path, out: Path, kind: str, inspected: mpd.Inspected) -> float:
+    """The fragmented MP4's audio (``kind``), copied as it is into ``out``: a native FLAC,
+    an MP3, or a fast-start M4A. Its length (seconds), read back."""
+    flac = kind == "flac"
+    args = [
+        ffmpeg, "-nostdin", "-hide_banner", "-v", "error", "-xerror",
+        # Local input only, read as MP4 whatever its bytes say.
+        "-protocol_whitelist", "file", "-f", "mp4", "-i", str(part),
+        "-map", "0:a:0", "-c", "copy", "-map_metadata", "-1", "-fflags", "+bitexact",
+        *_OUTPUTS[kind][2],
+        "-y", str(out),
+    ]  # fmt: skip
+    try:
+        code, said = await _process(args, REMUX_SECONDS)
+    except TimeoutError:  # (on this machine: not the add-on's error)
+        raise DashError("failed", "the remux took too long") from None
+    except OSError as exc:
+        raise DashError("failed", f"ffmpeg could not be started ({type(exc).__name__})") from None
+    if code != 0:
+        last = said.decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
+        log.debug("DASH remux failed (exit %d): %s", code, last[0][:200])
+        raise DashError("error", "the audio could not be remuxed")
+    if flac:
+        await anyio.to_thread.run_sync(_count_samples, out, inspected)
+    length = await anyio.to_thread.run_sync(_length, out, kind)
+    if length is None or length <= 0:
+        raise DashError("error", "no audio after the remux")
+    return length
 
 
 class _Reader(httpx.AsyncByteStream):
@@ -1288,6 +1451,7 @@ class _StreamReader(httpx.AsyncByteStream):
         self._first, self._last = first, last
         self._urgency = urgency  # the request's (its body is read after it returned)
         self._open = True
+        self._release = stream.link.lease.retain() if stream.link.lease else None
         stream.file.readers += 1
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
@@ -1309,6 +1473,8 @@ class _StreamReader(httpx.AsyncByteStream):
         if self._open:
             self._open = False
             self._dash._done_reading(self._stream.file)
+            if self._release:
+                self._release()
 
 
 def _held(item: Joined | Stream) -> Joined | Served:

@@ -31,6 +31,7 @@ from shijhon.proxy import xmlform
 from tests.acceptance.test_J_contract import ARTIST, OWNED, TERM, item
 from tests.conftest import NavidromeFactory
 from tests.harness import xsd
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import write_album
 from tests.harness.replay import Replay, fixture
@@ -65,6 +66,7 @@ def world(
     admin.ok("star", {"albumId": found["album"][0]["id"]})
     admin.ok("setRating", {"id": found["song"][0]["id"], "rating": 4})
     with delivery_world(nd, tmp_path_factory.mktemp("xml"), catalog=replay.catalog()) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 

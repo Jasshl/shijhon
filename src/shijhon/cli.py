@@ -3,7 +3,9 @@ pass's dry run, the review list) from the database without changing it; ``shijho
 lists what the cleanup of unused releases would take out now (read only);
 ``shijhon catalogs`` lists the installed catalog adapters;
 ``shijhon usage-export`` writes what the cleanup reads of Navidrome's database, for a
-Shijhon that does not see that database itself.
+Shijhon that does not see that database itself; ``shijhon carry-over`` shows the catalog
+albums carried over at the upgrade to schema 24, and ``--account NAME`` gives them to one
+account's Shijhon library (``collection/carryover.py``).
 
 ``serve`` exits with ``RESTART_STATUS`` when the dashboard's "Restart Shijhon" stopped it:
 whatever runs Shijhon starts it again (``Restart``)."""
@@ -19,14 +21,17 @@ import sys
 import time
 from pathlib import Path
 from threading import Timer
+from typing import NoReturn
 
 import anyio
 import uvicorn
 from pydantic import ValidationError
 
 from shijhon import __version__, cleanup
+from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
 from shijhon.app import create_app
 from shijhon.catalog import plugin
+from shijhon.collection import carryover
 from shijhon.config import Settings, load_settings
 from shijhon.dashboard.saved import clear_saved, effective_from_database, list_saved
 from shijhon.fill import undo
@@ -44,7 +49,9 @@ from shijhon.placeholders.engine import PlaceholderEngine
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.silence import SilenceMaker
 from shijhon.store import Store
+from shijhon.store.db import latest_schema
 from shijhon.store.writer import AlreadyRunning, WriterLock
+from shijhon.views.real_audio import RealAudioAccounts
 
 log = logging.getLogger(__name__)
 # The exit status of a ``serve`` that the dashboard's "Restart Shijhon" stopped. Not 0: a
@@ -135,6 +142,22 @@ def main(argv: list[str] | None = None) -> None:
         help="remove saved values (the configuration's apply after a restart); repeatable",
     )
     sub.add_parser("catalogs", help="list the installed catalog adapters")
+    carried = sub.add_parser(
+        "carry-over",
+        help="show the catalog albums carried over at the upgrade to schema 24, or give them"
+        " to one account's Shijhon library",
+    )
+    carried.add_argument(
+        "--account",
+        metavar="NAME",
+        help="give them to this Navidrome account (its user name); again for the same"
+        " account: nothing changes",
+    )
+    carried.add_argument(
+        "--replace",
+        action="store_true",
+        help="with --account: also when another account has them (that account loses them)",
+    )
     exported = sub.add_parser(
         "usage-export",
         help="write the usage export: what the cleanup reads of Navidrome's database (it"
@@ -191,6 +214,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "cleanup":
         _cleanup(args)
+        return
+
+    if args.command == "carry-over":
+        _carry_over(args)
         return
 
     if args.command == "saved":
@@ -558,6 +585,149 @@ async def _apply_undo(
     finally:
         await navidrome.aclose()
         await store.close()
+
+
+def _carry_over(args: argparse.Namespace) -> None:
+    """``carry-over``: the carried-over albums as they are; with ``--account``, given to
+    that account. Writes only Shijhon's database, in one short transaction: also beside
+    the running service. Its database must have been upgraded by this Shijhon's start."""
+    if args.replace and args.account is None:
+        print("shijhon: --replace goes with --account", file=sys.stderr)
+        raise SystemExit(2)
+    name = (args.account or "").strip()
+    if args.account is not None and not name:
+        print("shijhon: --account needs a Navidrome user name", file=sys.stderr)
+        raise SystemExit(2)
+    settings = _settings(args.config)
+    conn = _carry_over_database(settings.database_path)
+    try:
+        found = carryover.state(conn)
+        if not name or not found.albums:
+            print(_carried(found) + (" - nothing to give" if name else ""))
+            return
+        real_audio = RealAudioAccounts(settings.placeholders.real_audio_accounts)
+        if real_audio.named(name):
+            _refuse(f"{_shown(name)} gets real audio only ([placeholders] real_audio_accounts)")
+        principal = anyio.run(_account, settings, name)
+        if real_audio.named(principal.username):
+            _refuse(
+                f"{_shown(principal.username)} gets real audio only ([placeholders]"
+                " real_audio_accounts)"
+            )
+        if not principal.can_access(settings.navidrome.library_id):
+            _refuse(
+                f"{_shown(principal.username)} has no access to the library Shijhon serves"
+                f" ([navidrome] library_id {settings.navidrome.library_id})"
+            )
+        try:
+            given = carryover.give(
+                conn, principal.user_id, principal.username, replace=args.replace
+            )
+        except carryover.GivenAlready as exc:
+            _refuse(
+                f"the carried-over albums were given to {_given_to(exc.owner)}; --replace"
+                f" gives them to {_shown(principal.username)} instead"
+            )
+    except sqlite3.Error as exc:
+        print(f"shijhon: {settings.database_path}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    finally:
+        conn.close()
+    owner = given.carried.owner
+    assert owner is not None
+    if not given.changed:
+        print(f"already given to {_given_to(owner)}: {_sizes(given.carried)}; nothing changed")
+        return
+    configure_logging(settings.log_level, settings.log_debug)
+    log.info(
+        "carry-over: %d album(s) given to the Shijhon library of user ID %s%s",
+        given.carried.albums,
+        _shown(owner.user_id),
+        f", taken from user ID {_shown(given.previous.user_id)}" if given.previous else "",
+    )
+    print(
+        f"given: {_sizes(given.carried)} to {_shown(owner.username)} (user ID"
+        f" {_shown(owner.user_id)}), in its Shijhon library and All now"
+        + (f"; taken from {_given_to(given.previous)}" if given.previous else "")
+    )
+
+
+def _carry_over_database(database: Path) -> sqlite3.Connection:
+    """Shijhon's database, upgraded already (never by this command: the service upgrades
+    it at its start), in autocommit mode."""
+    if not database.is_file():
+        _refuse(f"no database at {database} (start Shijhon once first)")
+    try:
+        conn = sqlite3.connect(database, isolation_level=None, timeout=30.0)
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    except sqlite3.Error as exc:
+        print(f"shijhon: {database}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    latest = latest_schema()
+    if version != latest:
+        conn.close()
+        _refuse(
+            f"{database} is at schema {version}, this Shijhon's is {latest}"
+            + (" (start this Shijhon once first)" if version < latest else "")
+        )
+    return conn
+
+
+async def _account(settings: Settings, name: str) -> Principal:
+    """The Navidrome account of a user name, as the service account reads it (Navidrome
+    compares names without case)."""
+    nd = settings.navidrome
+    navidrome = NavidromeService(
+        nd.url,
+        nd.user,
+        nd.service_password(),
+        client_name=nd.client_name,
+        library_id=nd.library_id,
+        timeout=nd.timeout_seconds,
+    )
+    try:
+        return await AccessService(navidrome).verify(name)
+    except AccessDenied:
+        _refuse(f"Navidrome has no account named {_shown(name)}")
+    except AccessUnavailable:
+        _refuse(
+            f"Navidrome did not say who {_shown(name)} is (is it reachable, and is [navidrome]"
+            " user an admin?)"
+        )
+    finally:
+        await navidrome.aclose()
+    raise AssertionError("unreachable")
+
+
+def _carried(found: carryover.CarryOver) -> str:
+    if not found.albums:
+        return "carried over at the upgrade: no album (none is in the library)"
+    if found.owner is None:
+        return (
+            f"carried over at the upgrade: {_sizes(found)}, in no account's library"
+            " (--account NAME gives them to one account's Shijhon library)"
+        )
+    return f"carried over at the upgrade: {_sizes(found)}, given to {_given_to(found.owner)}"
+
+
+def _sizes(found: carryover.CarryOver) -> str:
+    return f"{found.albums} album(s), {found.songs} song(s)"
+
+
+def _given_to(owner: carryover.Owner) -> str:
+    at = time.strftime("%Y-%m-%d %H:%M", time.localtime(owner.given_at))
+    return f"{_shown(owner.username)} (user ID {_shown(owner.user_id)}) on {at}"
+
+
+def _shown(text: str) -> str:
+    """A name or ID as printed: control characters replaced, at most 64 characters."""
+    return "".join(ch if ch.isprintable() else "?" for ch in text)[:64]
+
+
+def _refuse(message: str) -> NoReturn:
+    """A command's refusal: nothing was changed."""
+    print(f"shijhon: {message}: nothing done", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _settings(config: Path | None) -> Settings:

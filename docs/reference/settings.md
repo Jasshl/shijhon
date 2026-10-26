@@ -10,9 +10,11 @@ nothing.
   "Use the configuration's" next to a secret removes the saved secret.
 - Most apply at once, and the cleanup's from its next check. These apply after a restart:
   - every `[catalog]` setting except `artwork_size`;
-  - `[delivery] delivered_days`, `delivered_gb`, `user_routings` and `user_downloads`;
+  - `[delivery] delivered_days`, `delivered_gb`, `user_routings`, `user_downloads`, `dash`
+    and `dash_cache_mb`;
   - `[fill] enabled`, `complete_lists`, `pass_start_seconds` and
-    `pass_requests_per_second`, and switching `library_pass` to or from `off`.
+    `pass_requests_per_second`, and switching `library_pass` to or from `off`;
+  - every `[audiomuse]` setting.
 - A saved section that no longer fits the configuration, or with which Shijhon could not
   start (a saved file path whose file is gone, say), is not applied as a whole. Shijhon
   starts with the configuration's values for that section and says so: a warning at
@@ -25,8 +27,8 @@ nothing.
 - With `[[addons]]` in the file, the file owns the list: at each start the add-ons are
   added, updated and ordered to match it, and stored ones it no longer names are disabled.
 - Once you change the list on the dashboard, the stored list is kept and the file's is no
-  longer applied at startup. The log and the Add-ons page say so. "Use the file's list
-  after a restart" on that page hands it back.
+  longer applied at startup. The log says so, and a note at the end of the Add-ons page,
+  whose "Use the file's list after a restart" hands it back.
 - A list from `SHIJHON_ADDONS` always applies, and the dashboard shows it read-only.
 - Without a list in the file or the environment, the stored list is kept.
 
@@ -41,6 +43,14 @@ nothing.
 - Secrets belong to the address they were entered for: when an add-on's address changes to
   another host, enter them again. The same holds for the settings a catalog adapter
   declares as belonging to an address it names.
+
+## Remote agent access
+
+`[agents] public_url` (empty): the canonical public HTTPS origin, without a path.
+Set it and restart to enable OAuth and Streamable HTTP MCP at `/shijhon/mcp`.
+An empty value disables MCP; HTTP is accepted only on loopback. The environment
+variable is `SHIJHON_AGENTS__PUBLIC_URL`. [Agent setup](../agent-access.md) lists the
+required reverse-proxy routes and feature prerequisites.
 
 ## The other settings
 
@@ -62,8 +72,23 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 | `[navidrome] purge_missing` | Set to `"never"` when Navidrome hides its configuration ([deployment.md](../deployment.md#what-shijhon-needs-from-navidrome)) |
 | `[navidrome] timeout_seconds` (30), `client_name` (`shijhon`) | Shijhon's own requests to Navidrome |
 | `[placeholders] folder` (`_shijhon`) | The placeholder folder inside the library: a folder of its own, not the library itself |
+| `[placeholders] real_audio_accounts` (`[]`) | Navidrome user names (letter case does not matter) of accounts that see only songs whose audio is in the library, for a sound analyzer such as AudioMuse-AI ([how it works](../how-it-works.md#accounts-for-sound-analyzers)). Applies after a restart; `SHIJHON_PLACEHOLDERS__REAL_AUDIO_ACCOUNTS='["audiomuse"]'` in the environment |
 
 ### `[delivery]`
+
+The main download controls are on **Playback → Downloads and playlist preparation**;
+per-user and preparation controls are under **Advanced settings**. Values from the file,
+saved dashboard settings and the environment keep the normal precedence. New defaults
+do not replace existing overrides, including an old hourly quota.
+
+Add-on transfer overrides are `[[addons]] downloads` and `preparations`; omitted means
+inherit, a number means a custom limit, and 0 removes that cap. The dashboard displays
+the inherited default and effective shared limit. `capacity_group` is a local label
+(up to 100 characters) for add-ons sharing an account or worker. Same-origin add-ons
+already share transfer limits; a named group can connect different origins. The strictest
+nonzero limit across connected enabled members applies. API request limits still share
+only by origin. Standard manifests do not report backend independence or remaining
+account quotas; configure the limits to suit the account.
 
 | Setting | What it sets |
 |---|---|
@@ -77,12 +102,14 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 | `length_tolerance_seconds` (10), `length_tolerance_percent` (5) | Audio whose length differs from the catalog's by more than the larger of the two is another recording: the next add-on plays. Both 0: no check |
 | `cooldown_seconds` (30), `cooldown_errors` (3) | An add-on that answers with this many errors in a row, no more than ten minutes apart, is passed over for this long. 0 errors: off |
 | `primary_cooldown_timeouts` (2), `primary_cooldown_switches` (3) | The primary is passed over after this many timeouts, or switches away from it, without a delivery in between |
-| `request_timeout_seconds` (10), `seek_timeout_seconds` (15), `download_timeout_seconds` (180) | One request to an add-on; a jump within a playing song; fetching a whole song |
+| `request_timeout_seconds` (10), `seek_timeout_seconds` (15), `download_timeout_seconds` (180) | One request to an add-on; a jump within a playing song; fetching a whole song (for playlist preparation: each transfer, from when it gets its slot) |
 | `pin_ttl_seconds` (1800) | How long a song keeps its add-on and link, for seeks and repeats - also for a play under way when the song is put in the library |
 | `warm_ahead_depth` (2), `warm_ahead_delay_seconds` (2), `warm_ahead_budget_seconds` (60), `warm_ahead_jobs` (2) | Warm-ahead: how many of the next songs (in the app's saved queue, else the album) are opened once a song plays, how long after its first audio, how long one may take, and how many jobs run at once for all listeners. Depth 0: off |
 | `prefetch_memory_seconds` (600) | An app that fetches the next songs itself gets no warm-ahead for this long |
 | `ahead_window_seconds` (0.5) | A stream that starts this soon after another song on the same app, and is not reported as playing, is a fetch ahead. 0: every stream is treated alike |
-| `user_routings` (4), `user_downloads` (2), `user_downloads_per_hour` (120), `user_download_burst` (4) | The limits per user ([the add-on protocol](add-on-protocol.md#limits)). 0: no limit; a burst of 0: the whole hour's downloads in a row |
+| `bulk_downloads` (4), `addon_downloads` (2) | Songs fetched at once for all scheduled downloads and playlist preparation; songs fetched per add-on or shared group. Set on Playback under Downloads and playlist preparation. 0: unlimited |
+| `addon_preparations` (1) | New audio preparations at once per add-on or shared group, including sources whose cache readiness is unknown. 0: unlimited |
+| `user_routings` (4), `user_downloads` (4), `user_downloads_per_hour` (0), `user_download_burst` (4) | Limits per user ([the add-on protocol](add-on-protocol.md#limits)). 0: no cap or quota off; a burst of 0: the whole hour's downloads in a row. The burst only applies when the hourly quota is enabled |
 | `addon_requests_per_second` (2), `addon_request_burst` (4), `addon_audio_openings` (4) | The limits per add-on. 0 requests a second, or 0 openings: no limit. The burst is 1 or more |
 | `dash` (on) | Play add-ons' DASH links ([add-ons.md](../add-ons.md#dash-links)). Needs ffmpeg on the `PATH`. Off: the next add-on is asked |
 | `dash_start` (`"at_once"`) | `"at_once"`: a DASH song plays from its first segments, served as one MP4 file of them. `"complete"`: it plays once all its segments are joined into a FLAC, M4A or MP3 file. Songs saved to the library are joined files either way |
@@ -114,8 +141,16 @@ set in the file or the environment.
 
 | Setting | What it sets |
 |---|---|
-| `complete_lists` (on) | An album shown complete carries the complete song count and length in album lists too. Off: lists keep Navidrome's counts until the fill |
+| `complete_lists` (on) | A partly owned album carries its complete song count and length in album lists and search results too, before and after its fill (in your library's lists, while all its original songs are selected). Off: lists keep the counts of Navidrome or of your library selection |
 | `open_budget_seconds` (3) | How long the first view of an album waits for its match; after it the view has only your songs, and the match continues in the background |
 | `sync_albums` (10), `sync_seconds` (10) | An app that views this many never-matched albums within this time is syncing: those are matched in the background |
 | `retry_hours` (1), `background_pause_seconds` (5) | After a failed match (then doubling); between background matches |
 | `pass_start_seconds` (60), `pass_interval_hours` (6), `pass_requests_per_second` (1) | The library pass starts this long after startup, looks for new albums this often, and sends the catalog this many requests a second |
+
+### `[audiomuse]`
+
+Also on the Sound analysis page. [Sound analysis](../sound-analysis.md) says what it adds and how to
+set it up; the settings are listed in [configuration.md](../configuration.md#audiomuse).
+Shijhon asks AudioMuse-AI for the songs it has analyzed 1000 at a time, and for their
+analysis 100 at a time with two requests at once; with the requests for playlists, at most
+four are under way together.

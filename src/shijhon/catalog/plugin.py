@@ -73,7 +73,7 @@ class Words:
 
     label: str
     help: str = ""
-    group: str = "connection"  # "connection", "albums" or "advanced" (under "More settings")
+    group: str = "connection"  # "connection", "albums" or "advanced" (under "Advanced settings")
     unit: str | None = None  # None: from the key's suffix (_seconds: "s")
     spoken: str | None = None  # the unit for screen readers ("seconds")
     options: Mapping[str, str] = field(default_factory=dict)  # a choice's labels

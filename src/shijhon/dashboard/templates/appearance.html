@@ -3,7 +3,7 @@
 {% block main %}
 <div class="page-head">
   <h1>Appearance</h1>
-  <p class="page-summary">The accent color applies to everyone who signs in. Light or dark follows each device's own setting.</p>
+  <p class="page-summary">Choose the color of your dashboard. Other accounts choose their own. Light or dark follows each device's own setting.</p>
 </div>
 {% if saved_now %}
 <div class="notice notice-ok" role="status"><p>Accent color saved.</p></div>
@@ -13,17 +13,23 @@
   <section class="group" aria-labelledby="accent-title">
     <div class="group-head">
       <h2 id="accent-title">Accent color</h2>
-      <p class="group-help">Each color is a whole palette. Status lights and notices keep their own colors.</p>
+      <p class="group-help">Each color is a whole palette: the page, panels and borders match it. Status lights and notices keep their own colors. {{ accents[0][1] }} is the default.</p>
     </div>
     <fieldset class="accent-picker">
       <legend class="visually-hidden">Accent color</legend>
+{# Each option carries its own palette (data-accent), so the sample is drawn in it: a
+   small page of shapes, with no words, so nothing but the name is read out. #}
 {% for value, name in accents %}
       <label class="accent-option" data-accent="{{ value }}">
-        <span class="accent-preview" aria-hidden="true">
-          <span class="accent-preview-tab">Library</span>
-          <span class="accent-preview-row"><span class="accent-preview-button">Save</span><span class="switch-track"></span></span>
+        <span class="accent-sample" aria-hidden="true">
+          <span class="accent-sample-side"><span></span><span></span><span></span></span>
+          <span class="accent-sample-page">
+            <span class="accent-sample-title"></span>
+            <span class="accent-sample-line"></span>
+            <span class="accent-sample-row"><span class="accent-sample-button"></span><span class="accent-sample-switch"></span></span>
+          </span>
         </span>
-        <span class="accent-name"><input type="radio" name="accent" value="{{ value }}"{% if value == chosen %} checked{% endif %}> {{ name }}{% if loop.first %} <span class="tag">Default</span>{% endif %}</span>
+        <span class="accent-name"><input type="radio" name="accent" value="{{ value }}"{% if value == chosen %} checked{% endif %}><span>{{ name }}</span>{% if loop.first %}<span class="visually-hidden"> (default)</span>{% endif %}</span>
       </label>
 {% endfor %}
     </fieldset>

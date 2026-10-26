@@ -36,6 +36,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from shijhon.catalog import plugin
 from shijhon.config import (
     CORE_CATALOG_KEYS,
+    AudioMuseSettings,
     CatalogSettings,
     Settings,
     catalog_settings,
@@ -46,7 +47,7 @@ from shijhon.store import Store
 
 # The configuration sections the dashboard edits (of [search]: the wait for the catalog,
 # on the Catalog page).
-SECTIONS: Final = ("delivery", "catalog", "fill", "cleanup", "search")
+SECTIONS: Final = ("delivery", "catalog", "fill", "cleanup", "search", "audiomuse")
 APPEARANCE: Final = "appearance"  # dashboard only: not in the configuration file
 ADDONS: Final = "addons"  # the add-on list's owner (see above)
 # In the saved catalog section: the kind whose adapter's settings are saved there (written
@@ -59,7 +60,11 @@ ADAPTER: Final = "(adapter)"
 # host - changed here, in the configuration file or by the environment - it is not applied,
 # shown or kept, unless it is entered again with the new address.
 BOUND: Final = "(bound)"
-RECORDS: Final = (ADAPTER, BOUND)  # what the section holds besides settings
+# In the saved audiomuse section: where the saved token was entered (``place`` of the address
+# then). A saved token goes only to that place: with another address in use - changed here, in
+# the configuration file or by the environment - it is not used until it is entered again.
+TOKEN_FOR: Final = "(token for)"  # noqa: S105 (a record key, not a password)
+RECORDS: Final = (ADAPTER, BOUND, TOKEN_FOR)  # what a section holds besides settings
 # Per add-on (its ID): the settings saved through a visible field of its settings form,
 # each with a mark of the value saved - only those are ever shown again.
 SHOWN: Final = "addon-shown"
@@ -151,8 +156,9 @@ class SavedSettings:
                     [section, key, encode(value), now, by],
                 )
 
-    async def accent(self) -> str:
-        value = (await self.section(APPEARANCE)).get("accent")
+    async def accent(self, owner_id: str = "") -> str:
+        section = f"{APPEARANCE}:{owner_id}" if owner_id else APPEARANCE
+        value = (await self.section(section)).get("accent")
         return value.value if value is not None and value.value in ACCENTS else DEFAULT_ACCENT
 
     async def addons_owner(self) -> Saved | None:
@@ -412,6 +418,9 @@ def effective(
             continue
         if section == "catalog":  # before the check: it must see what the catalog gets
             candidate = unbound(configured.catalog, candidate)
+        if isinstance(candidate, AudioMuseSettings):
+            token = bound_token(configured.audiomuse, saved.get(section, {}), env, candidate.url)
+            candidate = candidate.model_copy(update={"token": token[0]})
         check = CHECKS.get(section) if startup else None
         found = check(candidate) if check is not None else None
         if found is not None and check is not None and check(getattr(configured, section)) is None:
@@ -419,6 +428,39 @@ def effective(
             continue
         updates[section] = candidate
     return configured.model_copy(update=updates), problems
+
+
+def bound_token(
+    configured: Any, saved: Mapping[str, Saved], env: Mapping[str, str], url: str
+) -> tuple[SecretStr | None, bool]:
+    """The AudioMuse-AI token that may be sent to ``url``, and whether one is held back.
+    A token saved here goes only to the place it was entered for (``TOKEN_FOR``); the
+    configuration's - the file's or the environment's - only to the configuration's own
+    address. A saved removal (null) is no token. Held back, a token must be entered again."""
+    if not url:
+        return None, False
+    item = None if "token" in env else saved.get("token")
+    if item is not None:
+        if item.value is None:
+            return None, False
+        mark = saved.get(TOKEN_FOR)
+        if mark is not None and mark.value == place(url):
+            return SecretStr(item.value), False
+        return None, True
+    if configured.token is None:
+        return None, False
+    if configured.url and place(configured.url) == place(url):
+        return configured.token, False
+    return None, True
+
+
+def token_withheld(
+    configured: Settings, saved: Mapping[str, Mapping[str, Saved]], *, locked: Locked
+) -> bool:
+    """Whether a token is held back from the address in use (``bound_token``)."""
+    url = effective(configured, saved, locked=locked)[0].audiomuse.url
+    items = saved.get("audiomuse", {})
+    return bound_token(configured.audiomuse, items, locked.get("audiomuse", {}), url)[1]
 
 
 def _text(value: Any) -> str | None:
@@ -490,6 +532,8 @@ def _secret(section: str, key: str, owner: str | None = None) -> bool:
     it neither a secret nor a mapping (whose values may be secrets)."""
     from shijhon.dashboard.sections import fields_of
 
+    if section == "playlist-ai":
+        return True  # The shared connection is opaque and can contain an API key.
     if section not in SECTIONS:
         return False
     hidden = ("secret", "mapping")

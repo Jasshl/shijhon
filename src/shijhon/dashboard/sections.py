@@ -18,7 +18,7 @@ import anyio
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from shijhon.catalog import plugin
-from shijhon.config import CORE_CATALOG_KEYS, Settings, catalog_settings
+from shijhon.config import CORE_CATALOG_KEYS, AudioMuseSettings, Settings, catalog_settings
 from shijhon.dashboard.fields import (
     Group,
     Invalid,
@@ -34,8 +34,10 @@ from shijhon.dashboard.saved import (
     BOUND,
     RECORDS,
     REMOVE,
+    TOKEN_FOR,
     Locked,
     Saved,
+    bound_token,
     catalog_locks,
     catalog_problem,
     configured_for,
@@ -68,6 +70,7 @@ class Submitted:
     problems: dict[str, Problem] = field(default_factory=dict)
     candidate: BaseModel | None = None  # the section as it would apply
     removals: list[str] = field(default_factory=list)  # saved values under a lock, removed
+    entered: list[str] = field(default_factory=list)  # secrets typed in the form
     # The form chose another catalog than the one whose settings it held, and what is
     # missing are settings of that catalog, which the form did not have: no mistake of
     # the form's, but the first of two steps - the page with those settings comes next.
@@ -282,7 +285,9 @@ def rows(
                 # The checkbox removes the value; where the dashboard's value hides the
                 # configuration's, it brings the configuration's back.
                 item = saved_section.get(f.key)
-                if item is not None and value is None:
+                if section == "audiomuse" and _held_back(configured, saved_section, env, view):
+                    row["state"] = ("unset", "Not used: it is for another address. Enter it again")
+                elif item is not None and value is None:
                     row["state"] = ("unset", "Removed here")
                 elif value is None:
                     row["state"] = ("unset", "")
@@ -318,6 +323,13 @@ def rows(
             group_rows.append(row)
         result.append((group, _paired(members, group_rows)))
     return result
+
+
+def _held_back(
+    configured: Settings, saved: Mapping[str, Saved], env: Mapping[str, str], view: _View
+) -> bool:
+    """Whether a token exists that is not used with the address in use (``bound_token``)."""
+    return bound_token(configured.audiomuse, saved, env, str(view.now.url))[1]
 
 
 def _paired(members: list[SettingField], group_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -464,6 +476,7 @@ async def submit(
             typed = form.get(f.key, "").strip()
             if typed:
                 result.values[f.key] = SecretStr(typed)
+                result.entered.append(f.key)
             elif form.get(f.key + CLEAR) == "true":
                 # Remove the value: the dashboard's gives way to the configuration's, else
                 # the configuration's is hidden.
@@ -486,6 +499,8 @@ async def submit(
             )
             continue
         result.values[f.key] = value
+    if section == "audiomuse":
+        _token_follows_address(result, form, applying, configured, saved, env)
     if result.problems:
         return result
     # The settings as they apply for this kind (another catalog than the one that applies:
@@ -516,6 +531,58 @@ async def submit(
             result.problems[row] = _environments(found, env.get(row))
     result.first_step = _first_step(section, form, kind, applying, env, result.problems)
     return result
+
+
+def _token_follows_address(
+    result: Submitted,
+    form: Mapping[str, str],
+    applying: Any,
+    configured: Settings,
+    saved: Mapping[str, Mapping[str, Saved]],
+    env: Mapping[str, str],
+) -> None:
+    """AudioMuse-AI's token goes only to the address it was entered or configured for
+    (``saved.bound_token``). A save that moves the address to another host would leave the
+    token in use unusable: it is refused unless the token is typed with the address (or
+    removed), and when the environment sets the token the address is changed there too."""
+    url = result.values.get("url")
+    if not url or place(url) == place(applying.url) or applying.token is None:
+        return
+    if "token" not in env and (form.get("token", "").strip() or form.get("token" + CLEAR)):
+        return  # typed with the address, or removed (the effective token follows the rules)
+    if bound_token(configured.audiomuse, saved.get("audiomuse", {}), env, url)[0] is not None:
+        return
+    if "token" in env:
+        result.problems["url"] = Problem(
+            f"The token comes from the environment ({env['token']}): change the address there too.",
+            "cannot be moved to another host here: the token is set by the environment.",
+        )
+    else:
+        result.problems["token"] = Problem(
+            "Enter the token again: the address is on another host now.",
+            "must be entered again: the address is on another host now.",
+        )
+
+
+def _token_record(
+    configured: Settings, saved: Mapping[str, Saved], submitted: Submitted, to_write: dict[str, Any]
+) -> dict[str, Any]:
+    """What saving the Sound page writes besides its values: where the saved token was
+    entered (``saved.TOKEN_FOR``). A token typed is saved - and its place recorded - even
+    when it is unchanged or the configuration's, unless it is the configuration's token for
+    the configuration's own address (which needs no saving)."""
+    candidate = submitted.candidate
+    assert isinstance(candidate, AudioMuseSettings)
+    here = place(candidate.url)
+    if "token" in submitted.entered:
+        base = configured.audiomuse
+        if candidate.token != base.token or here != place(base.url):
+            to_write["token"] = candidate.token
+    if "token" in to_write:
+        if to_write["token"] is REMOVE or to_write["token"] is None:
+            return {TOKEN_FOR: REMOVE} if TOKEN_FOR in saved else {}
+        return {TOKEN_FOR: here}
+    return {}
 
 
 def _first_step(
@@ -606,6 +673,8 @@ def writes(
         ]
         to_write.update(_adapter_writes(kind, items, view.saved, to_write))
         to_write.update(_bound_writes(submitted.candidate, bound, items, view.saved, to_write))
+    if section == "audiomuse":
+        to_write.update(_token_record(configured, saved.get(section, {}), submitted, to_write))
     return Written(changed, to_write, list(submitted.removals), moved)
 
 

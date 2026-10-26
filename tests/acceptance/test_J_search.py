@@ -27,6 +27,7 @@ import pytest
 from shijhon.catalog.model import Twins
 from shijhon.views.bursts import Bursts
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection, select_catalog
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
@@ -70,6 +71,7 @@ def world(
         write_album(nd.music, album)
     nd.scan(full=True)
     with delivery_world(nd, tmp_path_factory.mktemp("search"), catalog=replay.catalog()) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -421,6 +423,7 @@ def test_an_artist_the_catalog_does_not_know_is_unchanged(
 ) -> None:
     write_album(world.nd.music, Album("Nobody Known", "Quiet Room", (Track("Room", 1),)))
     world.nd.scan(full=False)
+    prepare_collection(world.nd, world.server)
     found = direct(world, "search3", {"query": "nobody known", "albumCount": 0, "songCount": 0})
     [ident] = [a["id"] for a in found["searchResult3"]["artist"]]
     replay.aliases["nobody known"] = RECORDED  # no artist of that name in the answer
@@ -900,6 +903,11 @@ def test_a_committed_catalog_album_is_not_added_again(
     iron = f"sh.al.demo.{item('album-feat-standard')}"
     assert iron in [a["id"] for a in search(client, TERM)["album"]]
     client.ok("star", {"albumId": iron})
+    select_catalog(
+        world.nd,
+        world.server,
+        [f"demo:{t['ref']['id']}" for t in fixture("album-feat-standard")["body"]["tracks"]],
+    )
     found = search(client, TERM)
     assert iron not in [a["id"] for a in found["album"]]
     name = fixture("album-feat-standard")["body"]["title"]

@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% from "_macros.html" import learned_edits, playlist_tabs %}
+{% set title = "Describe a playlist" %}
+{% block main %}
+{{ playlist_tabs(prefix, "describe", detail=shown is not none) }}
+{% if shown %}
+{% set c = curation %}
+{% set state_label = {'queued':'Waiting','generating':'Choosing songs','publishing':'Publishing','published':'Published','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped'}.get(shown.state, shown.state|capitalize) %}
+<div class="page-head">
+  <div class="page-title">
+    <p class="page-back"><a href="{{ prefix }}/playlists/describe">← Described playlists</a></p>
+    <h1>{{ shown.name }}</h1>
+    <p class="page-summary"><span class="tag{{ ' tag-set' if shown.state == 'published' else ' tag-restart' if shown.state in ['preview','uncertain'] else ' tag-error' if shown.state == 'failed' else '' }}">{{ state_label }}</span> {{ shown.count }} tracks requested</p>
+  </div>
+  <form class="page-actions" method="post" action="{{ prefix }}/playlists/describe/{{ shown.id }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="run" value="{{ run.id }}">
+{% if shown.state == 'preview' %}<button class="btn-primary" name="action" value="publish">Publish playlist</button><button name="action" value="discard">Discard preview</button>{% endif %}
+{% if shown.state in ['failed','uncertain'] %}<button class="btn-primary" name="action" value="retry">Retry / recheck this request</button>{% endif %}
+{% if shown.state in ['published','discarded','failed'] and spec.save_instructions %}<button name="action" value="refresh">Refresh from saved instructions</button>{% endif %}
+{% if shown.refreshes %}<button name="action" value="pause">Pause refreshes</button>{% elif spec.cadence != 'manual' and shown.playlist_id %}<button name="action" value="enable">Enable refreshes</button>{% endif %}
+<a class="btn btn-quiet" href="{{ prefix }}/playlists/describe/{{ shown.id }}">Reload progress</a></form>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if shown.error %}<div class="notice notice-error" role="alert"><p>{{ shown.error }}</p></div>{% endif %}
+{% if shown.state in ['queued','generating','publishing'] %}<p class="notice notice-info" role="status">Working in the background. Reload progress to check the result.</p>{% endif %}
+<section class="group" aria-labelledby="request-title">
+<div class="group-head"><h2 id="request-title">What you asked for</h2></div>
+<div class="rows">
+<dl class="readout">
+{% if spec.brief %}<div><dt>Instructions</dt><dd>{{ spec.brief }}</dd></div>{% endif %}
+<div><dt>Refreshes</dt><dd>{% if spec.cadence == 'manual' %}One-off; no regular refresh.{% else %}{{ spec.cadence|capitalize }} refreshes: {{ 'enabled' if shown.refreshes else 'paused' }}.{% endif %}</dd></div>
+<div><dt>Listening history</dt><dd>{{ 'Used' if spec.use_history else 'Not used' }}</dd></div>
+<div><dt>Library as context</dt><dd>{{ 'Used' if spec.use_library else 'Not used' }}</dd></div>
+</dl>
+{% if c.goal or c.revision %}
+<div class="curation music-card">
+{% if c.goal %}<p><strong>Goal:</strong> {{ c.goal }}</p>{% endif %}
+{% if c.revision %}<p>{{ c.revision }}</p>{% endif %}
+</div>
+{% endif %}
+{% if c.playlists or c.songs_chosen %}
+<div class="curation music-card">
+<h3>Compared with</h3>
+<ul class="curation-refs">
+{% for p in c.playlists %}
+<li><strong>{{ p.name }}</strong> · {{ p.songs }} song{{ 's' if p.songs != 1 }} · {{ 'found by name in your instructions' if p.detected else 'chosen' }}</li>
+{% endfor %}
+{% if c.songs_chosen %}<li>{{ c.songs_chosen }} chosen song{{ 's' if c.songs_chosen != 1 }}</li>{% endif %}
+</ul>
+{% if c.summary %}<p>Typical of the reference: {{ c.summary|join(' · ') }}.{% if c.reference_sound %} {{ c.reference_sound[0] }} of {{ c.reference_sound[1] }} reference songs have sound facts.{% endif %}</p>{% endif %}
+{% if not c.exclude %}<p>Songs already in the reference could be chosen again.</p>
+{% else %}
+{% if c.chosen or c.songs_chosen %}<p>Songs already in the chosen reference were left out{% if c.left_out %}: {{ c.left_out }} suggested song{{ 's' if c.left_out != 1 }} skipped{% endif %}.</p>{% endif %}
+{% if c.detected %}<p>The AI was asked not to repeat songs of playlists found by name.</p>{% endif %}
+{% endif %}
+</div>
+{% endif %}
+</div>
+</section>
+{% if learning %}<section class="group">{{ learned_edits(learning, prefix ~ '/playlists/describe/' ~ shown.id, csrf) }}</section>{% endif %}
+{% if c.songs %}
+<section class="group" aria-labelledby="songs-title">
+<div class="group-head"><h2 id="songs-title">Songs</h2><p class="group-meta">{{ c.songs|length }}</p>
+<p class="group-help">Catalog tracks can add whole releases as placeholders or missing tracks to a matched album. This does not download their audio. A preparation failure can leave releases added.</p></div>
+{% if run.data.releases %}<details class="form-more"><summary>Releases this can add ({{ run.data.releases|length }})</summary><ul>{% for release in run.data.releases %}<li>{{ release.title }} · {{ release.artist }} · {{ release.tracks }} tracks in the catalog release</li>{% endfor %}</ul></details>{% endif %}
+{% if c.facts or c.sound_suggested or c.sound_unavailable or c.tags_unavailable %}
+<p class="curation-note">{% if c.facts %}{{ c.facts|join(' · ') }}.{% endif %}{% if c.sound_suggested %} Sound analysis suggested {{ c.sound_suggested }} library song{{ 's' if c.sound_suggested != 1 }} as candidates.{% endif %}{% if c.sound_unavailable %} Sound analysis didn't answer during this run.{% endif %}{% if c.tags_unavailable %} Last.fm didn't answer during this run.{% endif %}</p>
+{% endif %}
+{% if c.energy %}<p class="curation-note">Energy is a percentile in your library: 90 means louder or livelier than 90% of the songs analyzed.{% if c.reference.energy is not none %} The line on each bar marks the reference's typical energy.{% endif %}</p>{% endif %}
+<ol class="curated" role="list">
+{% for song in c.songs %}
+<li class="curated-song">
+<div class="curated-main">
+<p><strong>{{ song.title }}</strong> · {{ song.artist }}{% if song.album %} · {{ song.album }}{% endif %}</p>
+{% if song.fit or song.source or song.suggested %}<p class="curated-tags">{% if song.fit %}<span class="tag tag-{{ song.fit_key }}">{{ song.fit }}</span> {% endif %}{% if song.source %}<span class="tag">{{ song.source }}</span> {% endif %}{% if song.suggested %}<span class="tag">{{ song.suggested }}</span>{% endif %}</p>{% endif %}
+{% if song.reason %}<p>{{ song.reason }}</p>{% endif %}
+{% if song.details %}<p class="curated-facts">{{ song.details|join(' · ') }}</p>{% endif %}
+</div>
+{% if song.energy is not none or song.tempo %}
+<div class="curated-sound">
+{% if song.energy is not none %}
+<svg class="energy-bar" viewBox="0 0 100 12" aria-hidden="true" focusable="false"><rect class="energy-track" x="0.5" y="3.5" width="99" height="5" rx="2.5"/><rect class="energy-fill" x="0.5" y="3.5" width="{{ song.energy_width }}" height="5" rx="2.5"/>{% if c.reference.energy is not none %}<line class="energy-reference" x1="{{ c.reference.marker }}" x2="{{ c.reference.marker }}" y1="0.5" y2="11.5"/>{% endif %}</svg>
+<p>Energy {{ song.energy }}{% if c.reference.energy is not none %} · reference {{ c.reference.energy }}{% endif %}</p>
+{% endif %}
+{% if song.tempo %}<p>{{ song.tempo }} BPM{% if c.reference.tempo %} · reference {{ c.reference.tempo }}{% endif %}</p>{% endif %}
+</div>
+{% endif %}
+</li>
+{% endfor %}
+</ol>
+</section>
+{% endif %}
+{% else %}
+<div class="page-head">
+  <div class="page-title">
+    <h1>Describe a playlist</h1>
+    <p class="page-summary">Write what you want to hear. The AI chooses the songs and Shijhon publishes the playlist to your music app.</p>
+  </div>
+  <details class="page-about"><summary>How described playlists work</summary>
+    <p>It uses your saved AI connection. Your listening history and your library are optional influences; the exact recording lookup still checks your library when library context is off.</p>
+    <p>Regular refreshes need saved instructions and AI. Publishing can add whole catalog releases as placeholders; it does not download audio. Audio is fetched through normal playback and download rules.</p>
+  </details>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if connected %}
+<section class="group" aria-label="New described playlist"><form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/describe">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="request_key" value="{{ request_key }}">
+<div class="mix-fields">
+<label class="mix-wide">Instructions<textarea name="prompt" maxlength="2000" rows="4" required placeholder="Describe the mood, styles, artists and versions you want">{{ form.get('prompt', '') }}</textarea></label>
+<label>Playlist name (optional)<input name="name" maxlength="100" placeholder="Leave blank to choose automatically"{% if form.get('name') %} value="{{ form.get('name') }}"{% endif %}></label>
+<label>Tracks<input type="number" name="count" min="1" max="100" value="{{ form.get('count', '30') }}" required></label>
+<label>Maximum tracks per artist<input type="number" name="max_per_artist" min="1" max="10" value="{{ form.get('max_per_artist', '2') }}" required></label>
+<fieldset class="mix-wide mix-references">
+<legend>Compare with your playlists (optional)</legend>
+{% if references.playlists %}
+<div class="mix-reference-choices">
+{% for field in reference_fields %}
+<label>{{ ['Playlist', 'Second playlist', 'Third playlist'][loop.index0] }}<select name="{{ field }}"><option value="">None</option>{% for p in references.playlists %}<option value="{{ p.id }}"{% if form.get(field) == p.id %} selected{% endif %}>{{ p.name }} ({{ p.songs }} song{{ 's' if p.songs != 1 }})</option>{% endfor %}</select></label>
+{% endfor %}
+</div>
+{% if references.more %}<p class="field-help">Your first {{ references.playlists|length }} playlists by name are listed.</p>{% endif %}
+{% elif references.unavailable %}<p class="field-help">Your playlists couldn't be read just now. Reload the page, or name a playlist in the instructions.</p>
+{% else %}<p class="field-help">You have no playlists of your own yet.</p>
+{% endif %}
+<input type="hidden" name="exclude_reference" value="false">
+<label class="mix-check"><input type="checkbox" name="exclude_reference" value="true"{% if form.get('exclude_reference') != 'false' %} checked{% endif %}> Leave out songs already in the reference</label>
+<p class="field-help">With no playlist chosen here, a playlist of yours named in the instructions, such as “like my Evening Drive playlist but more energetic”, is used as the reference.</p>
+</fieldset>
+<fieldset class="mix-wide mix-options"><legend class="visually-hidden">Options</legend>
+<label class="mix-check"><input type="checkbox" name="use_history" value="true"{% if form.get('use_history') == 'true' %} checked{% endif %}> Use my listening history</label>
+<label class="mix-check"><input type="checkbox" name="use_library" value="true"{% if form.get('use_library') == 'true' %} checked{% endif %}> Use my library as context</label>
+<label class="mix-check"><input type="checkbox" name="save_instructions" value="true"{% if form.get('save_instructions') == 'true' %} checked{% endif %}> Save these instructions for reuse</label>
+</fieldset>
+<label>Regular refresh<select name="cadence">{% for value, label in [('manual', 'None (one-off)'), ('daily', 'Every day'), ('weekly', 'Every week')] %}<option value="{{ value }}"{% if form.get('cadence') == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select><span class="field-help">Refreshes need saved instructions.</span></label>
+</div>
+<details class="form-more"{% if form.get('preview') == 'true' %} open{% endif %}><summary>Advanced</summary><label class="mix-check"><input type="checkbox" name="preview" value="true"{% if form.get('preview') == 'true' %} checked{% endif %}> Review a preview before publication</label></details>
+<p class="field-help">Publishing can add whole catalog releases as placeholders. Audio is fetched through normal playback and download rules.</p>
+<div class="form-actions"><button class="btn-primary">Create playlist</button></div>
+</form></section>
+{% else %}<div class="notice notice-info"><p class="notice-title">Connect first</p><p><a href="{{ prefix }}/playlists#settings">Connect your native account and save an AI connection</a> to describe a playlist. Last.fm is optional.</p></div>{% endif %}
+<section class="group" aria-labelledby="requests-title"><div class="group-head"><h2 id="requests-title">Your described playlists</h2>{% if listing %}<p class="group-meta">{{ listing|length }}</p>{% endif %}</div>
+{% if listing %}<ul class="rows playlist-list">{% for item in listing %}<li><a href="{{ prefix }}/playlists/describe/{{ item.id }}">{{ item.spec.name }}</a><span>{{ item.spec.count }} tracks</span></li>{% endfor %}</ul>{% else %}<p class="empty">No described playlists yet.</p>{% endif %}
+</section>
+{% if connected %}
+<details class="more-settings" id="agents"><summary><span class="more-title">Agent access</span>{% if agents %}<span class="more-changed">{{ agents|rejectattr('revoked')|list|length }} active</span>{% endif %}</summary>
+<p class="group-help">Connect your agent to <code>/shijhon/mcp</code> and sign in with OAuth. The installation needs <code>agents.public_url</code> set to its public HTTPS address.</p>
+<p class="group-help">Connections can create playlists and read their own requests. History, library reads and connection choices have separate permissions. Revoking a connection stops its unfinished work and future refreshes.</p>
+{% if agents %}<ul class="rows playlist-list">{% for agent in agents %}<li><span class="playlist-agent">{{ agent.name }}</span><span class="tag{{ '' if agent.revoked else ' tag-set' }}">{{ 'Revoked' if agent.revoked else 'Active' }}</span>{% if not agent.revoked %}<form method="post" action="{{ prefix }}/playlists/agents"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="agent" value="{{ agent.id }}"><button class="btn-danger btn-small" name="action" value="revoke">Revoke</button></form>{% endif %}</li>{% endfor %}</ul>{% endif %}
+</details>
+{% endif %}
+{% endif %}
+{% endblock %}

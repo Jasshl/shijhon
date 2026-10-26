@@ -19,6 +19,7 @@ import pytest
 
 from shijhon.catalog.model import CatalogRef
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.navidrome import ADMIN_USER
@@ -49,6 +50,7 @@ def world(
     with delivery_world(
         nd, tmp_path_factory.mktemp("covers"), catalog=replay.catalog(), covers=covers
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 

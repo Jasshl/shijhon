@@ -470,7 +470,8 @@ def test_an_unchecked_request_is_forwarded_untouched(world: tuple[DeliveryWorld,
     w, _ = world
     pings, before = w.app.checker.pings, failures(w.nd)
     query = {**WRONG[0], "f": "json"}
-    through = comparable(answered(w.server.base_url, "GET", "getArtists", query))
+    # Artist lists now perform selected-library work; playlists stay native.
+    through = comparable(answered(w.server.base_url, "GET", "getPlaylists", query))
     assert w.app.checker.pings == pings and failures(w.nd) - before == 1
-    assert through[1] == comparable(answered(w.nd.base_url, "GET", "getArtists", query))[1]
+    assert through[1] == comparable(answered(w.nd.base_url, "GET", "getPlaylists", query))[1]
     assert json.loads(through[2])["subsonic-response"]["error"]["code"] == 40

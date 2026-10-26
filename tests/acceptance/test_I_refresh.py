@@ -17,6 +17,7 @@ import pytest
 
 from shijhon.fill.refresh import Refreshed
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.engine import catalog_release
 from tests.harness.fake_addon import FakeTrack
@@ -54,6 +55,7 @@ def world(
     with delivery_world(
         nd, tmp_path_factory.mktemp("refresh"), catalog=replay.catalog(), fill=fill
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -64,7 +66,7 @@ def album_id(world: DeliveryWorld) -> str:
 
 def songs(world: DeliveryWorld, album: str) -> dict[str, dict[str, Any]]:
     """The album's songs by title."""
-    return {s["title"]: s for s in world.client().ok("getAlbum", {"id": album})["album"]["song"]}
+    return {s["title"]: s for s in world.nd.client().ok("getAlbum", {"id": album})["album"]["song"]}
 
 
 def refresh(world: DeliveryWorld, album: str) -> list[Refreshed]:
@@ -150,7 +152,7 @@ def test_a_catalog_album_s_renumbering_is_applied_as_a_whole(
         return str(row["album_id"])
 
     album = world.server.call(album_of)
-    before = {s["title"]: s for s in client.ok("getAlbum", {"id": album})["album"]["song"]}
+    before = songs(world, album)
     assert len(before) == 13
     first = rows[0]["title"]
     addon = world.addon("Deliverer")
@@ -175,7 +177,7 @@ def test_a_catalog_album_s_renumbering_is_applied_as_a_whole(
         replay.by_path[CATALOG_ONLY] = original
     assert (result.added, result.updated) == (1, 12)
     assert result.skipped == [f"{first} (Renamed): delivered audio is kept as it is"]
-    after = client.ok("getAlbum", {"id": album})["album"]["song"]
+    after = world.nd.client().ok("getAlbum", {"id": album})["album"]["song"]
     assert [s["track"] for s in after] == list(range(1, 15))
     assert after[1]["title"] == "Inserted Letter"
     for song in after[2:]:

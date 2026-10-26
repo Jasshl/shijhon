@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -75,6 +75,9 @@ class StoredSource:
     budget: float | None
     # Its own limits on what Shijhon sends it; None: the installation's.
     limits: Limits = field(default_factory=Limits)
+    downloads: int | None = None
+    preparations: int | None = None
+    capacity_group: str = ""
 
 
 @dataclass
@@ -92,6 +95,9 @@ class Source:
     # Its origin's limits on what Shijhon sends it: requests a second, audio openings
     # at once - shared with every add-on at the same origin. None: none (tests).
     pace: AddonPace | None = None
+    downloads: int | None = None
+    preparations: int | None = None
+    capacity_group: str = ""
 
 
 class SourceRegistry:
@@ -139,16 +145,21 @@ class SourceRegistry:
         enabled: bool = True,
         budget_seconds: float | None = None,
         limits: Limits | None = None,
+        downloads: int | None = None,
+        preparations: int | None = None,
+        capacity_group: str = "",
     ) -> int:
         if budget_seconds is not None and not 0 < budget_seconds <= 600:
             raise ValueError("budget_seconds must be between 0 and 600")
         own = _checked(limits or Limits())
+        _capacity(downloads, preparations, capacity_group)
         row = await self.store.fetchone("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM sources")
         position = int(row["p"]) if row else 1
         source_id = await self.store.execute(
             "INSERT INTO sources (name, base_url, settings, enabled, position, reach,"
-            " budget_seconds, requests_per_second, request_burst, audio_openings, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " budget_seconds, requests_per_second, request_burst, audio_openings, created_at,"
+            " downloads, preparations, capacity_group)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 name,
                 base_url,
@@ -161,6 +172,9 @@ class SourceRegistry:
                 own.request_burst,
                 own.audio_openings,
                 time.time(),
+                downloads,
+                preparations,
+                capacity_group.strip(),
             ],
         )
         await self.invalidate()
@@ -176,6 +190,11 @@ class SourceRegistry:
         budget_seconds: float | None = None,
         clear_budget: bool = False,
         limits: Limits | None = None,
+        downloads: int | None = None,
+        preparations: int | None = None,
+        capacity_group: str | None = None,
+        clear_downloads: bool = False,
+        clear_preparations: bool = False,
         also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> None:
         """Change a source's configuration (the dashboard's edit). ``limits``: its own
@@ -185,6 +204,13 @@ class SourceRegistry:
         if budget_seconds is not None and not 0 < budget_seconds <= 600:
             raise ValueError("budget_seconds must be between 0 and 600")
         changes: dict[str, object] = {}
+        _capacity(downloads, preparations, capacity_group or "")
+        if downloads is not None or clear_downloads:
+            changes["downloads"] = downloads
+        if preparations is not None or clear_preparations:
+            changes["preparations"] = preparations
+        if capacity_group is not None:
+            changes["capacity_group"] = capacity_group.strip()
         if limits is not None:
             own = _checked(limits)
             changes["requests_per_second"] = own.requests_per_second
@@ -219,6 +245,18 @@ class SourceRegistry:
         )
         if enabled:
             self._fresh_start(source_id)
+        await self.invalidate()
+
+    async def set_enabled_many(self, changes: Mapping[int, bool]) -> None:
+        """Turn several add-ons on or off together: all of them, or none if it fails."""
+        async with self.store.transaction() as conn:
+            for source_id, enabled in changes.items():
+                await conn.execute(
+                    "UPDATE sources SET enabled = ? WHERE id = ?", [int(enabled), source_id]
+                )
+        for source_id, enabled in changes.items():
+            if enabled:
+                self._fresh_start(source_id)
         await self.invalidate()
 
     def _fresh_start(self, source_id: int) -> None:
@@ -261,6 +299,9 @@ class SourceRegistry:
                     reach=reach,
                     budget_seconds=addon.budget_seconds,
                     limits=_configured(addon),
+                    downloads=addon.downloads,
+                    preparations=addon.preparations,
+                    capacity_group=addon.capacity_group,
                 )
             else:
                 await self.update(
@@ -271,6 +312,11 @@ class SourceRegistry:
                     budget_seconds=addon.budget_seconds,
                     clear_budget=addon.budget_seconds is None,
                     limits=_configured(addon),
+                    downloads=addon.downloads,
+                    preparations=addon.preparations,
+                    capacity_group=addon.capacity_group,
+                    clear_downloads=addon.downloads is None,
+                    clear_preparations=addon.preparations is None,
                 )
                 await self.set_enabled(source_id, True)
             order.append(source_id)
@@ -298,6 +344,9 @@ class SourceRegistry:
                 or kept.settings != addon.settings
                 or kept.budget != addon.budget_seconds
                 or kept.limits != _configured(addon)
+                or kept.downloads != addon.downloads
+                or kept.preparations != addon.preparations
+                or kept.capacity_group != addon.capacity_group.strip()
             ):
                 found.append(addon.name)
         return found
@@ -327,7 +376,8 @@ class SourceRegistry:
             if self._sources is None:
                 rows = await self.store.fetchall(
                     "SELECT id, name, base_url, settings, position, reach, budget_seconds,"
-                    " requests_per_second, request_burst, audio_openings"
+                    " requests_per_second, request_burst, audio_openings, downloads,"
+                    " preparations, capacity_group"
                     " FROM sources WHERE enabled = 1 ORDER BY position, id"
                 )
                 # Each origin's limits: its add-on's own over the installation's.
@@ -349,7 +399,7 @@ class SourceRegistry:
                     stats = self._stats.setdefault(row["id"], SourceStats())
                     sources[row["id"]] = Source(
                         row["id"], row["name"], row["position"], reach, addon, http, stats,
-                        budget, pace,
+                        budget, pace, row["downloads"], row["preparations"], row["capacity_group"],
                     )  # fmt: skip
                 self._sources = sources
                 self._pace_of = {s.id: s.pace for s in sources.values() if s.pace is not None}
@@ -381,7 +431,8 @@ class SourceRegistry:
         the caller's transaction)."""
         sql = (
             "SELECT id, name, base_url, settings, enabled, position, reach, budget_seconds,"
-            " requests_per_second, request_burst, audio_openings"
+            " requests_per_second, request_burst, audio_openings, downloads,"
+            " preparations, capacity_group"
             " FROM sources ORDER BY position, id"
         )
         if conn is None:
@@ -406,6 +457,9 @@ class SourceRegistry:
                     Reach(row["reach"]),
                     row["budget_seconds"],
                     _limits(row),
+                    row["downloads"],
+                    row["preparations"],
+                    row["capacity_group"],
                 )
             )
         return found
@@ -538,6 +592,14 @@ class SourceRegistry:
 
 def _limits(row: Any) -> Limits:
     return Limits(row["requests_per_second"], row["request_burst"], row["audio_openings"])
+
+
+def _capacity(downloads: int | None, preparations: int | None, group: str) -> None:
+    for name, value in (("downloads", downloads), ("preparations", preparations)):
+        if value is not None and (type(value) is not int or not 0 <= value <= MAX_LIMIT):
+            raise ValueError(f"{name} must be an integer between 0 and {MAX_LIMIT}")
+    if not isinstance(group, str) or len(group) > 100:
+        raise ValueError("capacity_group must be text of at most 100 characters")
 
 
 def _configured(addon: AddonSettings) -> Limits:

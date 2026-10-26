@@ -14,7 +14,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import httpx
@@ -29,6 +29,7 @@ from shijhon.proxy.params import (
     header,
     unreadable,
 )
+from shijhon.proxy.responses import music_send
 from shijhon.proxy.upstream import (
     Receive,
     Scope,
@@ -40,6 +41,9 @@ from shijhon.proxy.upstream import (
     send_bytes,
     stream_request_body,
 )
+
+if TYPE_CHECKING:
+    from shijhon.views.answers import LibraryAnswer
 
 access_log = logging.getLogger("shijhon.access")
 log = logging.getLogger(__name__)
@@ -63,12 +67,22 @@ HandlerResult = Forward | Reply | None
 
 
 class RequestContext:
-    def __init__(self, checker: CredentialChecker, call: RestCall, scope: Scope) -> None:
+    def __init__(
+        self,
+        checker: CredentialChecker,
+        call: RestCall,
+        scope: Scope,
+        *,
+        music_gate: MusicGate | None = None,
+    ) -> None:
         self._checker = checker
         self._call = call
         self.scope = scope
         self._checked = False
         self._caller: Caller | None = None
+        self._music_gate = music_gate
+        self.bypass = False
+        self._gate_failed: CheckFailed | None = None
         # What one handler keeps for a later one of the same request (a catalog song's
         # play, then its stream once committed), and what is closed when the request's
         # handlers are done - before its answer is sent: nothing kept outlives the request.
@@ -84,22 +98,33 @@ class RequestContext:
         return self._call.http_method == "HEAD"
 
     async def caller(self) -> Caller | None:
-        """The authenticated caller, checked with Navidrome once per request; None when
-        Navidrome refused the credentials (``refusal``) or there are none. ``CheckFailed``
-        when Navidrome gave no verdict: the request is then neither worked for nor passed
-        on as if refused."""
+        """The caller accepted by Navidrome and the configured music gate, once per
+        request. None means no credentials, a native refusal (``refusal``), or no current
+        library grant (``bypass``). ``CheckFailed`` means no trustworthy verdict."""
         if self._failed is not None:
             raise self._failed
         if not self._checked:
             try:
-                verdict = await self._checker.check(self._call)
+                # A cached username cannot prove that these credentials still belong
+                # to the account whose current grants the music gate will resolve.
+                verdict = await self._checker.check(self._call, fresh=self._music_gate is not None)
             except CheckFailed as exc:
                 self._failed = exc
+                if self._music_gate is not None:
+                    self._gate_failed = exc
                 raise
             self._caller = verdict if isinstance(verdict, Caller) else None
             self.refusal = verdict if isinstance(verdict, Refusal) else None
+            # The gate may ask for this same credential proof. Mark it checked before
+            # entering the gate; handlers receive no caller until the gate accepts it.
             self._checked = True
-        return self._caller
+            if self._caller is not None and self._music_gate is not None:
+                try:
+                    self.bypass = not await self._music_gate(self._call, self)
+                except CheckFailed as exc:
+                    self._failed = self._gate_failed = exc
+                    raise
+        return None if self.bypass else self._caller
 
     async def close(self) -> None:
         """The request's handlers are done: what they kept is closed (also when canceled)."""
@@ -114,6 +139,9 @@ class RequestContext:
 Handler = Callable[[RestCall, RequestContext], Awaitable[HandlerResult]]
 # Work before any handler, on every parsed REST call (a release taken out comes back).
 Before = Callable[[RestCall, RequestContext], Awaitable[None]]
+MusicGate = Callable[[RestCall, RequestContext], Awaitable[bool]]
+FinalLibraryAnswer = Callable[[RestCall, RequestContext], Awaitable["LibraryAnswer | None"]]
+PathGate = Callable[[Scope], Awaitable[bool]]
 # Intercepts a non-Subsonic path; returns True if it answered, False to forward.
 PathInterceptor = Callable[[Scope, Receive, Send], Awaitable[bool]]
 
@@ -141,6 +169,13 @@ class ProxyApp:
         # For Subsonic methods without a handler of their own (catalog IDs).
         self.fallback: Handler | None = None
         self.before: Before | None = None
+        # Applied at the first handler's ctx.caller(), after credential acceptance.
+        # No-op native routes need neither proof nor a library-grant lookup here.
+        self.music_gate: MusicGate | None = None
+        # The final selected-library adapter shares this request's lazy credential
+        # proof and refusal. Upstream.library_answer remains available to view captures.
+        self.final_library_answer: FinalLibraryAnswer | None = None
+        self.path_gate: PathGate | None = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -156,8 +191,24 @@ class ProxyApp:
             await send(message)
 
         path: str = scope["path"]
+        raw_path: bytes = scope.get("raw_path") or path.encode()
         label = ""
         try:
+            # httpx removes literal dot segments when it constructs the upstream URL.
+            # Refuse them before any dispatch (also percent-encoded dots or separators
+            # decoded by ASGI): no differently routed request may reach a silent file.
+            if any(part in (".", "..") for part in path.split("/")):
+                label = "http (ambiguous path)"
+                await send_bytes(
+                    music_send(scope["method"], list(scope["headers"]), tracking_send)
+                    if path.startswith("/rest/")
+                    else tracking_send,
+                    400,
+                    b"Ambiguous request path\n",
+                    [(b"content-type", b"text/plain")],
+                    head=scope["method"].upper() == "HEAD",
+                )
+                return
             for prefix, mounted in self.mounts.items():
                 if path == prefix or path.startswith(prefix + "/"):
                     label = f"mount {prefix}"
@@ -168,7 +219,9 @@ class ProxyApp:
             if not await self.forwarding.settled():
                 label = "http (starting)"
                 await send_bytes(
-                    tracking_send,
+                    music_send(scope["method"], list(scope["headers"]), tracking_send)
+                    if path.startswith("/rest/")
+                    else tracking_send,
                     503,
                     b"Navidrome is not answering yet\n",
                     [(b"content-type", b"text/plain"), (b"retry-after", b"5")],
@@ -178,12 +231,19 @@ class ProxyApp:
             # The method as Navidrome gets it: the upstream client sends it in capitals, so
             # a "post" is a POST for Shijhon too (its form read, its audio intercepted).
             scope["method"] = str(scope["method"]).upper()
-            if path.startswith("/rest/"):
+            # Navidrome routes escaped paths: %73tream is not its stream endpoint.
+            # Match that same spelling while forwarding the original bytes unchanged.
+            if raw_path.startswith(b"/rest/"):
                 label = await self._rest(scope, receive, tracking_send)
                 return
             label = "http /" + path.lstrip("/").split("/", 1)[0]
+            if self.path_gate is not None and not await self.path_gate(scope):
+                await self._forward_raw(scope, receive, tracking_send)
+                return
             for prefix, intercept in self.path_interceptors.items():
-                if path.startswith(prefix) and await intercept(scope, receive, tracking_send):
+                if raw_path.startswith(prefix.encode()) and await intercept(
+                    scope, receive, tracking_send
+                ):
                     return
             await self._forward_raw(scope, receive, tracking_send)
         except anyio.EndOfStream:
@@ -194,7 +254,7 @@ class ProxyApp:
 
     async def _rest(self, scope: Scope, receive: Receive, send: Send) -> str:
         raw_path: bytes = scope.get("raw_path") or scope["path"].encode()
-        name = scope["path"][len("/rest/") :].removesuffix(".view")
+        name = raw_path[len(b"/rest/") :].decode("ascii", errors="replace").removesuffix(".view")
         method: str = scope["method"]
         headers: list[tuple[bytes, bytes]] = list(scope["headers"])
         query: bytes = scope.get("query_string", b"")
@@ -249,12 +309,43 @@ class ProxyApp:
             call.query = query  # (forwarded as it came)
         label = f"rest {name}" + (f" c={call.client[:_LABEL_CLIENT]}" if call.client else "")
         handler = None if refused else self.handlers.get(name, self.fallback)
-        ctx = RequestContext(self.checker, call, scope)
+        ctx = RequestContext(self.checker, call, scope, music_gate=self.music_gate)
         try:
             try:
                 if self.before is not None and not refused:
                     await self.before(call, ctx)
-                result = await handler(call, ctx) if handler is not None else None
+                result = (
+                    await handler(call, ctx) if handler is not None and not ctx.bypass else None
+                )
+                # Some wrappers tolerate optional handler failures. An unavailable
+                # current grant must still fail closed, including inside those wrappers.
+                if ctx._gate_failed is not None:
+                    raise ctx._gate_failed
+                if ctx.bypass:
+                    result = None  # forward the original call, never a rewritten one
+                if (
+                    isinstance(result, Forward | None)
+                    and not refused
+                    and not ctx.bypass
+                    and ctx.refusal is None
+                    and streamed is None
+                ):
+                    answered_call = result.call if isinstance(result, Forward) else call
+                    selected = None
+                    if self.final_library_answer is not None:
+                        selected = await self.final_library_answer(answered_call, ctx)
+                    elif self.upstream.library_answer is not None:
+                        selected = await self.upstream.library_answer(answered_call)
+                    if selected is not None:
+                        from shijhon.views.answers import accepts_gzip
+
+                        # Use the same framing as wrappers returning a selected GET;
+                        # HEAD describes that representation and sends no body.
+                        result = selected.reply(head=ctx.head, compress=accepts_gzip(answered_call))
+                    if ctx._gate_failed is not None:
+                        raise ctx._gate_failed
+                    if ctx.bypass:
+                        result = None
             finally:
                 await ctx.close()
         except CheckFailed as exc:
@@ -263,22 +354,22 @@ class ProxyApp:
             # Navidrome would play the placeholder's silence.
             log.warning("credential check failed (%s): %s answered with an error", exc, name)
             await send_bytes(
-                send,
+                music_send(method, headers, send),
                 502,
                 b"Navidrome could not check the request's credentials\n",
                 [(b"content-type", b"text/plain"), (b"retry-after", b"5")],
                 head=ctx.head,
             )
             return label
-        if isinstance(result, Forward):
-            call = result.call
-        elif result is not None:
-            await result(receive, send)
-            return label
         if ctx.refusal is not None:
             # Navidrome refused these credentials when Shijhon checked them: its answer,
             # not a second failure toward its login limit.
             await _send_refusal(ctx.refusal, send, head=ctx.head)
+            return label
+        if isinstance(result, Forward):
+            call = result.call
+        elif result is not None:
+            await result(receive, music_send(method, headers, send))
             return label
         await self.forward_call(call, receive, send, streamed=streamed)
         return label
@@ -331,7 +422,10 @@ class ProxyApp:
         except httpx.HTTPError as exc:
             log.warning("navidrome unreachable: %s", type(exc).__name__)
             await send_bytes(
-                send, 502, b"Navidrome is unreachable\n", [(b"content-type", b"text/plain")]
+                music_send(method, headers, send) if raw_path.startswith(b"/rest/") else send,
+                502,
+                b"Navidrome is unreachable\n",
+                [(b"content-type", b"text/plain")],
             )
             return
         await relay(response, receive, send, head=method == "HEAD")

@@ -9,7 +9,8 @@ address as the proxy names it; ``Origin``; the content coding of its
 ``Accept-Encoding``). Its answer names the user Navidrome authenticated - whichever ``u``
 it read, in whatever letter case it was sent, or the reverse-proxy header's user - and
 that is the caller's name: per-user limits and state count the same user Navidrome does. A
-positive result is reused briefly, keyed by a hash of the credentials and that address.
+positive result may be reused briefly, keyed by a hash of the credentials and that
+address. Music work requiring current library authority asks for a fresh proof instead.
 
 A refusal - wrong credentials (also while Navidrome's login limit holds), or a request
 without ``u``, ``v`` or ``c`` - is Navidrome's own answer, given before it looks at the
@@ -153,6 +154,15 @@ class CredentialChecker:
             material.append(("header", proxy_user))
         return material
 
+    def claimed(self, call: RestCall) -> tuple[list[str], bool]:
+        """(the user names the request may be authenticated as - the reverse-proxy
+        header's, the first ``u`` -, whether it carries credentials at all). Only
+        Navidrome's check says who the caller is; this tells which requests cannot be a
+        given account's without asking it (one naming no one, with an API key: any)."""
+        material = self._material(call)
+        names = [name.decode("utf-8", errors="replace") for name in _names(material)]
+        return names, bool(material)
+
     def _who(self, call: RestCall) -> tuple[list[Any], str] | None:
         """(who asks, the cache's key); None for a request without credentials."""
         material = self._material(call)
@@ -171,10 +181,11 @@ class CredentialChecker:
         hit = self._cache.get(found[1]) if found is not None else None
         return hit[1] if hit and hit[0] > self.clock() else None
 
-    async def check(self, call: RestCall) -> Verdict | None:
+    async def check(self, call: RestCall, *, fresh: bool = False) -> Verdict | None:
         """The caller Navidrome accepts, or its refusal; None when the request carries no
         credentials (nothing to check: Navidrome answers it). ``CheckFailed`` when
-        Navidrome gave no verdict."""
+        Navidrome gave no verdict. ``fresh`` bypasses cached acceptance, while identical
+        checks already under way still share the current verdict."""
         found = self._who(call)
         if found is None:
             return None
@@ -188,7 +199,7 @@ class CredentialChecker:
         ask = _digest([who, shape])
         while True:
             hit = self._cache.get(key)
-            if hit and hit[0] > self.clock():
+            if not fresh and hit and hit[0] > self.clock():
                 return hit[1]
             shared = self._inflight.get(ask)
             if shared is None:
@@ -205,6 +216,8 @@ class CredentialChecker:
             if isinstance(shared.verdict, Caller):
                 self._cache[key] = (self.clock() + self.ttl, shared.verdict)
                 self._prune()
+            else:
+                self._cache.pop(key, None)
             return shared.verdict
         except CheckFailed as exc:
             shared.failed = exc

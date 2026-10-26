@@ -11,7 +11,11 @@
 {% block main %}
 <div class="page-head">
   <h1>Library</h1>
-  <p class="page-summary">A partly owned album with a matching release in the catalog is shown complete: the missing songs appear as catalog songs. The library pass looks for each album's match.</p>
+  <p class="page-summary">Complete the albums you own only part of.</p>
+  <details class="page-about">
+    <summary>How albums are completed</summary>
+    <p>When the catalog has a release that matches an album you own part of, the album is shown complete in your apps: the missing songs appear as catalog songs. Filling adds them to your library as placeholders. The policy decides which albums are filled automatically; the others are filled when one of their songs is played, starred or added to a playlist.</p>
+  </details>
 </div>
 {% if notices %}
 {{ error_notice(notices) }}
@@ -31,7 +35,7 @@
 {% if not fills_on %}
 <div class="notice notice-info" role="status">
   <p class="notice-title">Albums are not matched now</p>
-  <p>No catalog is connected, or “Fill partly owned albums” is off under More settings. The policy and the library pass apply once it runs.</p>
+  <p>No catalog is connected, or “Fill partly owned albums” is off under Advanced settings. The policy and the library pass apply once it runs.</p>
 </div>
 {% endif %}
 
@@ -83,7 +87,13 @@
 <section class="group" aria-labelledby="pass-title">
   <div class="group-head">
     <h2 id="pass-title">Library pass</h2>
-    <p class="group-help">Matches every album against the catalog. <strong>Dry run</strong> fills nothing automatically and lists what it would fill, <strong>On</strong> fills the albums that meet the policy, and <strong>Off</strong> stops the pass: such albums are filled once viewed or shown. A change to or from off applies after a restart (until then, off means dry runs).</p>
+    <div class="group-help">
+      <p>Checks every album against the catalog in the background.</p>
+      <details class="inline-about">
+        <summary>What the modes do</summary>
+        <p><strong>Dry run</strong> fills nothing automatically and lists what it would fill. <strong>On</strong> fills the albums that meet the policy. <strong>Off</strong> stops the pass: albums are matched, and filled if they meet the policy, when an app views them. A change to or from Off applies after a restart; until then Off works as a dry run.</p>
+      </details>
+    </div>
   </div>
   <div class="rows">
 {% if mode.locked %}
@@ -299,6 +309,68 @@
 {% endif %}
 </section>
 {% endif %}
+
+<section class="group" aria-labelledby="no-match-title" id="no-match">
+  <div class="group-head">
+    <h2 id="no-match-title">No match</h2>
+{% if no_match_total %}
+    <p class="group-meta">{{ no_match_total|count }} album{{ "s" if no_match_total != 1 }}</p>
+{% endif %}
+    <p class="group-help">No catalog release matched the songs you own. Match again to check the current catalog; this adds no files.</p>
+  </div>
+{% if no_matches %}
+  <div class="table-wrap">
+    <table class="table table-stack review">
+      <thead>
+        <tr><th scope="col" class="col-album">Album</th><th scope="col" class="num">Owned</th><th scope="col" class="col-reason">Reason</th><th scope="col">Action</th></tr>
+      </thead>
+      <tbody>
+{% for item in no_matches %}
+{% set row = item.row %}
+        <tr>
+          <td><span class="cell-title">{{ row.title }}</span><span class="cell-sub">{{ row.artist }}</span></td>
+          <td class="num" data-label="Owned">{% if row.owned %}{{ row.owned|count }} song{{ "s" if row.owned != 1 }}{% else %}Unknown{% endif %}</td>
+          <td data-label="Reason">{{ row.headline }}{% if row.sentence %}<span class="cell-sub">{{ row.sentence }}</span>{% endif %}</td>
+          <td>
+{% if item.job %}
+            <p class="small muted">Matching again since {{ item.job.started|when }}…</p>
+{% else %}
+            <form class="review-actions" method="post" action="{{ prefix }}/library/no-match/{{ row.album_id|urlencode }}">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="page" value="{{ no_match_page }}">
+              <button class="btn-quiet btn-small" name="action" value="recheck">Match again</button>
+            </form>
+{% endif %}
+          </td>
+        </tr>
+{% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% if no_match_pages > 1 %}
+  <nav class="pager" aria-label="No match pages">
+    <p class="pager-status">Albums {{ no_match_first|count }}–{{ no_match_last|count }} of {{ no_match_total|count }}</p>
+    <div class="actions">
+{% if no_match_page > 1 %}
+      <a class="btn btn-small" href="?no_match={{ no_match_page - 1 }}#no-match">Previous</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Previous</a>
+{% endif %}
+{% if no_match_page < no_match_pages %}
+      <a class="btn btn-small" href="?no_match={{ no_match_page + 1 }}#no-match">Next</a>
+{% else %}
+      <a class="btn btn-small" aria-disabled="true">Next</a>
+{% endif %}
+    </div>
+  </nav>
+{% endif %}
+{% else %}
+  <div class="empty">
+    <p class="empty-title">No albums without a match</p>
+    <p>Albums for which no release matches appear here.</p>
+  </div>
+{% endif %}
+</section>
 {% endif %}
 
 <details class="more-settings"{% if fold.open %} open{% endif %}>
@@ -309,7 +381,7 @@
 {% for group, rows in fold.groups %}
 {{ settings_group(group, rows) }}
 {% endfor %}
-    <div class="form-actions">
+    <div class="form-actions form-actions-bar">
       <button class="btn-primary">Save changes</button>
 {{ form_status("advanced") }}
     </div>

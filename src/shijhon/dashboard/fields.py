@@ -2,8 +2,9 @@
 
 Each field's type, limits and built-in default decide its control and its checks; the table
 below only adds words (label, help, unit, group). A setting without an entry still appears,
-in its section's last group (under "More settings"), with a label made from its key and the
-field's description as its help: settings added elsewhere show up without new dashboard code.
+in its section's last group (under "Advanced settings"), with a label made from its key and
+the field's description as its help: settings added elsewhere show up without new dashboard
+code.
 
 Numbers are text fields: a comma or a dot is the decimal separator ("4,5" and "4.5"),
 spaces are ignored, and the value and its default are written by one formatter (a dot, no
@@ -58,7 +59,7 @@ class Group:
     key: str
     title: str
     help: str = ""
-    # Under the page's "More settings", collapsed: settings few people change. A section's
+    # Under the page's "Advanced settings", collapsed: settings few people change. A section's
     # last group takes the settings the words table does not know, so it is one of these.
     more: bool = False
 
@@ -73,34 +74,70 @@ _QUALITIES = {
 }
 
 # Each section's groups in page order: those most people change first, then the ones under
-# "More settings". A group's key stays as it is (a catalog adapter names "connection",
+# "Advanced settings". A group's key stays as it is (a catalog adapter names "connection",
 # "albums" or "advanced" for its own settings).
 GROUPS: dict[str, list[Group]] = {
     "delivery": [
-        Group("sources", "Choosing an add-on"),
+        Group(
+            "sources",
+            "Choosing an add-on",
+            "When an app plays a song you don't own, Shijhon asks your add-ons for its audio.",
+        ),
+        Group(
+            "bulk",
+            "Downloads and playlist preparation",
+            "Whole songs fetched into the library, for app downloads and for playlists"
+            " prepared on the Downloads page. These limits are for all users together.",
+        ),
         Group(
             "dash",
             "DASH links",
-            "Some add-ons link to a DASH stream rather than to a file. Shijhon joins its"
-            " segments into one file without converting the audio; it needs ffmpeg.",
+            "Some add-ons link to a DASH stream instead of a file. Shijhon joins its"
+            " segments into one file without converting the audio (this needs ffmpeg).",
         ),
         Group("timing", "Timing", more=True),
-        Group("fallbacks", "Fallbacks", more=True),
-        Group("cooldown", "Add-ons that fail", more=True),
-        Group("warm", "Opening the next songs", more=True),
         Group(
-            "downloads",
-            "Downloaded audio",
-            "Songs fetched whole replace their silent placeholder for a while. How long, and"
-            " how much is kept, is set on the Cleanup page.",
+            "fallbacks",
+            "Fallbacks",
+            "When an add-on can't play a song, or sends another recording, the next one is asked.",
             more=True,
         ),
-        Group("limits", "Limits per user", more=True),
+        Group(
+            "cooldown",
+            "Add-ons that fail",
+            "An add-on that keeps failing cools down: it is passed over for a while, so apps"
+            " don't wait for it. Songs an add-on lacked, or just failed to play, can also skip"
+            " it for a while.",
+            more=True,
+        ),
+        Group(
+            "warm",
+            "Opening the next songs",
+            "When a song starts playing, Shijhon opens the next songs in the app's queue (or"
+            " the album) at the add-ons, so they start quickly.",
+            more=True,
+        ),
+        Group(
+            "downloads",
+            "Saved audio",
+            "Songs fetched whole, and streamed songs when they are kept, replace their silent"
+            " placeholder for a while. Whether streams are kept, how long and how much is set"
+            " on the Cleanup page.",
+            more=True,
+        ),
+        Group(
+            "limits",
+            "Limits per user",
+            "Keep one user's apps from tying up the add-ons for everyone. Over a limit,"
+            " requests wait their turn; the song being played never waits.",
+            more=True,
+        ),
+        Group("bulk_more", "New audio preparation", more=True),
         Group(
             "addons",
             "Limits per add-on",
-            "What Shijhon sends one add-on, for everyone together; add-ons at one address"
-            " share them. An add-on can have its own on the Add-ons page.",
+            "Limits on what Shijhon sends one add-on, for all users together. Add-ons at the"
+            " same address share them. An add-on can have its own limits on the Add-ons page.",
             more=True,
         ),
         Group("joining", "Joining DASH streams", more=True),
@@ -110,10 +147,20 @@ GROUPS: dict[str, list[Group]] = {
         Group("policy", "Fill policy"),
         Group("pass", "Library pass"),
         Group("albums", "Partly owned albums", more=True),
-        Group("matching", "Matching", more=True),
+        Group(
+            "matching",
+            "Matching",
+            "Albums are matched with a catalog release when an app opens them, and in the"
+            " background.",
+            more=True,
+        ),
         Group("advanced", "Library pass schedule", more=True),
     ],
     "cleanup": [Group("cleanup", "Cleanup settings")],
+    "audiomuse": [
+        Group("connection", "Connection"),
+        Group("advanced", "Requests and reading the analysis", more=True),
+    ],
     "catalog": [
         Group("connection", "Connection"),
         Group("albums", "Albums and songs"),
@@ -129,8 +176,8 @@ META: dict[str, dict[str, Meta]] = {
     "delivery": {
         "routing": Meta(
             "Routing mode",
-            "How the add-on for a song is picked. In order goes down the add-on list; ready"
-            " first takes the first that has the song ready; primary first starts the primary.",
+            "In order tries the add-ons from the top of the list. Ready first picks the first"
+            " one that has the song ready. Primary first starts with the primary add-on.",
             "sources",
             options={
                 "ordered": "In order",
@@ -140,25 +187,49 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "primary_source": Meta(
             "Primary add-on",
-            "Tried first when the routing mode is primary first.",
+            "Asked first when the routing mode is Primary first.",
             "sources",
             choices="sources",
         ),
         "reliable_source": Meta(
             "Preferred fallback",
-            "Under ready first, used when no add-on has the song ready. Under primary first,"
-            " the first fallback until recent plays show the fastest.",
+            "Ready first: used when no add-on has the song ready. Primary first: the first"
+            " fallback, until recent plays show which add-on is fastest.",
             "sources",
             choices="sources",
         ),
+        "bulk_downloads": Meta(
+            "Songs fetched at once",
+            "Whole songs fetched at the same time. More wait their turn, and playback goes"
+            " first. 0: no limit.",
+            "bulk",
+            unit="songs",
+        ),
+        "addon_downloads": Meta(
+            "Songs fetched per add-on",
+            "Whole songs fetched from one add-on at the same time. Add-ons that share an"
+            " account or worker share this limit; set exceptions and shared groups on the"
+            " Add-ons page. 0: no limit.",
+            "bulk",
+            unit="songs",
+        ),
+        "addon_preparations": Meta(
+            "New preparations per add-on",
+            "Songs one add-on may be asked to prepare at the same time, for downloads and"
+            " playlists, when it hasn't confirmed their audio is ready. Each counts until the"
+            " add-on starts sending audio; for an add-on without a cache check, every song"
+            " does. Add-ons that share an account or worker share this limit. 0: no limit.",
+            "bulk_more",
+            unit="songs",
+        ),
         "budget_seconds": Meta(
             "Time to first audio",
-            "How long a song may take to start, one fallback included; under primary first the"
-            " primary may use all of it, and the fallbacks get their own. An add-on can have"
-            " its own time on the Add-ons page.",
+            "How long a song may take to start, including one fallback. With Primary first,"
+            " the primary may use all of it and the fallbacks get their own. An add-on can"
+            " have its own time on the Add-ons page.",
             "sources",
             cross="Must be at most the longest wait ({max_wait_seconds} s), or apps give up"
-            " before an add-on had its chance.",
+            " before an add-on has had its time.",
             cross_notice="is above the longest wait.",
         ),
         "dash": Meta(
@@ -166,10 +237,28 @@ META: dict[str, dict[str, Meta]] = {
             "Off: an add-on's DASH link is not played, and the next add-on is asked.",
             "dash",
         ),
+        "quality_default": Meta(
+            "Lowest quality for listeners",
+            "Compressed audio (MP3, AAC, Opus…) needs at least this bitrate and 44.1 kHz."
+            " Lossless audio (FLAC, ALAC…) needs only the 44.1 kHz, and with Lossless nothing"
+            " else is accepted. A song whose file is below it plays from the add-ons when"
+            " they have it, and such a file does not play for a catalog song. Each person can"
+            " choose their own on their Audio quality page; this applies to those who haven't.",
+            "sources",
+            options={
+                "any": "Any",
+                "128": "Compressed 128 kb/s",
+                "160": "Compressed 160 kb/s",
+                "192": "Compressed 192 kb/s",
+                "256": "Compressed 256 kb/s",
+                "320": "Compressed 320 kb/s",
+                "lossless": "Lossless only",
+            },
+        ),
         "dash_quality_from": Meta(
             "DASH quality: from",
-            "Of the qualities a stream offers, the highest in this range is played. A song"
-            " with none in it plays from the next add-on.",
+            "The highest quality a stream offers within this range is played. A stream with"
+            " none in the range is not played, and the next add-on is asked.",
             "dash",
             options=_QUALITIES | {"any": "Any"},
             pair="dash_quality_to",
@@ -180,27 +269,28 @@ META: dict[str, dict[str, Meta]] = {
         "dash_quality_to": Meta("DASH quality: to", "", "dash", options=_QUALITIES),
         "primary_budget_seconds": Meta(
             "Primary's time to first audio",
-            "Under primary first: how long the primary has to start the audio before an"
-            " add-on with the song ready takes over.",
+            "With Primary first: how long the primary add-on has to start the audio before"
+            " an add-on that has the song ready takes over.",
             "timing",
         ),
         "max_wait_seconds": Meta(
             "Longest wait",
-            "An app's whole wait for the first audio. Keep it below the apps' own timeouts.",
+            "The most an app waits for a song's first audio, whatever the routing and the"
+            " add-ons' own times. Keep it below the apps' own timeouts.",
             "timing",
             cross="Must be at least the time to first audio ({budget_seconds} s), or apps give"
-            " up before an add-on had its chance.",
+            " up before an add-on has had its time.",
             cross_notice="is below the time to first audio.",
         ),
         "availability_timeout_seconds": Meta(
             "Ready check timeout",
-            "How long the other add-ons have to say whether they have a song ready.",
+            "How long add-ons have to answer whether they have a song ready.",
             "timing",
         ),
         "reliable_lookup_after_seconds": Meta(
             "Fallback lookup after",
-            "Under primary first, the likely fallback looks the song up, without playing it,"
-            " once the primary has taken this long. 0: with every play.",
+            "With Primary first: once the primary has taken this long, the likely fallback"
+            " also looks the song up, without playing it. 0: with every play.",
             "timing",
         ),
         "seek_timeout_seconds": Meta(
@@ -208,88 +298,95 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "ahead_window_seconds": Meta(
             "Fetch-ahead detection",
-            "A song that starts this soon after another on the same app, and isn't reported"
-            " as playing, counts as fetched ahead. 0: off.",
+            "Some apps fetch the next songs as soon as one starts. A song requested this soon"
+            " after another on the same app, and not reported as playing, counts as fetched"
+            " ahead: such songs are looked up one at a time, after the song being played has"
+            " started. 0: off.",
             "timing",
         ),
         "prepare_when_not_ready": Meta(
             "Prepare for next time",
-            "Under ready first: when no add-on has a song ready, one is asked to prepare it"
-            " for the next play.",
+            "With Ready first: when no add-on has a song ready, one of them is asked to"
+            " prepare it for the next play.",
             "fallbacks",
         ),
         "max_attempts": Meta(
             "Attempts per play",
-            "How many add-ons get time to start a song (under primary first, the fallbacks"
-            " after the primary). One that lacks the song, or fails at once, doesn't count.",
+            "How many add-ons get their time to start a song. With Primary first, these are"
+            " the fallbacks after the primary. An add-on that lacks the song, or fails at"
+            " once, doesn't count.",
             "fallbacks",
             unit="attempts",
         ),
         "length_tolerance_seconds": Meta(
             "Length difference allowed",
-            "Audio whose length differs from the catalog's by more than this, or the share"
-            " below if larger, is another recording: the next add-on plays. Both 0: no check.",
+            "Audio whose length differs from the catalog's by more than this (or by the share"
+            " below, if that is larger) is taken as another recording, and the next add-on is"
+            " asked. Both 0: no check.",
             "fallbacks",
         ),
         "length_tolerance_percent": Meta(
             "Length difference as a share",
-            "The same, as a share of the song's length.",
+            "The same limit, as a share of the song's length.",
             "fallbacks",
             unit="%",
             spoken="percent",
         ),
         "cooldown_seconds": Meta(
             "Cooldown",
-            "How long an add-on that keeps failing is passed over, so apps don't wait for it.",
+            "How long an add-on that cools down is passed over.",
             "cooldown",
         ),
         "cooldown_errors": Meta(
             "Errors before cooldown",
-            "An add-on that answers with this many errors in a row cools down, and again after"
-            " each further error until it plays. 0: off.",
+            "An add-on that fails this many times in a row (server errors, no connection,"
+            " broken answers) cools down, and again after each further error until it"
+            " delivers audio. A missing song or a slow answer is not an error. 0: off.",
             "cooldown",
             unit="errors",
         ),
         "primary_cooldown_timeouts": Meta(
             "Timeouts before cooldown",
-            "The primary cools down after this many timeouts without a delivery in between.",
+            "The primary add-on cools down after this many timeouts with no audio delivered"
+            " in between.",
             "cooldown",
             unit="timeouts",
         ),
         "primary_cooldown_switches": Meta(
             "Switches before cooldown",
-            "Or after this many switches away from it to an add-on that had the song ready.",
+            "It also cools down after another add-on that had the song ready has taken over"
+            " from it this many times.",
             "cooldown",
             unit="switches",
         ),
         "primary_miss_hours": Meta(
             "Songs the primary lacks",
-            "A song the primary did not have is not asked for there again for this long. 0: off.",
+            "A song the primary add-on didn't have isn't asked of it again for this long. 0: off.",
             "cooldown",
         ),
         "primary_release_miss_minutes": Meta(
             "Albums the primary lacks",
-            "Once the primary lacked a song of an album, its other songs are also looked up"
-            " at the next add-on at once for this long. 0: off.",
+            "When the primary lacks one song of an album, the album's other songs are also"
+            " looked up at the fallback right away, for this long. The primary still starts"
+            " first. 0: off.",
             "cooldown",
         ),
         "retry_skip_seconds": Meta(
             "Retries skip failed add-ons",
-            "A retry of a song that failed skips the add-ons that failed for it within this"
-            " long. 0: off.",
+            "When an app retries a song that just failed, the add-ons that failed or lacked"
+            " it within this time are skipped. 0: every retry asks them all.",
             "cooldown",
         ),
         "warm_ahead_depth": Meta(
             "Next songs opened",
-            "How many of the next songs are opened when one starts playing, so they start"
-            " quickly. 0: off.",
+            "How many of the next songs are opened when one starts playing. 0: off.",
             "warm",
             unit="songs",
         ),
         "warm_ahead_jobs": Meta(
             "Plays at once",
-            "How many plays have their next songs opened at the same time, for all listeners"
-            " together. More wait their turn, after the songs being played.",
+            "How many playing songs have their next songs opened at the same time, for all"
+            " listeners together. More wait their turn; songs being played always go first.",
             "warm",
             unit="plays",
         ),
@@ -303,77 +400,91 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "prefetch_memory_seconds": Meta(
             "Apps that fetch ahead",
-            "An app that fetches the next songs itself gets none opened for it for this long.",
+            "An app that fetches the next songs itself gets none opened for it, for this long"
+            " after it last did.",
             "warm",
         ),
         "download_timeout_seconds": Meta(
-            "Download timeout", "How long fetching a whole song may take.", "downloads"
+            "Download timeout", "How long fetching one whole song may take.", "downloads"
+        ),
+        "keep_streamed_audio": Meta(
+            "Keep streamed songs",
+            "When Shijhon has received a song's whole audio while an app streams it, the song"
+            " replaces its silent placeholder, as a downloaded song does. Nothing more is"
+            " fetched to finish a song: one skipped before Shijhon had all of it isn't kept."
+            " The limits below apply to it too.",
+            "downloads",
         ),
         "delivered_days": Meta(
-            "Kept for",
-            "A fetched song goes back to its silent placeholder after this many days unused."
+            "Kept unused for",
+            "A saved song goes back to its silent placeholder after this many days unused."
             " 0: no age limit.",
             "downloads",
         ),
         "delivered_gb": Meta(
-            "At most",
-            "Past this size in all, the least recently used go back first. 0: no size limit.",
+            "Size limit",
+            "When saved songs take more than this in all, the least recently used go back"
+            " first. 0: no size limit.",
             "downloads",
             unit="GB",
             spoken="gigabytes",
         ),
         "user_routings": Meta(
-            "Songs looked up at once",
-            "Songs one user's apps look up at the add-ons at the same time; more wait their"
-            " turn. 0: no limit.",
+            "Songs looked up per user",
+            "Songs one user's apps look up at the add-ons at the same time. 0: no limit.",
             "limits",
             unit="songs",
         ),
         "user_downloads": Meta(
-            "Downloads at once",
-            "Whole songs fetched for one user at the same time: downloads, and plays that need"
-            " converting. Ordinary streams don't count. 0: no limit.",
+            "Songs fetched per user",
+            "Whole songs fetched for one user at the same time: app downloads, playlist"
+            " preparation and plays that need converting. Ordinary streaming doesn't count."
+            " 0: no limit.",
             "limits",
             unit="songs",
         ),
         "user_downloads_per_hour": Meta(
-            "Downloads an hour",
-            "Whole-song fetches one user may start in an hour; more wait their turn, never the"
-            " song being played. A share link counts as a user. 0: no limit.",
+            "Hourly download quota",
+            "Whole songs one user may start fetching in an hour. A share link counts as a"
+            " user. This counts Shijhon's own fetches, not what an add-on account has left."
+            " 0: off.",
             "limits",
             unit="songs",
         ),
         "user_download_burst": Meta(
-            "Downloads in a row",
-            "How many start without a wait after a quiet while. 0: the whole hour's at once.",
+            "Quota burst",
+            "With an hourly quota: how many fetches may start right away after a quiet while;"
+            " the rest are spread evenly over the hour. 0: the whole hour's quota at once."
+            " Ignored while the quota is off.",
             "limits",
             unit="songs",
         ),
         "addon_requests_per_second": Meta(
             "Requests a second",
-            "Lookups, links and ready checks sent to one add-on; more wait their turn."
-            " 0: no limit.",
+            "Requests sent to one add-on each second: lookups, links and ready checks. More"
+            " wait their turn. 0: no limit.",
             "addons",
             unit="/s",
             spoken="requests a second",
         ),
         "addon_request_burst": Meta(
             "Requests at once",
-            "How many may go at once after a quiet moment, before the rate applies.",
+            "How many requests may go at once after a quiet moment, before the rate above applies.",
             "addons",
             unit="requests",
         ),
         "addon_audio_openings": Meta(
             "Songs opened at once",
-            "Songs whose audio one add-on is asked for at the same time; the song being played"
-            " never waits. 0: no limit.",
+            "Songs whose audio one add-on is asked for at the same time. The song being"
+            " played never waits. 0: no limit.",
             "addons",
             unit="songs",
         ),
         "dash_start": Meta(
             "DASH songs start",
-            "At once: a song plays from its first segments. When joined: once all its segments"
-            " are one file.",
+            "At once: a song plays from its first segments. When joined: it plays once all its"
+            " segments are joined into one file. Songs saved to the library are joined files"
+            " either way.",
             "joining",
             options={"at_once": "At once", "complete": "When joined"},
         ),
@@ -385,14 +496,15 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "dash_joins_at_once": Meta(
             "Songs joined at once",
-            "For all listeners together; the songs being played never wait.",
+            "DASH songs fetched and joined at the same time, for all listeners together. More"
+            " wait their turn; the songs being played never wait.",
             "joining",
             unit="songs",
         ),
         "dash_cache_mb": Meta(
             "Joined files kept",
-            "Kept for later plays and seeks; past this size the least recently used go first."
-            " 0: only the newest.",
+            "Space for joined files, kept for later plays and seeks. Past this size, the least"
+            " recently used go first. 0: only the newest is kept.",
             "joining",
         ),
         "request_timeout_seconds": Meta(
@@ -400,20 +512,21 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "pin_ttl_seconds": Meta(
             "Link reuse",
-            "How long a song keeps its add-on and link, for seeks and repeats.",
+            "How long a song keeps the add-on and link it played from, for seeks and repeats.",
             "advanced",
         ),
     },
     "fill": {
         "auto_min_songs": Meta(
             "At least this many songs",
-            "An album is filled automatically when you own at least this many of its songs.",
+            "A partly owned album is filled automatically when you own at least this many of"
+            " its songs.",
             "policy",
             unit="songs",
         ),
         "auto_min_share": Meta(
             "At least this share of the album",
-            "Or at least this share of its tracks.",
+            "Or when you own at least this share of its songs.",
             "policy",
             unit="%",
             spoken="percent",
@@ -421,64 +534,70 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "library_pass": Meta(
             "Library pass",
-            "Matches every album against the catalog. A dry run fills nothing automatically"
-            " and lists what it would fill; on fills the albums that meet the policy.",
+            "Checks every album against the catalog in the background. Dry run fills nothing"
+            " automatically and lists what it would fill. On fills the albums that meet the"
+            " fill policy. Off: albums are matched when an app views them.",
             "pass",
             options={"off": "Off", "dry_run": "Dry run", "on": "On"},
         ),
         "enabled": Meta(
             "Fill partly owned albums",
-            "Off: albums are never matched or filled, and the Library page lists nothing.",
+            "Off: partly owned albums are not matched with the catalog, shown complete or"
+            " filled, and the Library page lists nothing.",
             "albums",
         ),
         "complete_lists": Meta(
             "Complete albums in lists",
-            "A partly owned album shown complete has the complete song count and length in"
-            " lists and searches too. Off: the owned songs' count until it is filled.",
+            "Album lists and searches also show a partly owned album's complete song count"
+            " and length. Off: they show the songs you own until the album is filled.",
             "albums",
         ),
         "auto_pick": Meta(
             "Pick a release when several fit",
-            "Several releases fit an album, or the one that fits numbers its tracks"
-            " differently: the most likely is used, and listed under Picked automatically."
-            " Off: such albums wait in the review list.",
+            "When several catalog releases fit an album equally well, or the one that fits"
+            " numbers its tracks differently, the most likely is used and listed under Picked"
+            " automatically. Off: such albums wait in the review list.",
             "albums",
         ),
         "open_budget_seconds": Meta(
             "Wait for a match on first view",
-            "How long an album seen for the first time waits for its match; after it, it"
-            " shows your songs only.",
+            "How long an album opened for the first time waits for its catalog match. After"
+            " that it shows only your songs, and the match goes on in the background.",
             "matching",
         ),
         "sync_albums": Meta(
             "Albums before background matching",
-            "An app that views this many never-matched albums within the time below is"
-            " syncing: they are matched in the background.",
+            "An app that opens this many unmatched albums within the time below is syncing:"
+            " those albums show your songs at once and are matched in the background.",
             "matching",
             unit="albums",
         ),
-        "sync_seconds": Meta("Counted within", "The time for the count above.", "matching"),
+        "sync_seconds": Meta("Counted within", "The time window for the count above.", "matching"),
         "retry_hours": Meta(
             "Retry after a failure",
-            "A failed match is tried again after this long, then twice as long.",
+            "A match that failed is tried again after this long, then after twice as long"
+            " each time.",
             "matching",
         ),
         "background_pause_seconds": Meta(
             "Pause between background matches",
-            "Between albums matched in the background, and after each fill the pass makes.",
+            "The pause between albums matched in the background, and after each fill the"
+            " library pass makes.",
             "matching",
         ),
         "pass_start_seconds": Meta(
-            "First pass after", "How long after Shijhon starts the library pass begins.", "advanced"
+            "First pass after",
+            "How long after Shijhon starts the library pass first runs.",
+            "advanced",
         ),
         "pass_interval_hours": Meta(
             "Pass repeats every",
-            "How often the pass looks again for new albums and failures.",
+            "How often the library pass looks again for new albums and failed matches.",
             "advanced",
         ),
         "pass_requests_per_second": Meta(
-            "Requests per second",
-            "Catalog requests the library pass makes at most.",
+            "Catalog requests per second",
+            "The most requests the library pass sends the catalog each second.",
             "advanced",
             unit="per s",
             spoken="requests per second",
@@ -487,17 +606,18 @@ META: dict[str, dict[str, Meta]] = {
     "search": {
         "budget_seconds": Meta(
             "Wait for the catalog",
-            "The longest a search or an artist page in your library waits for the catalog;"
-            " the answer goes out as soon as it has replied. After it, your library's results"
-            " show alone.",
+            "How long a search or an artist page waits for the catalog. The answer goes out"
+            " as soon as the catalog replies; after this time, your library's results are"
+            " shown alone. The lookup goes on, so the same search asked again has them.",
             "settings",
         ),
     },
     "cleanup": {
         "mode": Meta(
             "Cleanup",
-            "Once a day, takes whole releases nobody has used out of the library again; a dry"
-            " run only lists them. A release taken out comes back when one of its songs is used.",
+            "Once a day, whole releases that Shijhon added and nobody has used are taken out"
+            " of the library again. Dry run only lists them. A release taken out comes back"
+            " when one of its songs is used.",
             "cleanup",
             options={"off": "Off", "dry_run": "Dry run", "on": "On"},
         ),
@@ -508,14 +628,50 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "catalog_albums": Meta(
             "Take out catalog albums",
-            "Albums added to the library when one of their songs was used.",
+            "Catalog albums added to your library when one of their songs was used.",
             "cleanup",
         ),
         "fills": Meta(
             "Take out songs added to your albums",
-            "The songs that complete a partly owned album. Taken out, the album is shown"
-            " complete again and filled on its next use.",
+            "The songs added to complete a partly owned album. Once they are taken out, the"
+            " album is still shown complete, and is filled again on its next use, not"
+            " automatically.",
             "cleanup",
+        ),
+    },
+    "audiomuse": {
+        "url": Meta(
+            "AudioMuse-AI address",
+            "Where AudioMuse-AI answers, for example http://audiomuse:8000. Empty: sound"
+            " analysis is off.",
+            "connection",
+        ),
+        "token": Meta(
+            "API token",
+            "AudioMuse-AI's API token. " + _WRITE_ONLY + " It is sent only to the address above.",
+            "connection",
+        ),
+        "server": Meta(
+            "Server name in AudioMuse-AI",
+            "The name or ID AudioMuse-AI gives this Shijhon among its media servers. Empty: its"
+            " default server.",
+            "connection",
+        ),
+        "reach": Meta(
+            "Where AudioMuse-AI runs",
+            "An address on this machine or your local network is refused unless chosen here."
+            " In a container, the Docker host is on the local network.",
+            "connection",
+            options={"public": "Internet", "private": "Local network", "loopback": "This machine"},
+        ),
+        "timeout_seconds": Meta(
+            "Request timeout", "How long one request to AudioMuse-AI may take.", "advanced"
+        ),
+        "sync_hours": Meta(
+            "Read the analysis every",
+            "How often Shijhon reads AudioMuse-AI's analysis of your songs. It also reads it"
+            " once after starting, if the last read is older than this.",
+            "advanced",
         ),
     },
     "catalog": {
@@ -523,8 +679,9 @@ META: dict[str, dict[str, Meta]] = {
         # it, with the words the adapter declares (``sections.fields_of``).
         "kind": Meta(
             "Catalog",
-            "The service for searches, artist pages and album track lists: one of the"
-            ' installed adapters, or "An add-on\'s catalog" from one of your add-ons.',
+            "Where searches, artist pages and album track lists get the music beyond your"
+            ' own: an installed catalog adapter, or "An add-on\'s catalog" to use one of'
+            " your add-ons.",
             "connection",
         ),
         "twins": Meta(
@@ -534,18 +691,22 @@ META: dict[str, dict[str, Meta]] = {
             options={"explicit": "Explicit", "clean": "Clean", "both": "Both"},
         ),
         "artwork_size": Meta(
-            "Cover size", "The size of covers written for catalog albums.", "covers", unit="px"
+            "Cover size in the library",
+            "The size of the cover saved with each catalog album added to your library.",
+            "covers",
+            unit="px",
         ),
         "cover_sizes": Meta(
-            "Cover sizes",
-            "Covers are fetched at the next of these sizes up from the one an app asks for."
-            " Empty: the exact size.",
+            "Cover sizes for apps",
+            "A cover an app asks for is fetched at the next of these sizes up: image servers"
+            " tend to answer common sizes faster. Empty: the exact size asked for.",
             "covers",
             unit="px",
         ),
         "artwork_cache_mb": Meta(
             "Cover cache",
-            "Resized covers kept on disk; past this size the oldest go first. 0: none kept.",
+            "Disk space for resized covers. Past this size, the oldest go first. 0: none kept"
+            " on disk.",
             "covers",
         ),
         "artwork_cache_days": Meta(
@@ -553,24 +714,26 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "prefetch_covers": Meta(
             "Covers fetched ahead",
-            "Covers of the first catalog items on an artist page or in search results,"
-            " fetched while the app loads the page. 0: none.",
+            "How many covers of the first catalog items on an artist page or in search results"
+            " are fetched in the background, before the app asks for them. 0: none.",
             "covers",
         ),
         "prefetch_parallel": Meta(
-            "Covers fetched at once", "Covers fetched ahead at the same time.", "covers"
+            "Covers fetched at once",
+            "How many of those covers are fetched at the same time.",
+            "covers",
         ),
         "prefetch_burst_pages": Meta(
             "Pages before the pause",
-            "An app shown this many pages with catalog items within the time below gets no"
-            " covers fetched ahead meanwhile.",
+            "An app shown this many pages with catalog items within the time below is paging"
+            " through them: no covers are fetched ahead for it meanwhile.",
             "covers",
         ),
         "prefetch_burst_seconds": Meta(
-            "Pages counted within", "The time for the pages above.", "covers"
+            "Pages counted within", "The time window for the count above.", "covers"
         ),
         "cache_seconds": Meta(
-            "Answers reused for", "How long a catalog answer is kept.", "advanced"
+            "Answers reused for", "How long a catalog answer is kept and reused.", "advanced"
         ),
         "timeout_seconds": Meta(
             "Request timeout", "How long one request to the catalog may take.", "advanced"
@@ -596,6 +759,14 @@ def spoken_unit(label: str, spoken: str) -> str:
     if all(word in said for word in re.findall(r"\w+", spoken.casefold())):
         return ""
     return spoken
+
+
+def counted(number: str, unit: str) -> str:
+    """A number and its unit, a counted noun in the singular for one: "1 song", "4 songs",
+    "1 switch", "2 /s", "30 s"."""
+    if number == "1" and unit.isalpha() and len(unit) > 3 and unit.endswith("s"):
+        unit = unit[:-2] if unit.endswith(("ches", "shes", "sses", "xes")) else unit[:-1]
+    return f"{number} {unit}".strip()
 
 
 def format_number(value: float | int) -> str:
@@ -774,8 +945,7 @@ class SettingField:
         if value is None or value == "":
             return "None"
         if self.kind in ("decimal", "whole"):
-            unit = self.unit
-            return f"{format_number(self._shown(value))} {unit}".strip()
+            return counted(format_number(self._shown(value)), self.unit)
         return str(value)
 
 

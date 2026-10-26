@@ -29,6 +29,7 @@ import pytest
 from shijhon.fill.fills import ChoiceRefused
 from tests.acceptance.test_J_contract import check
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
@@ -124,6 +125,7 @@ def world_with(
     fill = {"enabled": True, "open_budget_seconds": 15, "background_pause_seconds": 0,
             "library_pass": "off", **settings}  # fmt: skip
     with delivery_world(nd, tmp, catalog=replay.catalog(), fill=fill) as world:
+        prepare_collection(nd, world.server)
         yield world
 
 
@@ -245,6 +247,8 @@ def test_a_shown_album_owned_too_little_is_shown_complete_and_filled_on_first_us
     before = replay.api_requests
     viewer = world.client(client="viewer")
     album = viewer.ok("getAlbum", {"id": few})["album"]
+    assert album["songCount"] == len(album["song"]) == 19
+    album = viewer.ok("getAlbum", {"id": "sh.al.demo.900000182"})["album"]
     assert album["songCount"] == 19 and len(album["song"]) == 19  # complete at once
     assert check("song", album["song"]) == (1, 18)  # decode like Navidrome's own songs
     check("album", [album])
@@ -278,7 +282,7 @@ def test_a_catalog_song_s_report_fills_its_album_and_its_id_keeps_working(
         viewer.ok("scrobble", {"id": track["id"], "submission": "false"})
     assert songs(world, salt) == 13
     assert any(line.endswith("(first use: scrobble)") for line in lines)
-    native = viewer.ok("getAlbum", {"id": salt})["album"]
+    native = world.nd.client().ok("getAlbum", {"id": salt})["album"]
     placeholder = next(s["id"] for s in native["song"] if s["track"] == 5)
     playing = viewer.ok("getNowPlaying")["nowPlaying"]["entry"]
     assert [e["id"] for e in playing] == [placeholder]
@@ -295,6 +299,7 @@ def test_a_rating_of_the_album_itself_fills_it(
     iron = album_id(world, IRON.title)
     rater = world.client(client="rater")
     assert rater.ok("getAlbum", {"id": iron})["album"]["songCount"] == 13
+    assert rater.ok("getAlbum", {"id": "sh.al.demo.900000296"})["album"]["songCount"] == 13
     assert songs(world, iron) == 1
     with collected("shijhon.fill.fills") as lines:
         rater.ok("setRating", {"id": iron, "rating": "4"})
@@ -324,6 +329,8 @@ def test_a_pending_album_s_catalog_ids_show_it_and_the_queue_fills_it_during_a_r
     stones = album_id(world, STONES.title)
     viewer = world.client(client="queuer")
     album = viewer.ok("getAlbum", {"id": stones})["album"]
+    assert album["songCount"] == 9
+    album = viewer.ok("getAlbum", {"id": "sh.al.demo.900000133"})["album"]
     assert album["songCount"] == 9 and songs(world, stones) == 1
     track = next(s for s in album["song"] if s["track"] == 3)
     song = viewer.ok("getSong", {"id": track["id"]})["song"]
@@ -354,6 +361,8 @@ def test_a_failed_first_use_never_becomes_a_catalog_copy(
     rivers = album_id(world, RIVERS.title)
     viewer = world.client(client="failing")
     album = viewer.ok("getAlbum", {"id": rivers})["album"]
+    assert album["songCount"] == 14
+    album = viewer.ok("getAlbum", {"id": "sh.al.demo.900000101"})["album"]
     assert album["songCount"] == 14
     track = next(s for s in album["song"] if s["id"].startswith("sh.tr."))
     engine = world.services.engine
@@ -425,6 +434,8 @@ def test_before_its_fill_a_part_s_track_plays_the_owned_song_and_the_album_id_fi
         part, whole = album_id(world, PART.title), album_id(world, WHOLE.title)
         viewer = world.client(client="viewer")
         album = viewer.ok("getAlbum", {"id": whole})["album"]
+        assert album["songCount"] == 17
+        album = viewer.ok("getAlbum", {"id": "sh.al.demo.900000021"})["album"]
         assert album["songCount"] == 17 and songs(world, whole) == 5
         copper = next(s for s in album["song"] if s["title"] == "Copper Station")
         assert copper["id"].startswith("sh.tr.")

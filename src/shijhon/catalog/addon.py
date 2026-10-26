@@ -112,7 +112,9 @@ import httpx
 from async_lru import alru_cache
 from pydantic import BaseModel, Field
 
+from shijhon.catalog.artwork import ArtworkIndex
 from shijhon.catalog.base import CatalogError, SearchResults
+from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import (
     CatalogArtist,
     CatalogRef,
@@ -138,7 +140,7 @@ from shijhon.delivery.addon import (
     text,
     untagged,
 )
-from shijhon.delivery.netpolicy import Reach, Resolver, allowed, system_resolver
+from shijhon.delivery.netpolicy import Reach, Resolver, allowed, policy_client, system_resolver
 from shijhon.matching.normalize import credit_names, featured_names, fold, same_artist
 
 if TYPE_CHECKING:
@@ -489,7 +491,9 @@ class AddonCatalog:
     add-on is looked up there for every request, so one added, changed or switched off in
     the dashboard is the one asked from then on. ``http``: the client covers are fetched
     with (public addresses only), closed with the catalog; ``resolver``: how a cover's
-    host is looked up before a turn at the add-on's limit is taken for it."""
+    host is looked up before a turn at the add-on's limit is taken for it; ``urgency``:
+    how urgent its requests are at the add-on's request limit when whoever asks says
+    nothing (``pacing.urgent``)."""
 
     region = ""
     # An add-on names any address for a cover: it is fetched by ``artwork`` alone (public
@@ -505,6 +509,7 @@ class AddonCatalog:
         timeout: float = 15.0,
         ttl: float = 3600.0,
         resolver: Resolver = system_resolver,
+        urgency: int = pacing.QUEUED,
     ) -> None:
         self.name = name
         self.key = catalog_key(name)
@@ -512,6 +517,7 @@ class AddonCatalog:
         self.http = http
         self.timeout = timeout
         self.resolver = resolver
+        self.urgency = urgency
         # The songs of recent answers by ID: what ``song`` knows.
         self._songs: OrderedDict[str, CatalogTrack] = OrderedDict()
         # The add-on's own artist IDs by folded name, each with its service's tag: how a
@@ -557,7 +563,7 @@ class AddonCatalog:
         is now. Returns the answer, and whose items it holds."""
         source = await self._source()
         self._not_asked(source)
-        urgency = pacing.current() or pacing.Urgency(pacing.QUEUED)
+        urgency = pacing.current() or pacing.Urgency(self.urgency)
         waits = pacing.Waits()
         try:
             with pacing.urgent(urgency), pacing.watched() as waits, anyio.fail_after(self.timeout):
@@ -846,6 +852,118 @@ class AddonCatalog:
                 raise CatalogError("invalid", "artwork: answer too large")
         kind = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         return bytes(body), kind or "application/octet-stream"
+
+
+# --- the catalogs of all the add-ons (playlist imports) -------------------------------------------
+
+
+class AddonCatalogs:
+    """The catalogs of the installation's add-ons, for playlist imports: those of the
+    enabled add-ons whose manifests declare one (the resources ``search`` and
+    ``catalog``), in the add-ons' order. The list of add-ons is read for every question,
+    so an add-on added, switched on or off in the dashboard counts from then on, without a
+    restart. Each is an ``AddonCatalog`` behind a small cache, built when first needed and
+    kept by the add-on's name (what its answers showed is remembered: the protocol has no
+    request for one song); its requests are background work at the add-on's request
+    limit. ``skip``: the key of the installation's own catalog - an add-on that is the
+    catalog is asked as that one."""
+
+    def __init__(
+        self,
+        registry: SourceRegistry | None,
+        *,
+        skip: str | None = None,
+        timeout: float = 15.0,
+        ttl: float = 3600.0,
+        resolver: Resolver = system_resolver,
+    ) -> None:
+        self.registry = registry
+        self.skip = skip
+        self.timeout = timeout
+        self.ttl = ttl
+        self.resolver = resolver
+        self._built: dict[str, CachedCatalog] = {}
+        self._closing: list[CachedCatalog] = []
+        self._timeouts: dict[str, float] = {}
+
+    def _catalog(self, source: Source) -> CachedCatalog:
+        # A slow add-on's own time budget (``budget_seconds``) bounds its requests too.
+        name, timeout = source.name, max(self.timeout, source.budget or 0)
+        built = self._built.get(name)
+        if built is not None and self._timeouts.get(name) != timeout:
+            self._closing.append(built)  # rebuilt with the changed budget
+            built = None
+        if built is None:
+            http = policy_client(
+                Reach.PUBLIC, timeout=httpx.Timeout(timeout), resolver=self.resolver
+            )
+            inner = AddonCatalog(
+                name,
+                self.registry,
+                http,
+                timeout=timeout,
+                ttl=self.ttl,
+                resolver=self.resolver,
+                urgency=pacing.WARM,
+            )
+            self._timeouts[name] = timeout
+            built = self._built[name] = CachedCatalog(
+                inner, ttl=self.ttl, maxsize=ANSWERS, remember=0, index=ArtworkIndex(SONGS)
+            )
+        return built
+
+    async def catalogs(
+        self, unanswered: set[str] | None = None, unreadable: set[str] | None = None
+    ) -> list[tuple[str, CachedCatalog]]:
+        """The catalogs to ask, with their add-ons' names, in the add-ons' order. An add-on
+        in ``unanswered`` or ``unreadable`` is passed over. One whose manifest cannot be
+        read now is added to ``unanswered`` when it did not answer (no connection, no
+        answer in time, a rate limit), else to ``unreadable`` (its answer was refused or
+        broken: asking again later does not help), and passed over."""
+        if self.registry is None:
+            return []
+        found = []
+        for source in await self.registry.enabled():
+            if catalog_key(source.name) == self.skip:
+                continue
+            if source.name in (unanswered or ()) or source.name in (unreadable or ()):
+                continue
+            try:
+                with (
+                    pacing.urgent(pacing.current() or pacing.Urgency(pacing.WARM)),
+                    anyio.fail_after(self.timeout),
+                ):
+                    declared = await source.addon.has_catalog()
+            except (AddonError, TimeoutError) as exc:
+                kind = _failure(exc).kind if isinstance(exc, AddonError) else "unavailable"
+                passed = unanswered if kind in ("unavailable", "rate_limited") else unreadable
+                if passed is not None:
+                    passed.add(source.name)
+                continue
+            if declared:
+                found.append((source.name, self._catalog(source)))
+        return found
+
+    async def by_key(self, key: str) -> CachedCatalog | None:
+        """The catalog whose items have the key ``key`` (``catalog_key``): that of the
+        enabled add-on of that name; None when no such add-on is enabled now."""
+        if self.registry is None or key == self.skip:
+            return None
+        for source in await self.registry.enabled():
+            if catalog_key(source.name) == key:
+                return self._catalog(source)
+        return None
+
+    def name(self, key: str) -> str | None:
+        """The name of the add-on whose catalog has the key ``key`` (one asked since the
+        start)."""
+        return next((name for name, built in self._built.items() if built.key == key), None)
+
+    async def aclose(self) -> None:
+        built, self._built = self._built, {}
+        closing, self._closing = self._closing, []
+        for catalog in [*built.values(), *closing]:
+            await catalog.aclose()
 
 
 # --- the kind's declaration -------------------------------------------------------------------

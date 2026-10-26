@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from shijhon.proxy import xmlform
 from shijhon.proxy.params import RestCall
-from shijhon.proxy.upstream import Receive, Send, send_bytes
+from shijhon.proxy.upstream import Message, Receive, Send, send_bytes
 
 if TYPE_CHECKING:  # the credential check writes answers too: no import cycle at run time
     from shijhon.proxy.app import Reply
@@ -105,15 +105,50 @@ _CORS_HEADERS = [
 ]
 
 
+def music_headers(
+    method: str, requested: list[tuple[bytes, bytes]], headers: list[tuple[bytes, bytes]]
+) -> list[tuple[bytes, bytes]]:
+    """Navidrome's CORS policy for generated music API answers, including errors.
+
+    Preflights stay upstream. Keep existing headers (including other Vary fields) so a
+    handler relaying Navidrome's answer retains exactly the policy Navidrome sent.
+    This is deliberately not middleware on the dashboard or authentication routes.
+    """
+    out = list(headers)
+    vary = {
+        token.strip().lower()
+        for key, value in headers
+        if key.lower() == b"vary"
+        for token in value.split(b",")
+    }
+    if not vary.intersection({b"origin", b"*"}):
+        out.append((b"vary", b"Origin"))
+    if method.upper() in _CORS_METHODS and any(k.lower() == b"origin" for k, _ in requested):
+        present = {k.lower() for k, _ in headers}
+        out.extend((k, v) for k, v in _CORS_HEADERS if k not in present)
+    return out
+
+
+def music_send(method: str, requested: list[tuple[bytes, bytes]], send: Send) -> Send:
+    """Apply the music API policy to a locally answered request's start message."""
+
+    async def sending(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            message = {**message, "headers": music_headers(method, requested, message["headers"])}
+        await send(message)
+
+    return sending
+
+
 def not_implemented(call: RestCall) -> Reply:
     """Navidrome's "not implemented" (501), answered by Shijhon: for any HTTP method, with
     the CORS headers Navidrome adds for a request across origins."""
-    named = any(key.lower() == b"origin" for key, _ in call.headers)  # even an empty one
-    cors = named and call.http_method.upper() in _CORS_METHODS
 
     async def reply(receive: Receive, send: Send) -> None:
         date = formatdate(usegmt=True).encode()
-        headers = [*(_CORS_HEADERS if cors else []), *_NOT_IMPLEMENTED_HEADERS, (b"date", date)]
+        headers = music_headers(
+            call.http_method, call.headers, [*_NOT_IMPLEMENTED_HEADERS, (b"date", date)]
+        )
         await send_bytes(send, 501, NOT_IMPLEMENTED, headers, head=call.http_method == "HEAD")
 
     return reply

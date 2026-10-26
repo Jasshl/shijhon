@@ -29,6 +29,7 @@ import pytest
 from shijhon.fill.fills import ChoiceRefused
 from shijhon.matching.matcher import NUMBERED_DIFFERENTLY, OTHER_TITLES, SEVERAL
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.dashboard import Browser
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
@@ -176,6 +177,7 @@ def world_with(
             "library_pass": "off", "pass_requests_per_second": 50, **NEVER}  # fmt: skip
     with delivery_world(nd, tmp, catalog=replay.catalog(), fill=fill) as world:
         world.app.dashboard.attempts.limit = 10_000
+        prepare_collection(nd, world.server)
         yield world
 
 
@@ -223,8 +225,8 @@ def songs(world: DeliveryWorld, ident: str) -> list[dict[str, Any]]:
 
 
 def view(world: DeliveryWorld, ident: str, client: str = "viewer") -> dict[str, Any]:
-    album: dict[str, Any] = world.client(client=client).ok("getAlbum", {"id": ident})["album"]
-    return album
+    viewer = world.client(client=client)
+    return dict(viewer.ok("getAlbum", {"id": ident})["album"])
 
 
 def review_row(world: DeliveryWorld, album: Album, reason: str) -> str:

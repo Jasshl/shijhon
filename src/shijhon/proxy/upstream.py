@@ -10,10 +10,14 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import httpx
+
+if TYPE_CHECKING:
+    from shijhon.proxy.params import RestCall
+    from shijhon.views.answers import LibraryAnswer
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +66,9 @@ class Upstream:
             follow_redirects=False,
             trust_env=False,
         )
+        # Optional selected-library adapter. Only enumerations are intercepted; raw
+        # forwarding and direct media access retain Navidrome's permission checks.
+        self.library_answer: Callable[[RestCall], Awaitable[LibraryAnswer | None]] | None = None
 
     def url(self, raw_path: bytes, query: bytes = b"") -> httpx.URL:
         prefix = self.base.raw_path.rstrip(b"/")

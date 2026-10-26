@@ -314,3 +314,63 @@ async def test_the_pages_overview_counts_by_origin(tmp_path: Path) -> None:
         assert (found.removed_catalog, found.removed_fills, found.removed_songs) == (1, 0, 1)
     finally:
         await store.close()
+
+
+def test_explicit_collection_save_keeps_metadata_until_removed(tmp_path: Path) -> None:
+    shijhon = shijhon_database(tmp_path / "shijhon.sqlite3")
+    shijhon.row_factory = sqlite3.Row
+    navidrome = navidrome_database(tmp_path / "navidrome.db")
+    navidrome.row_factory = sqlite3.Row
+    shijhon.execute(
+        "INSERT INTO collection_tracks(library_id,track_key,song_id,release_key,album_id,artist_id,"
+        "title,album,artist,search_text,original,generation,indexed_at)"
+        " VALUES ('1','catalog:x:1-1','p1','x:1','a1','ar','T','B','A','t b a',0,'g',1)"
+    )
+    shijhon.execute(
+        "INSERT INTO collection_profiles(id,owner_id,name,created) "
+        "VALUES ('p','listener','Everyday',1)"
+    )
+    shijhon.execute(
+        "INSERT INTO collection_membership VALUES ('listener','p','1','catalog:x:1-1',1,1,'save')"
+    )
+    later = time.time() + 31 * DAY
+    found = listing(shijhon, navidrome, now=later, unused_days=30)
+    assert found.unused == []
+    assert next(c for c in found.due if c.ref == "x:1").kept == ["saved in a collection"]
+    shijhon.execute("UPDATE collection_membership SET saved=0,revision=2")
+    found = listing(shijhon, navidrome, now=later, unused_days=30)
+    assert [c.ref for c in found.unused] == ["x:1"]
+
+
+def test_an_active_import_link_keeps_its_catalog_release(tmp_path: Path) -> None:
+    """A catalog song an import was linked to is the importer's own import: its release
+    stays while the import's link is active (removing the import lets it go, restoring the
+    import keeps it again)."""
+    shijhon = shijhon_database(tmp_path / "shijhon.sqlite3")
+    shijhon.row_factory = sqlite3.Row
+    navidrome = navidrome_database(tmp_path / "navidrome.db")
+    navidrome.row_factory = sqlite3.Row
+    shijhon.execute("INSERT INTO music_import_installation VALUES (1,'install')")
+    shijhon.execute(
+        "INSERT INTO music_import_jobs(id,owner_id,library_id,root_id,config_id,request_key,"
+        "state,created) VALUES ('j','ben','1','root','config','key','done',1)"
+    )
+    shijhon.execute(
+        "INSERT INTO music_import_items(id,asset_id,job_id,client_key,display_path,"
+        "expected_size,reserved_size,state,staging_name,final_name)"
+        " VALUES ('i','a','j','c','x.mp3',1,0,'linked','a.part','batch-j/x.mp3')"
+    )
+    shijhon.execute(
+        "INSERT INTO music_import_links(item_id,job_id,owner_id,library_id,track_key,song_id,"
+        "kind,credited,active,created) VALUES ('i','j','ben','1','catalog:x:1-1','p1',"
+        "'catalog_song',1,1,1)"
+    )
+    later = time.time() + 31 * DAY
+    found = listing(shijhon, navidrome, now=later, unused_days=30)
+    assert next(c for c in found.due if c.ref == "x:1").kept == ["an imported song"]
+    shijhon.execute("UPDATE music_import_links SET active=0")  # the import was removed
+    found = listing(shijhon, navidrome, now=later, unused_days=30)
+    assert [c.ref for c in found.unused] == ["x:1"]
+    shijhon.execute("UPDATE music_import_links SET active=1")  # and restored
+    found = listing(shijhon, navidrome, now=later, unused_days=30)
+    assert found.unused == []

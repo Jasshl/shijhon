@@ -19,6 +19,11 @@ uv run ruff check . && uv run ruff format --check . && uv run mypy
 To run from source: `uv run shijhon --config /path/to/shijhon.toml serve`, with a
 configuration kept outside the repository.
 
+For native Linux packaging, `nix build .#shijhon` uses `uv.lock` and `flake.lock`.
+`nix flake check` checks the installed versions, CLI, assets and adapter discovery;
+[Nix and NixOS](nixos.md) covers the service and adapter composition. Keep `uv.lock`
+unchanged unless application dependencies change; update Nix inputs deliberately.
+
 ## Checks
 
 - `tests/unit/`: single components.
@@ -28,10 +33,12 @@ configuration kept outside the repository.
   views; I, fills and the library pass; J, search and catalog entries, in JSON and XML;
   K, delivery from add-ons; L, owned recordings behind placeholders; M, the cleanup and
   the usage export; N, the network policy; Q, the dashboard; R, stops in the middle of
-  library writes.
+  library writes, and playlists (discovery, described, imports, music facts); S, the
+  catalog of an add-on and audio preparation; T, the restart. Collections, music imports,
+  agent access and personal access have modules named for them.
 - `tests/harness/`: what the suites share: a Navidrome per test module, synthetic albums,
-  a test client for every login style, a scriptable add-on, the made-up catalog's
-  records with injected failures.
+  a test client for every login style, a scriptable add-on, a fake AudioMuse-AI with the
+  answers of its source, the made-up catalog's records with injected failures.
 - `tests/demo-catalog`: the made-up catalog the tests use (`kind = "demo"`), a
   development-only package that the wheel and the image do not contain.
 
@@ -41,9 +48,13 @@ or catalogs), `client` (playback in a real audio player).
 
 - **Timing tests can fail once on a busy machine**, most often among `test_K_*`. Run a
   failing one alone before you conclude anything.
-- **The three tests in `tests/client/` need a Mac that can play audio.** With the screen
+- **The tests in `tests/client/` need a Mac that can play audio.** With the screen
   locked or the lid closed they fail.
 - **Tests that make a folder read-only fail when run as root.**
+
+When matching or title normalization changes can turn a negative album match into a
+match, increment `MATCH_REVISION` in `matching/matcher.py`. This lets existing negative
+results be checked again without discarding saved fill plans or owner decisions.
 
 ### The setup script
 
@@ -65,9 +76,10 @@ name (`COMPOSE_PROJECT_NAME`) of its own, and remove its volumes afterwards.
 
 ### Checks with real apps
 
-The suites show what the server answers; what an app does with it is only established with
-the app. For a change to what apps see, go through this with the apps you have, one of
-them an app that reads the API as XML, and note each app's version and result:
+The suites show what the server answers; what an app does with it is only established
+with the app. One app is enough. Choose the flows below that the change affects, and
+note the app's version and result. The suites already check XML answers against the
+schema:
 
 1. Sign in with a password and with a salted token.
 2. Search: catalog results after your own, no duplicate albums, artist pictures.
@@ -107,6 +119,7 @@ Under `src/shijhon/`:
 | Package | What is in it |
 |---|---|
 | `app.py`, `cli.py`, `config.py`, `log.py` | The ASGI app, the command line, the settings, logging without credentials |
+| `access.py`, `locks.py` | Current Navidrome identity and library grants for personal features; per-key locks |
 | `proxy/` | The app-facing proxy: forwarding, credentials first, who the client is, Subsonic answers in JSON and XML |
 | `navidrome/` | Shijhon's own calls to Navidrome, startup checks, scans, usage and the usage export |
 | `catalog/` | The catalog interface, adapters as plugins, the contract kit, caching, edition de-duplication, covers, the catalog of an add-on |
@@ -114,6 +127,12 @@ Under `src/shijhon/`:
 | `placeholders/` | Writing releases into the library and recovering interrupted writes; the silent files and their tags |
 | `matching/`, `fill/` | Matching an owned album with a catalog release; fills and the library pass |
 | `delivery/` | Add-ons: the protocol client, routing and streaming, DASH, download-first, limits, warm-ahead, the network policy |
+| `playlists/` | Discovery mixes, described playlists and playlist imports: frozen previews, listening-history and AI connections, verified publication to Navidrome |
+| `agents/` | OAuth sign-in and the MCP tools for remote agents ([agent access](agent-access.md)) |
+| `music_imports/` | Private reviewed imports of retained original music files: staging, header checks, publication, removal and restore ([music imports](music-imports.md)) |
+| `downloads/` | Account-scoped playlist audio preparation, saved jobs and progress; uses the ordinary verified download path |
+| `audiomuse/` | The optional AudioMuse-AI connection ([sound analysis](sound-analysis.md)): its client, the sync of its analysis into `sound_facts`, and the sound-facts interface for playlists |
+| `collection/` | Per-user libraries and hand choices, the favorites, imported playlists and recorded activity that bring albums into them, structural local index (and the songs Shijhon wrote since its last refresh), frozen bulk changes and Undo |
 | `cleanup.py` | Taking unused releases out again |
 | `dashboard/` | The dashboard, generated from the settings' definitions |
 | `store/` | SQLite access, migrations, the one-writer lock |
@@ -271,9 +290,10 @@ tests, `plugin.register("name", adapter)`. In an image:
 
 ### A new Navidrome version
 
-`-m canary` selects the suites a Navidrome upgrade must pass first: D (tags), E (IDs), C
-(placeholder audio and adding releases), the entry contract (`test_J_contract.py`) and the
-harness's smoke test:
+`-m canary` selects the suites a Navidrome upgrade must pass first: B (credentials), D
+(tags), E (IDs), C (placeholder audio and adding releases), the entry contract
+(`test_J_contract.py`), playlist publication (`test_R_playlists.py`), the harness's smoke
+test and the individual tests marked `canary`:
 
 ```sh
 SHIJHON_NAVIDROME_VERSION=<x.y.z> uv run pytest -m canary -n 3   # or =latest

@@ -1,0 +1,727 @@
+/* Your collection: the library picker, one search bar, results as a grid or a list, and
+   bulk actions that stay quiet until something is selected. Colors are the dashboard's
+   tokens (shijhon.css, section 2). */
+
+.collection > * + * {
+  margin-top: var(--space-5);
+}
+.collection > .page-head + * {
+  margin-top: 0;
+}
+.collection-muted {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* "More": the page's secondary actions in a small menu. */
+.collection-menu {
+  position: relative;
+}
+.collection-menu > summary {
+  list-style: none;
+}
+.collection-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.collection-menu > summary svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: transform 120ms ease-out;
+}
+.collection-menu[open] > summary svg {
+  transform: rotate(180deg);
+}
+.collection-menu-body {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 4;
+  display: grid;
+  width: max-content;
+  min-width: 15rem;
+  max-width: min(20rem, 90vw);
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-raised);
+}
+.collection-menu-body form {
+  margin: 0;
+}
+.collection-menu-body a,
+.collection-menu-body button {
+  display: grid;
+  justify-items: start;
+  gap: 0.125rem;
+  width: 100%;
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+}
+.collection-menu-body a:hover,
+.collection-menu-body button:hover {
+  background: var(--sunken);
+}
+.collection-menu-body span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.page-about ul {
+  margin: var(--space-2) 0 0;
+  padding-left: 1.25rem;
+}
+.page-about li + li {
+  margin-top: var(--space-1);
+}
+
+/* A change under review, in progress or done. */
+.collection-operation {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+}
+.collection-operation h2 {
+  font-size: var(--text-xl);
+}
+.collection-operation h2:focus {
+  outline: none;
+}
+.collection-operation h2:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 4px;
+}
+.collection-operation-target {
+  font-weight: 700;
+}
+.collection-operation-notes {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.collection-operation .form-actions {
+  margin-top: var(--space-2);
+}
+.collection-back {
+  justify-self: start;
+  font-size: var(--text-sm);
+}
+
+/* The library's own preparation (first read, refresh). */
+.collection-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+}
+.collection-source > p {
+  flex: 1 1 24rem;
+}
+.collection-source > form {
+  margin: 0;
+}
+
+/* The library being browsed and edited, and the one the apps use. */
+.collection-library {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+}
+.collection-library > * {
+  padding: var(--space-3) var(--space-4);
+}
+.collection-library > * + * {
+  border-top: 1px solid var(--rule);
+}
+.collection-library-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+}
+.collection-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+}
+.collection-picker label {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.collection-picker select {
+  width: auto;
+  min-width: 12rem;
+  max-width: 20rem;
+  font-weight: 600;
+}
+.collection-library-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.collection-library-state form {
+  margin: 0;
+}
+.collection-active {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.collection-active strong {
+  color: var(--ink);
+}
+.collection-active .tag {
+  font-size: var(--text-sm);
+}
+.collection-create {
+  margin-left: auto;
+}
+.collection-count-context {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* Custom libraries: rename, archive, create, restore. */
+.collection-custom > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.collection-custom > summary::-webkit-details-marker {
+  display: none;
+}
+.collection-custom > summary::before {
+  content: "";
+  border-left: 0.3125rem solid currentColor;
+  border-top: 0.3125rem solid transparent;
+  border-bottom: 0.3125rem solid transparent;
+  transition: transform 120ms ease-out;
+}
+.collection-custom[open] > summary::before {
+  transform: rotate(90deg);
+}
+.collection-custom form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--rule);
+}
+.collection-custom label {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.collection-custom label input,
+.collection-custom label select {
+  font-weight: 400;
+}
+.collection-custom form > span {
+  align-self: center;
+  font-size: var(--text-sm);
+}
+.collection-custom p {
+  flex-basis: 100%;
+}
+
+/* One search bar and the filters beside it. */
+.collection-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+.collection-filters label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.collection-search {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.collection-scope,
+.collection-view,
+.collection-origin,
+.collection-sort {
+  flex: 0 1 11rem;
+  min-width: 0;
+}
+.collection-notes > * + * {
+  margin-top: var(--space-1);
+}
+.collection-filter-summary {
+  font-size: var(--text-sm);
+}
+.collection-drilldown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-4);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Results: count, layout and range above the rows. */
+.collection-results-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.collection-results-heading h2 {
+  font-size: var(--text-xl);
+}
+.collection-results-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.collection-layout {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--control);
+  border-radius: var(--radius-control);
+}
+.collection-layout a {
+  padding: 0.25rem 0.75rem;
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+.collection-layout a + a {
+  border-left: 1px solid var(--control);
+}
+.collection-layout a:hover {
+  background: var(--sunken);
+}
+.collection-layout a[aria-current] {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* Selecting: a quiet line above the rows. */
+.collection-select-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+.collection-select-bar > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+.collection-select-bar [hidden],
+.collection-bulk [hidden] {
+  display: none;
+}
+/* The count is announced (and repeated in the bar); a notice (a limit, a cleared
+   selection) is shown here too. */
+.collection-select-status:not(.is-notice) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.collection-select-status.is-notice {
+  color: var(--warn-ink);
+  font-weight: 600;
+}
+
+/* The rows: cards in a grid, or a list. */
+.collection-row {
+  position: relative;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+}
+.collection-row:has(.collection-check input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.collection-check {
+  display: flex;
+  padding: var(--space-2);
+  cursor: pointer;
+}
+.collection-cover {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--radius-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--text-xl);
+  font-weight: 700;
+}
+.collection-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.collection-cover img[hidden] {
+  display: none;
+}
+.collection-item {
+  min-width: 0;
+}
+.collection-item h3 {
+  font-size: var(--text-md);
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.collection-item p {
+  margin-top: 0.125rem;
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.collection-item .collection-muted {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+}
+.collection-row-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+}
+.collection-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.375rem;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.collection-badge.is-in {
+  border-color: var(--ok-rule);
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+}
+.collection-badge.is-partly,
+.collection-unavailable {
+  border-color: var(--warn-rule);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+}
+.collection-row-state a {
+  font-weight: 600;
+}
+.collection-row-action {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+}
+.collection-row-action > .collection-muted {
+  font-size: var(--text-xs);
+}
+.collection-remove {
+  color: var(--muted);
+}
+
+.collection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11.5rem), 1fr));
+  gap: var(--space-4);
+}
+.collection-grid .collection-row {
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+.collection-grid .collection-check {
+  position: absolute;
+  top: calc(var(--space-3) + var(--space-2));
+  left: calc(var(--space-3) + var(--space-2));
+  z-index: 1;
+  padding: var(--space-1);
+  background: var(--surface);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-card);
+}
+.collection-grid .collection-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  font-size: 3rem;
+}
+.collection-grid .collection-row-action button {
+  width: 100%;
+}
+
+.collection-list {
+  display: grid;
+  gap: var(--space-2);
+}
+.collection-list .collection-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+.collection-list .collection-check {
+  margin: calc(-1 * var(--space-2));
+}
+.collection-list .collection-cover {
+  width: 3rem;
+  height: 3rem;
+}
+.collection-list .collection-item {
+  flex: 1 1 14rem;
+}
+.collection-list .collection-row-state {
+  justify-content: flex-end;
+}
+.collection-list .collection-row-action {
+  justify-items: end;
+  text-align: right;
+}
+
+.collection-empty {
+  padding: var(--space-6) var(--space-5);
+  border: 1px dashed var(--control);
+  border-radius: var(--radius-group);
+  background: var(--surface);
+  text-align: center;
+}
+.collection-grid .collection-empty {
+  grid-column: 1 / -1;
+}
+.collection-empty h3 {
+  font-size: var(--text-lg);
+}
+.collection-empty p {
+  max-width: 48ch;
+  margin: var(--space-2) auto 0;
+  color: var(--muted);
+}
+.collection-empty .actions {
+  justify-content: center;
+  margin-top: var(--space-4);
+}
+.collection-empty-links {
+  font-size: var(--text-sm);
+}
+
+/* Bulk actions. Without JavaScript the bar is always there, below the rows; with it, the
+   bar appears once something is selected (data-active) and stays in reach at the bottom
+   of the window while the rows scroll. */
+.collection-bulk {
+  position: sticky;
+  bottom: var(--space-3);
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-raised);
+}
+.collection[data-enhanced] .collection-bulk:not([data-active]) {
+  display: none;
+}
+.collection[data-enhanced] .collection-bulk {
+  border-color: var(--accent);
+}
+.collection-bulk-count {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 700;
+}
+.collection-actions {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-inline-size: 0;
+  font-size: var(--text-sm);
+}
+.collection-actions > label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.collection-bulk-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+.collection-selection-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.collection-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2) var(--space-5);
+  padding-top: var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.collection-history {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+.collection-history > summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+.collection-history ul {
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+}
+.collection-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+}
+.collection-history li + li {
+  border-top: 1px solid var(--rule);
+}
+
+@media (max-width: 40rem) {
+  .collection-library-main {
+    gap: var(--space-3);
+  }
+  .collection-picker {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .collection-picker select {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+  .collection-create {
+    margin-left: 0;
+  }
+  .collection-filters {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .collection-search {
+    grid-column: 1 / -1;
+  }
+  .collection-search-button {
+    grid-column: 1 / -1;
+  }
+  .collection-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+  .collection-grid .collection-row {
+    padding: var(--space-2);
+    gap: var(--space-2);
+  }
+  .collection-grid .collection-check {
+    top: calc(var(--space-2) + var(--space-1));
+    left: calc(var(--space-2) + var(--space-1));
+  }
+  .collection-grid .collection-item h3 {
+    font-size: var(--text-sm);
+  }
+  .collection-grid .collection-row-action button {
+    padding-inline: var(--space-2);
+  }
+  .collection-list .collection-cover {
+    display: none;
+  }
+  .collection-list .collection-row-state,
+  .collection-list .collection-row-action {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    justify-items: start;
+    text-align: left;
+  }
+  .collection-bulk {
+    padding: var(--space-3);
+  }
+  .collection-bulk-buttons {
+    width: 100%;
+    margin-left: 0;
+  }
+  .collection-bulk-buttons button {
+    flex: 1 1 auto;
+  }
+  .collection-menu-body {
+    right: auto;
+    left: 0;
+  }
+}
+
+@media (forced-colors: active) {
+  .collection-row:has(.collection-check input:checked) {
+    outline: 2px solid Highlight;
+  }
+}

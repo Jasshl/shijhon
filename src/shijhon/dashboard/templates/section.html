@@ -3,7 +3,7 @@
 {% block main %}
 <div class="page-head">
   <h1>{{ title }}</h1>
-  <p class="page-summary">{{ summary }}</p>
+  <p class="page-summary">{{ summary }}{% if page == "sound" %} <a href="{{ source_url }}/blob/main/docs/sound-analysis.md" rel="noreferrer">Setup guide</a>{% endif %}</p>
 </div>
 {% if notices %}
 {{ error_notice(notices) }}
@@ -68,6 +68,43 @@
   </div>
 </section>
 {% endif %}
+{% if page == "sound" %}
+<section class="group" aria-labelledby="status-title">
+  <div class="group-head"><h2 id="status-title">Status</h2></div>
+  <div class="rows">
+    <div class="row status-row">
+{% if not extra.configured %}
+      <p class="status"><span class="led led-off" aria-hidden="true"></span><span>Off: no AudioMuse-AI address is set</span></p>
+{% elif not extra.running %}
+      <p class="status"><span class="led" aria-hidden="true"></span><span>Not connected yet: sound analysis starts when Shijhon restarts</span></p>
+{% elif not extra.status %}
+      <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>The status could not be read</span></p>
+{% elif extra.status.reachable %}
+      <p class="status"><span class="led led-ok" aria-hidden="true"></span><span>Answering</span></p>
+{% else %}
+      <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Not answering: {{ extra.status.error }}</span></p>
+{% endif %}
+{% if can_restart and extra.configured and not extra.running %}
+      <form method="post" action="{{ prefix }}/restart">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ prefix }}/sound">
+        <button class="btn-small" title="Songs that are playing may stop">Restart Shijhon</button>
+      </form>
+{% endif %}
+    </div>
+{% if extra.status %}
+    <div class="row status-row">
+      <p class="status"><span>{{ extra.status.songs }} {{ "song has" if extra.status.songs == 1 else "songs have" }} sound facts{% if extra.status.synced %}, read {{ extra.status.synced|when }}{% else %}; the first reading is still to come{% endif %}</span></p>
+    </div>
+{% if extra.status.error and extra.status.reachable %}
+    <div class="row status-row">
+      <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>The last reading failed: {{ extra.status.error }}</span></p>
+    </div>
+{% endif %}
+{% endif %}
+  </div>
+</section>
+{% endif %}
 {% if page == "playback" and extra.missing %}
 <div class="notice notice-warn" role="status">
 {% for line, variable in extra.missing %}
@@ -80,7 +117,7 @@
 </div>
 {% endif %}
 {% if page == "catalog" and extra.wait %}
-{# The wait for the catalog is a form of its own; its row is under "More settings". #}
+{# The wait for the catalog is a form of its own; its row is under "Advanced settings". #}
 <form id="catalog-wait" method="post" action="{{ prefix }}/catalog/wait" novalidate>
   <input type="hidden" name="csrf" value="{{ csrf }}">
 </form>
@@ -101,7 +138,7 @@
 {% set wait = page == "catalog" and extra.wait %}
 {% if fold.groups or wait %}
   <details class="more-settings"{% if fold.open %} open{% endif %}>
-    {{ more_summary(fold) }}
+    {{ more_summary(fold, [extra.wait_group.title] if wait else []) }}
 {% if wait %}
 {% if extra.wait_problem %}
     <div class="notice notice-warn" role="status">
@@ -122,7 +159,7 @@
 {% endfor %}
   </details>
 {% endif %}
-  <div class="form-actions{% if page == 'playback' %} form-actions-bar{% endif %}">
+  <div class="form-actions form-actions-bar">
     <button class="btn-primary">Save changes</button>
 {% if form_status %}
     <p class="form-status{% if saved_ok %} is-saved{% endif %}" role="status">{{ form_status }}</p>

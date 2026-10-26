@@ -20,6 +20,7 @@ import platform
 import plistlib
 import shutil
 import subprocess
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -160,7 +161,7 @@ def test_placeholder_plays_seeks_and_downloads(
 
 
 def test_owned_track_through_the_proxy(avcheck: Path, world: DeliveryWorld) -> None:
-    owned = world.client().ok("search3", {"query": "Client Owned"})["searchResult3"]["song"][0][
+    owned = world.nd.client().ok("search3", {"query": "Client Owned"})["searchResult3"]["song"][0][
         "id"
     ]
     result = run(avcheck, "--stream", url(world, "stream", id=owned))
@@ -176,7 +177,7 @@ def test_lower_bitrate_request_behaves_like_an_owned_track(
     song, _, _ = world.placeholder_track(
         "avf-mp3", [addon], seconds=20, fmt="m4a", content_type="audio/mp4"
     )
-    owned = world.client().ok("search3", {"query": "Client Owned"})["searchResult3"]["song"][0][
+    owned = world.nd.client().ok("search3", {"query": "Client Owned"})["searchResult3"]["song"][0][
         "id"
     ]
     results = [
@@ -214,3 +215,34 @@ def test_a_dash_song_served_at_once_plays_seeks_and_tells_its_length(
     assert result["exit"] == 0, why(world, avcheck, result)
     assert result.get("play") and result.get("seek"), why(world, avcheck, result)
     assert abs(result["duration"] - 20) < 1.0, why(world, avcheck, result)
+
+
+def test_a_placeholder_avplayer_streamed_is_kept_and_plays_from_the_library(
+    avcheck: Path, world: DeliveryWorld, addon: FakeAddon, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With streamed songs kept: AVPlayer's own requests for a placeholder (its probe, its
+    ranges, its seek) bring Shijhon the whole file, which then replaces the placeholder;
+    a new play is Navidrome's file, played and sought as before."""
+    retention = world.services.deliverer.retention
+    assert retention is not None
+    monkeypatch.setattr(retention, "enabled", True)
+    song, _, _ = world.placeholder_track("avf-kept", [addon], seconds=20)
+    first = run(avcheck, "--stream", url(world, "stream", id=song))
+    assert first.get("play") and first.get("seek"), why(world, avcheck, first)
+    deadline = time.monotonic() + 20
+    while True:
+        row = world.server.call(
+            lambda: world.services.store.fetchone(
+                "SELECT state FROM placeholders WHERE song_id = ?", [song]
+            )
+        )
+        assert row is not None
+        if row["state"] == "delivered":
+            break
+        assert time.monotonic() < deadline, "AVPlayer's stream was not kept"
+        time.sleep(0.2)
+    addon.clear()
+    again = run(avcheck, "--stream", url(world, "stream", id=song))
+    assert again.get("play") and again.get("seek"), why(world, avcheck, again)
+    assert abs(again["duration"] - 20) < 1.5, why(world, avcheck, again)
+    assert addon.requests() == []  # Navidrome's file

@@ -2,10 +2,125 @@
 {% set title = "Diagnostics" %}
 {% from "_macros.html" import catalog_status %}
 {% block main %}
+{# One tile of the summary: the part's name (a link to its section below), then a status
+   line and a line of detail from the caller. A tile with an error or a warning inside
+   is tinted by the stylesheet (it looks for the light's class), so the colors need no
+   second source. #}
+{% macro tile(name, target) %}
+<li class="health-tile">
+  <a class="health-name" href="#{{ target }}">{{ name }}</a>
+{{ caller() }}
+</li>
+{% endmacro %}
+{% macro light(tone, words) %}
+<p class="health-state"><span class="status{% if tone == 'error' %} status-error{% endif %}"><span class="led{% if tone %} led-{{ tone }}{% endif %}" aria-hidden="true"></span><span>{{ words }}</span></span></p>
+{% endmacro %}
+{# The catalog's state in a few words and a line of detail, as the Catalog section's
+   status line says it (the same cases, in the same order). #}
+{% macro catalog_tile(info) %}
+{% if info.kind == "none" and not info.running %}
+{{ light("off", "Off") }}
+<p class="health-detail">No catalog is chosen.</p>
+{% elif info.problem and not info.running %}
+{{ light("error", "Not connected") }}
+<p class="health-detail">{{ info.problem.label }} {{ info.problem.notice }}</p>
+{% elif not info.running %}
+{{ light("", "Not connected yet") }}
+<p class="health-detail">It starts when Shijhon restarts.</p>
+{% elif info.resting %}
+{{ light("cool", "Resting after errors") }}
+<p class="health-detail">Until {{ info.resting|hm }}.</p>
+{% elif info.check and info.check.ok %}
+{{ light("ok", "Answering") }}
+<p class="health-detail">{% if catalog_label %}{{ catalog_label }} · {% endif %}checked {{ info.check.at|hm }}, {{ info.check.took_ms|round|int }} ms</p>
+{% elif info.check %}
+{{ light("error", "Not answering") }}
+<p class="health-detail">Error at {{ info.check.at|hm }}: <code>{{ info.check.error }}</code></p>
+{% else %}
+{{ light("", "Not checked yet") }}
+{% endif %}
+{% endmacro %}
+{% set addons_on = chain|selectattr("addon.enabled")|list %}
+{% set addons_trouble = chain|selectattr("health.attention")|list %}
+{% set addons_cooling = chain|selectattr("health.light", "equalto", "cool")|list %}
+{% set addons_unchecked = addons_on|rejectattr("health.light")|list %}
+{% set logged = errors|sum(attribute="times") %}
+
 <div class="page-head">
-  <h1>Diagnostics</h1>
-  <p class="page-summary">Checked when the page loaded, at {{ checked_at|hm }}.</p>
+  <div class="page-title">
+    <h1>Diagnostics</h1>
+    <p class="page-summary">How Navidrome, the add-ons, the catalog and Shijhon are doing.</p>
+  </div>
+  <div class="page-actions">
+    <p class="muted small">Checked at {{ checked_at|hm }}</p>
+    <a class="btn" href="{{ prefix }}/diagnostics">Check again</a>
+  </div>
 </div>
+
+<section aria-labelledby="summary-title">
+  <h2 class="visually-hidden" id="summary-title">Summary</h2>
+  <ul class="health">
+{% call tile("Navidrome", "navidrome-title") %}
+{% if not nd.answering %}
+{{ light("error", "Not answering") }}
+<p class="health-detail"><code>{{ nd.error }}</code></p>
+{% elif nd.purge_missing and nd.purge_missing != "never" %}
+{{ light("error", "Needs attention") }}
+<p class="health-detail">It removes missing files. Shijhon needs <code>Scanner.PurgeMissing</code> set to <code>never</code>.</p>
+{% else %}
+{{ light("ok", "Answering") }}
+<p class="health-detail">{{ nd.took_ms|round|int }} ms{% if nd.version %} · version <code>{{ nd.version }}</code>{% endif %}</p>
+{% endif %}
+{% endcall %}
+{% call tile("Add-ons", "addons-title") %}
+{% if not chain %}
+{{ light("off", "None added") }}
+<p class="health-detail">Catalog songs you don't own have no audio source.</p>
+{% elif addons_trouble %}
+{{ light("error", addons_trouble|length ~ (" needs" if addons_trouble|length == 1 else " need") ~ " attention") }}
+<p class="health-detail">{{ addons_trouble|map(attribute="addon.name")|join(", ") }}</p>
+{% elif addons_cooling %}
+{{ light("cool", addons_cooling|length ~ " cooling down") }}
+<p class="health-detail">{{ addons_cooling|map(attribute="addon.name")|join(", ") }}</p>
+{% elif not addons_on %}
+{{ light("off", "All off") }}
+<p class="health-detail">{{ chain|length }} add-on{{ "s" if chain|length != 1 }}, none on</p>
+{% elif addons_unchecked %}
+{{ light("", "Not checked yet") }}
+<p class="health-detail">{{ addons_on|length }} on</p>
+{% else %}
+{{ light("ok", "Working" if addons_on|length == 1 else "All " ~ addons_on|length ~ " working") }}
+<p class="health-detail">{{ addons_on|length }} on{% if addons_on|length != chain|length %}, {{ chain|length - addons_on|length }} off{% endif %}</p>
+{% endif %}
+{% endcall %}
+{% call tile("Catalog", "catalog-title") %}
+{{ catalog_tile(catalog) }}
+{% endcall %}
+{% call tile("Shijhon", "versions-title") %}
+{% if not database_private or schema != bundled or pending %}
+{{ light("cool", "Needs attention") }}
+<ul class="health-detail health-issues">
+{% if pending %}
+<li><a class="health-link" href="#restart">Restart needed</a></li>
+{% endif %}
+{% if not database_private %}
+<li>Database readable by others</li>
+{% endif %}
+{% if schema != bundled %}
+<li>Database schema differs</li>
+{% endif %}
+</ul>
+{% else %}
+{{ light("ok", "Running") }}
+<p class="health-detail">Version <code>{{ version }}</code></p>
+{% endif %}
+{% if logged %}
+<p class="health-detail"><a class="health-link" href="#errors-title">{{ logged|count }} warning{{ "s" if logged != 1 }} or error{{ "s" if logged != 1 }}</a> in 24 hours</p>
+{% endif %}
+{% endcall %}
+  </ul>
+</section>
+
 {% if not nd.answering %}
 <div class="notice notice-error" role="alert">
   <p class="notice-title">Navidrome is not answering</p>
@@ -18,6 +133,7 @@
   <p>It holds add-on addresses and secrets. Make it readable by Shijhon's own user only: <code>chmod 600</code>.</p>
 </div>
 {% endif %}
+
 <section class="group" aria-labelledby="navidrome-title">
   <div class="group-head"><h2 id="navidrome-title">Navidrome</h2></div>
   <div class="rows">
@@ -94,7 +210,7 @@
       <div><dt>Running since</dt><dd>{{ started|day }}, {{ started|hm }}</dd></div>
 {% if storage %}
       <div><dt>Placeholders</dt><dd>{{ storage.placeholders|count }} song{{ "s" if storage.placeholders != 1 }}, {{ storage.placeholder_bytes|size }}</dd></div>
-      <div><dt>Downloaded audio</dt><dd>{{ storage.delivered|count }} song{{ "s" if storage.delivered != 1 }}, {{ storage.delivered_bytes|size }}</dd></div>
+      <div><dt>Saved audio</dt><dd>{{ storage.delivered|count }} song{{ "s" if storage.delivered != 1 }}, {{ storage.delivered_bytes|size }}</dd></div>
 {% endif %}
     </dl>
   </div>
@@ -105,31 +221,42 @@
     <h2 id="restart-title">Restart</h2>
 {% if can_restart %}
     <p class="group-help">Settings marked “Applies after restart” take effect when Shijhon restarts. Songs that are playing may stop; a track being added to the library is given time to finish first.</p>
+    <details class="inline-about">
+      <summary>What a restart does</summary>
+      <p>Shijhon stops and is started again by Docker or your service manager, with the saved settings. A container without a restart policy stays stopped.</p>
+    </details>
+{% else %}
+    <p class="group-help">Settings marked “Applies after restart” take effect when Shijhon restarts. Nothing here would start Shijhon again after it stops, so restart it where it is run. Songs that are playing may stop.</p>
+{% endif %}
   </div>
   <div class="rows">
-    <div class="row status-row">
-      <p class="status"><span>Shijhon stops and is started again by Docker or your service manager, with the saved settings. A container without a restart policy stays stopped.</span></p>
+{% if not can_restart %}
+    <dl class="readout">
+      <div><dt>Docker Compose</dt><dd><code>docker compose restart shijhon</code></dd></div>
+      <div><dt>A service manager</dt><dd>Its restart command</dd></div>
+    </dl>
+{% endif %}
+    <div class="row{% if can_restart %} status-row{% endif %}">
+      <div class="restart-state">
+{% if pending %}
+        <p class="status"><span class="led led-cool" aria-hidden="true"></span><span>Waiting for a restart:</span></p>
+        <ul class="restart-waiting">
+{% for item in pending %}
+          <li>{{ item.label }}{% if item.at %}, saved {{ item.at|hm }}{% endif %}</li>
+{% endfor %}
+        </ul>
+{% else %}
+        <p class="status"><span class="led led-ok" aria-hidden="true"></span><span>No saved setting is waiting for a restart.</span></p>
+{% endif %}
+      </div>
+{% if can_restart %}
       <form method="post" action="{{ prefix }}/restart">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="next" value="{{ prefix }}/diagnostics">
-        <button class="btn-small">Restart Shijhon</button>
+        <button class="btn-small{% if pending %} btn-primary{% endif %}">Restart Shijhon</button>
       </form>
+{% endif %}
     </div>
-  </div>
-{% else %}
-    <p class="group-help">Settings marked “Applies after restart” take effect when Shijhon restarts. Restart it where it is run: with Docker Compose, <code>docker compose restart shijhon</code>; with a service manager, its restart command. Songs that are playing may stop.</p>
-  </div>
-{% endif %}
-  <div class="rows">
-    <dl class="readout">
-{% if pending %}
-{% for item in pending %}
-      <div><dt>Waiting for a restart</dt><dd>{{ item.label }}{% if item.at %}, saved {{ item.at|hm }}{% endif %}</dd></div>
-{% endfor %}
-{% else %}
-      <div><dt>Waiting for a restart</dt><dd>Nothing: no saved setting is waiting for a restart.</dd></div>
-{% endif %}
-    </dl>
   </div>
 </section>
 
@@ -150,9 +277,10 @@
     </table>
   </div>
 {% else %}
-  <div class="empty">
-    <p class="empty-title">No errors</p>
-    <p>Warnings and errors Shijhon logs appear here for a day.</p>
+  <div class="rows">
+    <div class="row">
+      <p class="status"><span class="led led-ok" aria-hidden="true"></span><span>No errors. Warnings and errors Shijhon logs appear here for a day.</span></p>
+    </div>
   </div>
 {% endif %}
 </section>

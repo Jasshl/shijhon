@@ -12,11 +12,12 @@ from typing import Any, Literal
 import pytest
 from pydantic import BaseModel, Field, SecretStr
 
+from shijhon.access import AccessDenied, AccessService, AccessUnavailable
 from shijhon.app import ShijhonApp
 from shijhon.config import DeliverySettings, Settings, catalog_settings, load_settings
 from shijhon.dashboard import sections
 from shijhon.dashboard.addons import parse_manifest
-from shijhon.dashboard.auth import AdminCheck, Attempts, Sessions, client_key
+from shijhon.dashboard.auth import Attempts, Sessions, client_key
 from shijhon.dashboard.errors import RecentErrors
 from shijhon.dashboard.fields import (
     Group,
@@ -626,35 +627,50 @@ async def test_sessions_end_when_old_or_unused(tmp_path: Path) -> None:
 
 
 class _Navidrome:
+    library_id = 1
+
     def __init__(self) -> None:
-        self.users: list[dict[str, Any]] | None = [{"userName": "Mira", "isAdmin": True}]
+        self.user: dict[str, Any] | None = {
+            "id": "immutable-mira",
+            "userName": "Mira",
+            "isAdmin": True,
+        }
+        self.libraries: Any = [{"id": 1}]
         self.asked = 0
 
-    async def native_json(self, method: str, path: str) -> Any:
+    async def native_json(self, method: str, path: str, **kwargs: Any) -> Any:
         self.asked += 1
-        if self.users is None:
+        if self.user is None:
             raise NavidromeError("native GET: ConnectError")
-        return self.users
+        if path.endswith("/library"):
+            return self.libraries
+        return self.user
 
 
 @pytest.mark.anyio
-async def test_admin_rights_are_checked_again_and_fail_closed() -> None:
-    now = [0.0]
-    navidrome: Any = _Navidrome()
-    check = AdminCheck(every=60, grace=600, clock=lambda: now[0])
-    assert await check.admin(navidrome, "mira") is True
-    assert await check.admin(navidrome, "mira") is True and navidrome.asked == 1  # reused
-    navidrome.users = None  # Navidrome stops answering
-    now[0] = 100
-    assert await check.admin(navidrome, "mira") is True  # confirmed 100 s ago: the grace
-    now[0] = 700
-    assert await check.admin(navidrome, "mira") is None  # refused, not signed out
-    assert await check.admin(navidrome, "someone") is None  # never confirmed: refused
-    navidrome.users = [{"userName": "mira", "isAdmin": False}]
-    assert await check.admin(navidrome, "mira") is False
-    navidrome.users = []
-    now[0] = 800
-    assert await check.admin(navidrome, "mira") is False  # no such user any more
+async def test_current_identity_grants_and_role_have_no_stale_admin_grace() -> None:
+    native: Any = _Navidrome()
+    access = AccessService(native)
+    principal = await access.personal("mira", expected_user_id="immutable-mira")
+    assert principal.is_admin and principal.library_ids == frozenset({1})
+    native.user["isAdmin"] = False
+    assert not (await access.personal("mira", expected_user_id="immutable-mira")).is_admin
+    native.user = None
+    with pytest.raises(AccessUnavailable):
+        await access.personal("mira", expected_user_id="immutable-mira")
+    native.user = {"id": "recreated-mira", "userName": "Mira", "isAdmin": True}
+    with pytest.raises(AccessDenied):
+        await access.personal("mira", expected_user_id="immutable-mira")
+    with pytest.raises(AccessDenied):
+        await access.personal("mira", expected_user_id="")
+    native.user["id"] = "immutable-mira"
+    native.libraries = [{"id": 2}]
+    with pytest.raises(AccessDenied):
+        await access.personal("mira", expected_user_id="immutable-mira")
+    for malformed in (None, {}, [{"id": "1"}], [{"id": True}], [{}]):
+        native.libraries = malformed
+        with pytest.raises(AccessUnavailable):
+            await access.personal("mira", expected_user_id="immutable-mira")
 
 
 def test_recent_errors_are_grouped_and_redacted() -> None:

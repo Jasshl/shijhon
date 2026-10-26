@@ -1,8 +1,9 @@
 /*
   Shijhon dashboard stylesheet.
 
-  One file, no preprocessor, no framework. Plain server-rendered HTML with forms; one
-  small script, on the restart's waiting page only. Light and dark follow
+  No preprocessor, no framework. Plain server-rendered HTML with forms; small scripts
+  only where a page needs them (the restart's wait, Collection, imports, Playlists), each
+  page working without them where it can. Light and dark follow
   prefers-color-scheme; the colors are a preset chosen by data-accent on <html>: its
   accent, and neutrals tinted to match. Element defaults (fields, buttons, links) are set
   with :where() so they have no specificity and any class below overrides them.
@@ -11,7 +12,7 @@
     1. Fonts
     2. Tokens, presets
     3. Base
-    4. Top bar and page
+    4. Shell: sidebar, content and page
     5. Groups and rows
     6. Buttons
     7. Fields and choices (unit field, segmented, switch, secret, accent picker)
@@ -25,6 +26,8 @@
    15. Sign-in
    16. Utilities
    17. Small screens, touch, motion, forced colors
+   18. Music pages
+   19. Diagnostics and appearance
 */
 
 /* 1. Fonts ------------------------------------------------------------------------------
@@ -87,13 +90,14 @@
   --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas,
     monospace;
 
-  /* Type scale (13, 14, 16, 18, 21, 24 px at the default root size). */
+  /* Type scale (13, 14, 16, 18, 21, 24, 28 px at the default root size). */
   --text-xs: 0.8125rem;
   --text-sm: 0.875rem;
   --text-md: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.3125rem;
   --text-2xl: 1.5rem;
+  --text-3xl: 1.75rem;
 
   /* Spacing, on a 4 px grid. */
   --space-1: 0.25rem;
@@ -104,11 +108,15 @@
   --space-6: 2rem;
   --space-7: 3rem;
 
-  --radius-control: 4px;    /* fields, buttons, notices (tags use 3px) */
-  --radius-group: 6px;      /* groups of rows, tables */
+  --radius-control: 6px;    /* fields, buttons, notices (tags use 4px) */
+  --radius-group: 10px;     /* groups of rows, tables */
   --control-height: 2.25rem;
   --page-width: 64rem;
-  --topbar-height: 3.5rem;
+  --sidebar-width: 15rem;
+
+  /* Elevation: cards lift a little off the page; a menu over the page more. */
+  --shadow-card: 0 1px 2px rgb(16 24 20 / 0.05), 0 1px 3px rgb(16 24 20 / 0.04);
+  --shadow-raised: 0 8px 24px rgb(16 24 20 / 0.12), 0 2px 6px rgb(16 24 20 / 0.06);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -127,6 +135,10 @@
     --error-soft: #321c1a;
     --error-rule: #6b302a;
     --danger-fill: #b8392e;
+
+    /* On a dark page a card's border carries the edge; shadows only for what floats. */
+    --shadow-card: none;
+    --shadow-raised: 0 8px 24px rgb(0 0 0 / 0.45);
   }
 }
 
@@ -325,6 +337,9 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* The floating save bar (and on narrow screens the top bar) never covers a focused
+     field or the target of a link. */
+  scroll-padding-bottom: 5.5rem;
 }
 
 body {
@@ -348,8 +363,8 @@ h3 {
   text-wrap: balance;
 }
 h1 {
-  font-size: var(--text-2xl);
-  letter-spacing: -0.01em;
+  font-size: var(--text-3xl);
+  letter-spacing: -0.02em;
 }
 h2 {
   font-size: var(--text-lg);
@@ -360,6 +375,11 @@ h3 {
 
 p {
   margin: 0;
+}
+
+/* Hidden stays hidden, whatever display a class gives the element (buttons are flex). */
+[hidden] {
+  display: none !important;
 }
 
 :where(a) {
@@ -390,38 +410,49 @@ hr {
   margin: var(--space-5) 0;
 }
 
-/* 4. Top bar and page -------------------------------------------------------------------
+/* 4. Shell: sidebar, content and page ----------------------------------------------------
 
-   <header class="topbar">
-     <div class="topbar-inner">
-       <a class="wordmark" href="/">Shijhon</a>
-       <nav class="sections" aria-label="Sections"><ul><li><a aria-current="page">…
-       <form class="signout" method="post" action="/sign-out">…
+   <div class="shell">
+     <header class="sidebar">
+       <a class="wordmark">Shijhon</a>
+       <div class="sidebar-wide"> nav.sections + .account </div>     wide screens
+       <details class="menu"> the same, behind "Menu" </details>     narrow screens
+     </header>
+     <div class="content"> .banner? main.page footer.footer </div>
+   </div>
 */
 
-.topbar {
-  background: var(--surface);
-  border-bottom: 1px solid var(--rule);
+.shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 100vh;
 }
 
-.topbar-inner {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "mark nav out";
-  align-items: center;
-  column-gap: var(--space-5);
-  max-width: var(--page-width);
-  margin: 0 auto;
-  padding: 0 var(--space-5);
-  min-height: var(--topbar-height);
+.sidebar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-3) var(--space-4);
+  background: var(--surface);
+  border-right: 1px solid var(--rule);
+}
+.sidebar-wide {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  margin-top: var(--space-4);
 }
 
 /* The wordmark: the name in the heaviest weight, after a small "power" light. */
 .wordmark {
-  grid-area: mark;
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  padding: 0 var(--space-3);
   color: var(--ink);
   font-size: var(--text-lg);
   font-weight: 800;
@@ -436,67 +467,130 @@ hr {
   background: var(--accent);
 }
 
-.sections {
-  grid-area: nav;
-  align-self: stretch;
+.icon {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* The pages, under the group they belong to. */
+.sections-heading {
+  margin: var(--space-4) 0 var(--space-1);
+  padding: 0 var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.sections-heading:first-child {
+  margin-top: 0;
 }
 .sections ul {
   display: flex;
-  height: 100%;
+  flex-direction: column;
+  gap: 2px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.sections a {
+.sections a,
+.account-link {
   display: flex;
   align-items: center;
-  height: 100%;
-  padding: 0 var(--space-3);
+  gap: var(--space-3);
+  min-height: 2.25rem;
+  padding: 0.375rem var(--space-3);
+  border-radius: var(--radius-control);
   color: var(--muted);
   font-size: var(--text-sm);
   font-weight: 600;
   text-decoration: none;
-  white-space: nowrap;
 }
-.sections a:hover {
+.sections a:hover,
+.account-link:hover {
+  background: var(--sunken);
   color: var(--ink);
 }
-/* The current section is lit: ink text and an accent bar on the top bar's edge. */
-.sections a[aria-current="page"] {
+/* The current page is lit: ink text on the accent's tint, the icon in the accent. */
+.sections a[aria-current="page"],
+.account-link[aria-current="page"] {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
   color: var(--ink);
-  box-shadow: inset 0 -3px 0 var(--accent);
 }
-.sections a:focus-visible {
-  outline-offset: -2px;
+.sections a[aria-current="page"] .icon,
+.account-link[aria-current="page"] .icon {
+  color: var(--accent);
 }
 
+/* Appearance and the account, at the foot of the sidebar. */
+.account {
+  position: sticky;
+  bottom: calc(-1 * var(--space-4));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: auto;
+  padding: var(--space-3) 0 var(--space-4);
+  margin-bottom: calc(-1 * var(--space-4));
+  background: var(--surface);
+  border-top: 1px solid var(--rule);
+}
+.sidebar-wide > .sections {
+  margin-bottom: var(--space-5);
+}
 .signout {
-  grid-area: out;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  justify-content: space-between;
+  gap: var(--space-2);
   margin: 0;
+  padding-left: var(--space-3);
 }
 .signout-user {
-  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
   font-size: var(--text-sm);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.signout .icon {
+  width: 1rem;
+  height: 1rem;
 }
 
-/* A strip under the top bar for state that concerns every page (a pending restart). */
-.banner {
-  background: var(--warn-soft);
-  border-bottom: 1px solid var(--warn-rule);
-  color: var(--warn-ink);
-  font-size: var(--text-sm);
+/* Narrow screens: the same navigation behind "Menu" (see 17). */
+.menu {
+  display: none;
 }
-.banner-inner {
+
+.content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A strip above the page for state that concerns every page (a pending restart). */
+.banner {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2) var(--space-4);
+  width: calc(100% - 2 * var(--space-6));
   max-width: var(--page-width);
-  margin: 0 auto;
-  padding: var(--space-2) var(--space-5);
+  margin: var(--space-5) auto 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-rule);
+  border-radius: var(--radius-group);
+  color: var(--warn-ink);
+  font-size: var(--text-sm);
+}
+.banner p {
+  flex: 1 1 24rem;
 }
 .banner a {
   color: inherit;
@@ -504,17 +598,81 @@ hr {
 }
 
 .page {
-  max-width: var(--page-width);
+  flex: 1;
+  width: 100%;
+  max-width: calc(var(--page-width) + 2 * var(--space-6));
   margin: 0 auto;
-  padding: var(--space-6) var(--space-5) var(--space-7);
+  padding: var(--space-6) var(--space-6) var(--space-7);
 }
 
+/* The page's title, one line on what it is for, and its own actions on the right.
+   <div class="page-head">
+     <div class="page-title"> <h1>…</h1> <p class="page-summary">…</p> </div>
+     <div class="page-actions"> buttons and links </div>
+   </div>
+   A plain page-head (h1 and summary as its children) works too. */
 .page-head {
-  margin-bottom: var(--space-5);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+  margin-bottom: var(--space-6);
+}
+.page-head > h1,
+.page-head > .page-summary,
+.page-head > .page-about,
+.page-head > p,
+.page-title {
+  flex: 1 0 100%;
+}
+.page-head:has(> .page-actions) > .page-title {
+  flex: 1 1 28rem;
+}
+.page-title > * + .page-summary {
+  margin-top: var(--space-2);
 }
 .page-summary {
-  margin-top: var(--space-1);
   max-width: 64ch;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* "About this page": the longer explanation, for whoever looks for it. */
+.page-about {
+  max-width: 64ch;
+  font-size: var(--text-sm);
+}
+.page-about > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.page-about > summary::-webkit-details-marker {
+  display: none;
+}
+.page-about > summary::before {
+  content: "";
+  border-left: 0.3125rem solid currentColor;
+  border-top: 0.3125rem solid transparent;
+  border-bottom: 0.3125rem solid transparent;
+  transition: transform 120ms ease-out;
+}
+.page-about[open] > summary::before {
+  transform: rotate(90deg);
+}
+.page-about > :not(summary) {
+  margin-top: var(--space-2);
   color: var(--muted);
 }
 
@@ -526,25 +684,18 @@ hr {
   margin-top: 0;
 }
 
-/* The footer: the legal notices (version, author, license, source) and the rarely used
-   Appearance page. */
+/* The footer: the legal notices (version, author, license, source). */
 .footer {
-  border-top: 1px solid var(--rule);
-}
-.footer-inner {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--space-2) var(--space-4);
-  max-width: var(--page-width);
+  width: 100%;
+  max-width: calc(var(--page-width) + 2 * var(--space-6));
   margin: 0 auto;
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-4) var(--space-6) var(--space-5);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
 }
-.footer a[aria-current="page"] {
-  color: var(--ink);
-  font-weight: 600;
+.footer .legal {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
 }
 
 /* 5. Groups and rows --------------------------------------------------------------------
@@ -588,19 +739,57 @@ hr {
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
 }
 .rows > * + * {
   border-top: 1px solid var(--rule);
+}
+/* (A form's hidden fields come first and are not rows.) */
+.rows > [type="hidden"] + :not([type="hidden"]) {
+  border-top: 0;
 }
 
 .row {
   padding: var(--space-3) var(--space-4);
 }
 
+/* A short explanation folded into a group's help, for whoever wants the detail.
+   <details class="inline-about"><summary>What the modes do</summary><p>…</p></details> */
+.inline-about {
+  margin-top: var(--space-1);
+}
+.inline-about > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.inline-about > summary::-webkit-details-marker {
+  display: none;
+}
+.inline-about > summary::before {
+  content: "";
+  border-left: 0.3125rem solid currentColor;
+  border-top: 0.3125rem solid transparent;
+  border-bottom: 0.3125rem solid transparent;
+  transition: transform 120ms ease-out;
+}
+.inline-about[open] > summary::before {
+  transform: rotate(90deg);
+}
+.inline-about > p {
+  margin-top: var(--space-1);
+}
+
 /* The settings few people change, collapsed after the others (an add-on's: more-nested).
+   The closed bar says what is inside, so whoever looks for a setting knows where it is.
    <details class="more-settings">
-     <summary><span class="more-title">More settings</span>
-       <span class="more-changed">2 changed</span></summary>
+     <summary><span class="more-title">Advanced settings</span>
+       <span class="more-changed">2 changed</span>
+       <span class="more-contents">Timing · Fallbacks · …</span></summary>
      <section class="group">…</section> …
    </details> */
 .more-settings {
@@ -611,12 +800,18 @@ hr {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1) var(--space-2);
-  padding: var(--space-2) 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
   color: var(--accent);
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   font-weight: 700;
   cursor: pointer;
   list-style: none;
+}
+.more-settings > summary:hover {
+  border-color: var(--control);
 }
 .more-settings > summary::-webkit-details-marker {
   display: none;
@@ -639,12 +834,25 @@ hr {
 }
 .more-changed {
   margin-left: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.more-contents {
+  flex-basis: 100%;
+  padding-left: calc(0.375rem + var(--space-2));
   color: var(--muted);
   font-size: var(--text-sm);
   font-weight: 400;
 }
 .more-settings[open] > summary {
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+.more-settings[open] .more-contents {
+  display: none;
 }
 /* (A form's own save, inside: the Catalog page's wait.) */
 .more-settings > .form-actions + .group {
@@ -655,6 +863,9 @@ hr {
 }
 .more-nested > summary {
   gap: var(--space-1);
+  padding: var(--space-2) 0;
+  background: none;
+  border: 0;
   font-size: var(--text-sm);
   font-weight: 600;
 }
@@ -1076,7 +1287,7 @@ select.select-small {
    does not leak out: the tokens are set on the option only).
    <fieldset class="accent-picker"><legend>…</legend>
      <label class="accent-option" data-accent="teal">
-       <span class="accent-preview" aria-hidden="true">…</span>
+       <span class="accent-sample" aria-hidden="true">…</span>
        <span class="accent-name"><input type="radio" name="accent" value="teal"> Teal</span>
      </label> … */
 .accent-picker {
@@ -1100,41 +1311,6 @@ select.select-small {
 .accent-option:has(input:checked) {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
-}
-.accent-preview {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  background: var(--bg);
-  border-bottom: 1px solid var(--rule);
-}
-.accent-preview-tab {
-  justify-self: start;
-  padding-bottom: var(--space-1);
-  box-shadow: inset 0 -3px 0 var(--accent);
-  font-size: var(--text-xs);
-  font-weight: 600;
-}
-.accent-preview-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.accent-preview-button {
-  padding: 0.125rem var(--space-2);
-  border-radius: var(--radius-control);
-  background: var(--accent-fill);
-  color: var(--accent-on);
-  font-size: var(--text-xs);
-  font-weight: 600;
-}
-.accent-preview .switch-track {
-  background: var(--accent-fill);
-  border-color: var(--accent-fill);
-}
-.accent-preview .switch-track::after {
-  background: #fff;
-  transform: translateX(1rem);
 }
 .accent-name {
   display: flex;
@@ -1212,12 +1388,14 @@ select.select-small {
 /* The save bar of a long settings form stays in reach at the bottom of the window. */
 .form-actions-bar {
   position: sticky;
-  bottom: 0;
-  z-index: 1;
+  bottom: var(--space-3);
+  z-index: 2;
   margin-top: var(--space-5);
-  padding: var(--space-3) 0;
-  background: var(--bg);
-  border-top: 1px solid var(--rule);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-raised);
 }
 
 /* Two or three short controls that form one setting (e.g. fill policy). */
@@ -1305,7 +1483,7 @@ select.select-small {
   align-items: center;
   padding: 0 0.375rem;
   border: 1px solid var(--rule);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--sunken);
   color: var(--muted);
   font-size: var(--text-xs);
@@ -1314,18 +1492,21 @@ select.select-small {
   white-space: nowrap;
   vertical-align: 0.1em;
 }
-.tag-restart {
+.tag-restart,
+.tag-partly {
   border-color: var(--warn-rule);
   background: var(--warn-soft);
   color: var(--warn-ink);
 }
 .tag-saved,
-.tag-set {
+.tag-set,
+.tag-meets {
   border-color: var(--ok-rule);
   background: var(--ok-soft);
   color: var(--ok-ink);
 }
-.tag-error {
+.tag-error,
+.tag-misses {
   border-color: var(--error-rule);
   background: var(--error-soft);
   color: var(--error-ink);
@@ -1396,7 +1577,7 @@ select.select-small {
        <div class="source-name"><h3>Alpha</h3><p class="source-meta">…</p></div>
        <p class="source-health">OK</p>
        <form class="source-switch">…switch…</form>
-       <form class="source-move joined">…up, down…</form>
+       <div class="source-actions"> <form class="source-move joined">…up, down…</form> </div>
        <details class="source-settings"><summary>Settings</summary>…</details>
      </li>
    </ol>
@@ -1405,10 +1586,12 @@ select.select-small {
 .chain {
   margin: 0;
   padding: 0;
+  overflow: clip; /* tinted rows keep the rounded corners */
   list-style: none;
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
 }
 
 .source {
@@ -1500,9 +1683,133 @@ select.select-small {
   grid-area: switch;
   margin: -0.375rem 0 0;
 }
-.source-move {
+/* The row's own actions: the arrows. */
+.source-actions {
   grid-area: move;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1) var(--space-2);
   margin: -0.25rem 0 0;
+}
+.source-move {
+  margin: 0;
+}
+
+/* Pulling a row (addons.js; only with the script): the number, with a grip beside it in
+   the row's padding, is the handle. The row lifts and follows the pointer, the others
+   slide out of its way, and on release it settles into its place. */
+.is-sortable .source {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.is-sortable .source-order {
+  position: relative;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.is-sortable .source-order::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(-1 * var(--space-3) - 0.125rem);
+  width: 0.625rem;
+  height: 1rem;
+  transform: translateY(-50%);
+  background-image: radial-gradient(circle, var(--muted) 1.1px, transparent 1.6px);
+  background-size: 5px 5px;
+  opacity: 0.6;
+  transition: opacity 120ms ease-out;
+}
+.is-sortable .source:hover .source-order::before {
+  opacity: 1;
+}
+.is-sortable .source-order:hover {
+  color: var(--ink);
+}
+.chain.is-pulling {
+  overflow: visible; /* the pulled row may leave the list's edges */
+  cursor: grabbing;
+  user-select: none;
+}
+/* Pulled sideways past the window, it does not make the page scroll sideways. */
+.content:has(.chain.is-pulling) {
+  overflow-x: clip;
+}
+.chain.is-pulling .source-order {
+  cursor: grabbing;
+}
+.source.is-lifted {
+  position: relative;
+  z-index: 2;
+  background: var(--surface);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-raised);
+  transition: box-shadow 160ms ease-out;
+}
+.source.is-lifted.is-settling {
+  transition:
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 220ms ease-out;
+}
+.chain.is-still .source {
+  transition: none;
+}
+.chain[aria-busy="true"] .source-actions {
+  opacity: 0.6;
+}
+
+/* "Saved", for a moment, beside the list's count. */
+.group-meta {
+  position: relative;
+}
+.order-status {
+  position: absolute;
+  right: calc(100% + var(--space-2));
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+}
+.order-status:empty {
+  display: none;
+}
+.order-status.is-shown {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-sortable .source,
+  .source.is-lifted.is-settling {
+    transition: none;
+  }
+}
+
+/* All on, all off: beside the list's help. */
+.group-head:has(> .list-tools) > .group-help {
+  grid-column: 1;
+}
+.list-tools {
+  grid-row: 2;
+  grid-column: 2;
+  align-self: end;
+}
+.list-tools form {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+}
+@media (max-width: 40rem) {
+  .group-head:has(> .list-tools) > .group-help,
+  .list-tools {
+    grid-row: auto;
+    grid-column: 1 / -1;
+  }
 }
 
 .source-settings {
@@ -1565,6 +1872,26 @@ select.select-small {
 }
 .source-attention > .led {
   outline-color: color-mix(in srgb, var(--error-soft) 55%, var(--surface));
+}
+/* With its settings open, the row keeps an edge in the error color instead of the tint. */
+.source-attention:has(> .source-settings[open]) {
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--error);
+}
+.source-attention:has(> .source-settings[open]) > .led {
+  outline-color: var(--surface);
+}
+
+/* A note at the end of a page, for the few it concerns (Add-ons: the configuration
+   file's list). */
+.page-note {
+  max-width: 64ch;
+  margin-top: var(--space-6);
+}
+.page-note .btn-quiet {
+  min-height: 0;
+  padding: 0 var(--space-1);
+  vertical-align: baseline;
 }
 
 /* 12. Tables and pager ------------------------------------------------------------------
@@ -1733,7 +2060,8 @@ progress::-moz-progress-bar {
 }
 .readout > div {
   display: grid;
-  grid-template-columns: 14rem minmax(0, 1fr);
+  grid-template-columns: 12rem minmax(0, 1fr);
+  align-items: baseline;
   gap: var(--space-1) var(--space-4);
   padding: var(--space-3) var(--space-4);
 }
@@ -1742,6 +2070,7 @@ progress::-moz-progress-bar {
 }
 .readout dt {
   color: var(--muted);
+  font-size: var(--text-sm);
 }
 .readout dd {
   margin: 0;
@@ -1759,7 +2088,7 @@ progress::-moz-progress-bar {
   padding: var(--space-6) var(--space-5);
   border: 1px dashed var(--control);
   border-radius: var(--radius-group);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 60%, var(--bg));
 }
 .empty-title {
   font-weight: 700;
@@ -1807,34 +2136,48 @@ progress::-moz-progress-bar {
   margin-top: var(--space-3);
 }
 
-/* 15. Sign-in ---------------------------------------------------------------------------- */
+/* 15. Sign-in and the pages on their own ------------------------------------------------
+   Pages without the sidebar: sign-in, restarting, "account access can't be checked", the
+   agent connection. A column with the wordmark above one panel; the legal notices below.
+
+   <main class="signin">
+     <p class="wordmark">Shijhon</p>
+     <div class="signin-panel"> <h1>…</h1> <p>…</p> notices, a form, .signin-actions </div>
+   </main>
+   <footer class="signin-footer">…</footer> */
 
 .signin {
-  width: min(100% - 2 * var(--space-4), 23rem);
+  width: min(100% - 2 * var(--space-4), 24rem);
   margin: 0 auto;
-  padding: clamp(2rem, 14vh, 8rem) 0 var(--space-7);
+  padding: clamp(2rem, 12vh, 7rem) 0 var(--space-6);
 }
 .signin .wordmark {
+  display: flex;
+  justify-content: center;
   margin-bottom: var(--space-5);
+  padding: 0;
+  font-size: var(--text-xl);
 }
 .signin-footer {
-  width: min(100% - 2 * var(--space-4), 23rem);
+  width: min(100% - 2 * var(--space-4), 24rem);
   margin: 0 auto;
   padding-bottom: var(--space-5);
   color: var(--muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
+  text-align: center;
 }
 .signin-panel {
-  padding: var(--space-5);
+  padding: var(--space-6) var(--space-5) var(--space-5);
   background: var(--surface);
   border: 1px solid var(--rule);
   border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
 }
 .signin-panel h1 {
-  font-size: var(--text-xl);
+  font-size: var(--text-2xl);
 }
 .signin-panel > p {
-  margin-top: var(--space-1);
+  margin-top: var(--space-2);
   color: var(--muted);
   font-size: var(--text-sm);
 }
@@ -1847,6 +2190,107 @@ progress::-moz-progress-bar {
 .signin-panel .btn-primary {
   width: 100%;
   margin-top: var(--space-5);
+}
+/* A link or two after the words, not a form's button. */
+.signin-panel > .signin-actions {
+  margin-top: var(--space-4);
+}
+.signin-actions .btn,
+.signin-actions .btn-primary {
+  width: auto;
+  margin-top: 0;
+}
+
+/* The agent's connection: wider, for the list of permissions. */
+.agent-signin {
+  width: min(100% - 2 * var(--space-4), 28rem);
+  padding-top: clamp(1.5rem, 6vh, 4rem);
+  overflow-wrap: anywhere;
+}
+.agent-permissions {
+  margin-top: var(--space-5);
+}
+.agent-permissions legend {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.agent-scope {
+  padding: var(--space-2) 0;
+}
+.agent-scope + .agent-scope {
+  border-top: 1px solid var(--rule);
+}
+.agent-permissions .mix-check {
+  display: flex;
+  align-items: flex-start;
+  font-size: var(--text-sm);
+}
+.agent-permissions input {
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+.agent-permissions .field-help {
+  margin: var(--space-1) 0 0 1.625rem;
+}
+.agent-return {
+  margin-top: var(--space-5);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.agent-signin .form-actions {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  margin-top: var(--space-3);
+}
+.agent-signin .form-actions .btn-primary {
+  width: auto;
+  margin-top: 0;
+}
+
+/* The wait on the restarting page: a bar that runs back and forth (no words of its own;
+   the heading and the notice say what is happening). */
+.wait {
+  position: relative;
+  height: 0.25rem;
+  margin-top: var(--space-5);
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--sunken);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+.wait::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: wait 1.6s ease-in-out infinite;
+}
+@keyframes wait {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(290%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wait::after {
+    width: 100%;
+    animation: none;
+    opacity: 0.4;
+  }
+}
+@media (forced-colors: active) {
+  .wait {
+    border: 1px solid CanvasText;
+  }
+  .wait::after {
+    forced-color-adjust: none;
+    background: Highlight;
+  }
 }
 
 /* 16. Utilities -------------------------------------------------------------------------- */
@@ -1890,50 +2334,106 @@ progress::-moz-progress-bar {
 
 /* 17. Small screens, touch, motion, forced colors --------------------------------------- */
 
-/* The top bar wraps: wordmark and sign-out on one line, the sections below. */
-@media (max-width: 52rem) {
-  .topbar-inner {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "mark out"
-      "nav  nav";
-    padding: 0 var(--space-4);
-    min-height: 0;
+/* Narrow screens: the sidebar becomes a bar across the top, its navigation behind "Menu". */
+@media (max-width: 64rem) {
+  html {
+    scroll-padding-top: 4.5rem;
+  }
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    height: auto;
+    overflow: visible;
+    padding: var(--space-2) var(--space-4);
+    border-right: 0;
+    border-bottom: 1px solid var(--rule);
   }
   .wordmark {
-    padding: var(--space-3) 0;
+    padding: 0;
   }
-  .sections {
-    margin: 0 calc(-1 * var(--space-4));
-    border-top: 1px solid var(--rule);
-  }
-  /* Five sections fit a 390 px phone; on narrower ones the row wraps onto a second
-     line, so the current section is always in view. */
-  .sections ul {
-    flex-wrap: wrap;
-    padding: 0 var(--space-1);
-  }
-  .sections a {
-    height: 2.75rem;
-    padding: 0 0.375rem;
-  }
-  .signout-user {
+  .sidebar-wide {
     display: none;
   }
-  .banner-inner {
-    padding: var(--space-2) var(--space-4);
+  .menu {
+    display: block;
+  }
+  .menu > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 2.5rem;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-control);
+    color: var(--ink);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+  }
+  .menu > summary::-webkit-details-marker {
+    display: none;
+  }
+  .menu[open] > summary {
+    background: var(--sunken);
+  }
+  .menu-body {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: 0;
+    max-height: calc(100vh - 3.5rem);
+    overflow-y: auto;
+    padding: var(--space-4);
+    background: var(--surface);
+    border-bottom: 1px solid var(--rule);
+    box-shadow: var(--shadow-raised);
+  }
+  .menu-body .sections {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    column-gap: var(--space-5);
+  }
+  .menu-body .sections-heading {
+    grid-column: 1 / -1;
+  }
+  .menu-body .sections ul + .sections-heading {
+    margin-top: var(--space-4);
+  }
+  .menu-body .sections ul {
+    display: contents;
+  }
+  .menu-body .account {
+    position: static;
+    margin: var(--space-4) 0 0;
+    padding-bottom: 0;
+  }
+  .banner {
+    width: calc(100% - 2 * var(--space-4));
+    margin-top: var(--space-4);
   }
   .page {
     padding: var(--space-5) var(--space-4) var(--space-7);
   }
+  .footer {
+    padding: var(--space-4) var(--space-4) var(--space-5);
+  }
+}
 
+@media (max-width: 52rem) {
   /* Add-on rows: name and switch on top, health below, then order controls. */
   .source {
     --led-x: calc(var(--space-3) + 1.25rem + var(--space-2) + 0.5rem);
     grid-template-columns: 1.25rem 1rem minmax(0, 1fr) auto;
     grid-template-areas:
       "order led name     switch"
-      ".     .   health   move"
+      ".     .   health   health"
+      ".     .   move     move"
       ".     .   settings settings";
     column-gap: var(--space-2);
     row-gap: var(--space-1);
@@ -1948,8 +2448,8 @@ progress::-moz-progress-bar {
       "order led name"
       ".     .   health";
   }
-  .source-move {
-    align-self: center;
+  .source-actions {
+    justify-content: flex-start;
     margin: 0;
   }
 }
@@ -2071,5 +2571,635 @@ progress::-moz-progress-bar {
   .setting.is-modified,
   .setting.is-invalid {
     border-left: 3px solid CanvasText;
+  }
+  .energy-track {
+    fill: Canvas;
+    stroke: CanvasText;
+  }
+  .energy-fill {
+    fill: CanvasText;
+  }
+  .energy-reference {
+    stroke: Highlight;
+  }
+}
+
+/* Discovery mix forms use the dashboard's existing controls and spacing. */
+.mix-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 1.25rem;
+}
+.mix-fields > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.mix-fields > label > :is(input, select, textarea) {
+  font-weight: 400;
+}
+.mix-fields .field-help,
+.mix-fields .mix-check {
+  font-weight: 400;
+}
+.mix-fields input:not([type="checkbox"]),
+.mix-fields select,
+.mix-fields textarea {
+  width: 100%;
+}
+.mix-fields .mix-wide {
+  grid-column: 1 / -1;
+}
+.mix-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mix-fields > .mix-check {
+  flex-direction: row;
+}
+.mix-tracks {
+  padding-left: 1.5rem;
+}
+.mix-tracks > li,
+.mix-list > li {
+  margin-block: 0.8rem;
+}
+.mix-tracks p {
+  margin-block: 0.2rem;
+}
+.mix-fields [hidden] {
+  display: none !important;
+}
+
+/* Described playlists: the reference playlists to compare with, and on a request's page
+   the references used, the AI's goal and each song's fit, reason, facts and energy. The
+   energy bar is an SVG beside its own text; its numbers are geometry, not styles. */
+.mix-references {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+}
+.mix-references legend {
+  padding: 0 var(--space-1);
+  font-weight: 600;
+}
+.mix-reference-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: var(--space-3);
+}
+.mix-reference-choices > label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.curation {
+  display: grid;
+  gap: var(--space-1);
+  margin-block: var(--space-4);
+  overflow-wrap: anywhere;
+}
+.curation-refs {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.curation-note {
+  margin-block: var(--space-2);
+  max-width: 64ch;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.curated {
+  margin: var(--space-3) 0 var(--space-4);
+  padding: 0;
+  list-style: none;
+  counter-reset: curated;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+}
+.curated-song {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr) 11rem;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  counter-increment: curated;
+}
+.curated-song + .curated-song {
+  border-top: 1px solid var(--rule);
+}
+.curated-song::before {
+  content: counter(curated) ".";
+  color: var(--muted);
+  text-align: right;
+}
+.curated-main,
+.curated-sound {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.curated-main {
+  overflow-wrap: anywhere;
+}
+.curated-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.curated-facts,
+.curated-sound p {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.energy-bar {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 0.3rem;
+}
+.energy-track {
+  fill: var(--sunken);
+  stroke: var(--rule);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.energy-fill {
+  fill: var(--accent);
+}
+.energy-reference {
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+@media (max-width: 40rem) {
+  .curated-song {
+    grid-template-columns: 1.75rem minmax(0, 1fr);
+  }
+  .curated-sound {
+    grid-column: 2;
+    max-width: 16rem;
+  }
+}
+
+/* 18. Music pages: Collection, Import music, Playlists, Downloads ------------------------
+   Shared by the personal pages only; each page's own layout is in its stylesheet
+   (collection.css, music_imports.css) or below. */
+
+/* A small link back to the page this one belongs to, above the title. */
+.page-back {
+  font-size: var(--text-sm);
+}
+.page-back a {
+  font-weight: 600;
+  text-decoration: none;
+}
+.page-back a:hover {
+  text-decoration: underline;
+}
+.page-title > .page-back + h1 {
+  margin-top: var(--space-1);
+}
+
+/* The playlist pages' tabs: Overview, Describe a playlist, Import a playlist. */
+.subnav {
+  display: flex;
+  gap: var(--space-5);
+  overflow-x: auto;
+  white-space: nowrap;
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.subnav a {
+  margin-bottom: -1px;
+  padding: var(--space-2) 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  text-decoration: none;
+}
+.subnav a:hover {
+  border-bottom-color: var(--rule);
+  color: var(--ink);
+}
+.subnav a[aria-current] {
+  border-bottom-color: var(--accent);
+  color: var(--ink);
+}
+.page > .subnav + * {
+  margin-top: 0;
+}
+
+/* Ways to make a playlist: one tile each, the whole tile is the link. */
+.playlist-ways {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.playlist-ways a {
+  display: grid;
+  align-content: start;
+  gap: var(--space-1);
+  height: 100%;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+.playlist-ways a:hover {
+  border-color: var(--accent);
+}
+.playlist-way-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--accent);
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+.playlist-way-title::after {
+  content: "→";
+  transition: transform 120ms ease-out;
+}
+.playlist-ways a:hover .playlist-way-title::after {
+  transform: translateX(2px);
+}
+
+/* A card holding a form or a list on the playlist and download pages. */
+.playlist-form,
+.music-card {
+  padding: var(--space-4) var(--space-5);
+}
+.rows.playlist-form > * + *,
+.rows.music-card > * + * {
+  border-top: 0;
+  margin-top: var(--space-3);
+}
+.playlist-form .form-actions {
+  margin-top: var(--space-4);
+}
+.playlist-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.playlist-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+}
+.playlist-list > li > a {
+  flex: 1 1 12rem;
+  font-weight: 700;
+}
+.playlist-list > li > span:not(.tag) {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.playlist-list form {
+  margin: 0;
+}
+
+/* Settings that are set once: connection, AI. Open at the top until connected. */
+.playlist-settings-body > .group + .group,
+.playlist-settings-body > .group + .more-settings {
+  margin-top: var(--space-6);
+}
+.playlist-settings > summary .more-changed {
+  overflow-wrap: anywhere;
+}
+.playlist-disconnect {
+  margin-top: var(--space-3);
+}
+.playlist-admin .rows {
+  border-color: var(--warn-rule);
+}
+.playlist-admin .group-meta .tag {
+  white-space: normal;
+}
+
+/* Folded form options (Advanced settings) inside a form, and details folded in a card. */
+.music-card details:not(.confirm) > summary,
+.form-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.music-card details:not(.confirm) > summary::-webkit-details-marker,
+.form-more > summary::-webkit-details-marker {
+  display: none;
+}
+.music-card details:not(.confirm) > summary::before,
+.form-more > summary::before {
+  content: "";
+  border-left: 0.3125rem solid currentColor;
+  border-top: 0.3125rem solid transparent;
+  border-bottom: 0.3125rem solid transparent;
+  transition: transform 120ms ease-out;
+}
+.music-card details:not(.confirm)[open] > summary::before,
+.form-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+.music-card details:not(.confirm)[open] > summary,
+.form-more[open] > summary {
+  margin-bottom: var(--space-3);
+}
+.music-card details:not(.confirm) > :not(summary) + * {
+  margin-top: var(--space-2);
+}
+.mix-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3) var(--space-6);
+}
+.mix-options > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* Downloads: the connection on one line, each prepared playlist as a card. */
+.downloads-connect > input {
+  max-width: 24rem;
+}
+.downloads-batch + .downloads-batch {
+  margin-top: var(--space-3);
+}
+.downloads-batch-head h3 {
+  overflow-wrap: anywhere;
+}
+.music-card > .confirm {
+  margin-top: var(--space-3);
+}
+.playlist-choice {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.playlist-choice label {
+  display: grid;
+  gap: var(--space-1);
+  font-weight: 600;
+}
+
+/* Personal library setup: the review's consequences as a list. */
+.setup-review {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.setup-review li + li {
+  margin-top: var(--space-1);
+}
+
+/* 19. Diagnostics and appearance --------------------------------------------------------
+   The Diagnostics page's summary (a tile for each part, each with a status light and the
+   words that say the same) and its Restart section, and the Appearance page's accent
+   picker's samples (its options and names are in section 7).
+
+   <ul class="health">
+     <li class="health-tile">
+       <a class="health-name" href="#navidrome-title">Navidrome</a>   (stretched: the
+       <p class="health-state"><span class="status">…light and words…</span></p>   tile is
+       <p class="health-detail">12 ms · version 0.55</p>                the link)
+     </li> … </ul>
+   A tile with an error inside is tinted red, one with a warning amber: the stylesheet
+   looks for the light's class, so the page names no tone twice. */
+
+/* Where a link to a section lands. */
+.page .group[id] {
+  scroll-margin-top: var(--space-5);
+}
+.group-head > .inline-about {
+  grid-column: 1 / -1;
+}
+
+.health {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.health-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-group);
+  box-shadow: var(--shadow-card);
+}
+.health-tile:hover {
+  border-color: var(--control);
+}
+.health-tile:has(.status-error) {
+  background: color-mix(in srgb, var(--error-soft) 60%, var(--surface));
+  border-color: var(--error-rule);
+}
+.health-tile:has(.led-cool) {
+  background: color-mix(in srgb, var(--warn-soft) 60%, var(--surface));
+  border-color: var(--warn-rule);
+}
+.health-name {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+/* The whole tile is the link; its focus ring is the tile's. */
+.health-name::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+@supports selector(:has(*)) {
+  .health-tile:has(.health-name:focus-visible) {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  .health-name:focus-visible {
+    outline: none;
+  }
+}
+.health-state {
+  margin-top: var(--space-1);
+}
+.health-state .status {
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+.health-detail {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.health-issues {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* A link inside a tile stays above the tile's own. */
+.health-link {
+  position: relative;
+  z-index: 1;
+}
+
+/* The Restart section: what waits, and the button. */
+.restart-state {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+.restart-waiting {
+  margin: var(--space-1) 0 0;
+  padding: 0 0 0 calc(0.625rem + var(--space-2));
+  color: var(--muted);
+  font-size: var(--text-sm);
+  list-style: none;
+}
+
+/* The accent picker. Each option carries its own palette (data-accent), so everything
+   drawn inside it, the sample too, is in that palette. The sample is shapes only: the
+   name under it is all there is to read. */
+.accent-picker {
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-4);
+}
+.accent-option {
+  box-shadow: var(--shadow-card);
+}
+.accent-option:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.accent-option:has(input:checked) .accent-name {
+  background: var(--accent-soft);
+}
+.accent-option:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+.accent-sample {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1fr);
+  height: 5.5rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+}
+.accent-sample-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem 0.5rem;
+  background: var(--surface);
+  border-right: 1px solid var(--rule);
+}
+.accent-sample-side span {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--rule);
+}
+.accent-sample-side span:first-child {
+  background: var(--accent);
+}
+.accent-sample-page {
+  display: grid;
+  align-content: center;
+  gap: 0.375rem;
+  padding: 0.75rem;
+}
+.accent-sample-title {
+  width: 55%;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--ink);
+}
+.accent-sample-line {
+  width: 85%;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--muted);
+  opacity: 0.45;
+}
+.accent-sample-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 0.125rem;
+}
+.accent-sample-button {
+  width: 2.25rem;
+  height: 1.125rem;
+  border-radius: var(--radius-control);
+  background: var(--accent-fill);
+}
+.accent-sample-switch {
+  width: 1.5rem;
+  height: 0.875rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
+.accent-name {
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+@media (forced-colors: active) {
+  .accent-sample * {
+    forced-color-adjust: none;
+  }
+  .accent-option:has(input:checked) {
+    outline: 2px solid Highlight;
+  }
+}
+
+@media (max-width: 64rem) {
+  .page .group[id] {
+    scroll-margin-top: 4.5rem;
+  }
+}
+@media (max-width: 40rem) {
+  /* Two tiles to a line on a phone: the healthy ones take little room. */
+  .health {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2);
+  }
+  .health-tile {
+    padding: var(--space-3);
   }
 }

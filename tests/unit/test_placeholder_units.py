@@ -10,7 +10,7 @@ from shijhon.catalog.model import CatalogRef, CatalogTrack
 from shijhon.delivery.download_first import DownloadFirst
 from shijhon.placeholders import durable
 from shijhon.placeholders import tags as tagging
-from shijhon.placeholders.engine import _other_suffixes
+from shijhon.placeholders.engine import _beside, _other_suffixes
 from shijhon.placeholders.layout import Layout, LayoutError, safe_name
 from shijhon.placeholders.silence import samples_for, silent_flac
 from shijhon.placeholders.tags import ALBUM_TAGS, mapped
@@ -72,7 +72,7 @@ def test_no_name_leaves_its_folder_or_hides(text: str) -> None:
 
 
 def test_ordinary_names_are_kept() -> None:
-    for name in ("Mr. Jones", "R.E.M.x", "A  B", "été", "St. Elsewhere [Deluxe]", "a" * 80):
+    for name in ("Mr. Lantern", "A.B.C.x", "A  B", "été", "St. Harbor [Deluxe]", "a" * 80):
         assert safe_name(name) == name
     assert safe_name("...And More") == "And More"
     assert safe_name("Wait...") == "Wait"
@@ -184,12 +184,15 @@ def test_directories_made_and_synced(tmp_path: Path) -> None:
     durable.sync_dir(tmp_path / "gone")  # a folder that is gone: nothing
 
 
-def test_only_the_same_song_in_another_format_is_a_stray(tmp_path: Path) -> None:
-    """Putting a placeholder's file right removes the other format of the same song beside
-    it - never another song whose name starts the same."""
-    for name in ("1-01 Mr.flac", "1-01 Mr.m4a", "1-01 Mr. Jones.flac", "1-01 Mr.jpg"):
+def test_only_the_same_song_in_another_format_is_beside_it(tmp_path: Path) -> None:
+    """The files beside a placeholder's: the same name in another audio format - never
+    another song whose name starts the same; one without Shijhon's marker of the track
+    (someone's own file) is never taken for the song, so never removed as a stray."""
+    for name in ("1-01 Mr.flac", "1-01 Mr.m4a", "1-01 Mr. Lantern.flac", "1-01 Mr.jpg"):
         (tmp_path / name).write_bytes(b"x")
-    assert _other_suffixes(tmp_path / "1-01 Mr.flac") == [tmp_path / "1-01 Mr.m4a"]
+    row = {"track_ref": "demo:1"}
+    assert _beside(tmp_path / "1-01 Mr.flac", row) == ([], [tmp_path / "1-01 Mr.m4a"])
+    assert _other_suffixes(tmp_path / "1-01 Mr.flac", row) == []
 
 
 def test_downloads_a_stop_left_behind_are_removed(tmp_path: Path) -> None:

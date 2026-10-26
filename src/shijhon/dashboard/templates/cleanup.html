@@ -11,7 +11,11 @@
 {% block main %}
 <div class="page-head">
   <h1>Cleanup</h1>
-  <p class="page-summary">What Shijhon added to the library, and the cleanup: it takes whole releases with no recorded use out again. A release taken out is added back when one of its songs is used.</p>
+  <p class="page-summary">What Shijhon has added to your library, and taking unused releases out again.</p>
+  <details class="page-about">
+    <summary>How the cleanup works</summary>
+    <p>Once a day, the cleanup looks for whole releases Shijhon added that nobody has used for a while. A dry run only lists them; when it is on, it takes them out of the library. A release taken out comes back when one of its songs is used.</p>
+  </details>
 </div>
 {% if notices %}
 {{ error_notice(notices) }}
@@ -67,14 +71,14 @@
 
 <section class="group" aria-labelledby="library-title">
   <div class="group-head">
-    <h2 id="library-title">In the library</h2>
-    <p class="group-help">Placeholders stand for songs you don't own: silent files the add-ons play for.</p>
+    <h2 id="library-title">Added by Shijhon</h2>
+    <p class="group-help">Placeholders are silent files that stand for songs you don't own; the add-ons supply their audio when they play.</p>
   </div>
   <div class="rows">
     <dl class="readout">
       <div><dt>Catalog albums</dt><dd>{{ overview.catalog.releases|count }} album{{ "s" if overview.catalog.releases != 1 }}, {{ overview.catalog.songs|count }} song{{ "s" if overview.catalog.songs != 1 }}; added when one of their songs was used</dd></div>
       <div><dt>Songs added to your albums</dt><dd>{{ overview.fills.songs|count }} song{{ "s" if overview.fills.songs != 1 }} completing {{ overview.fills.releases|count }} partly owned album{{ "s" if overview.fills.releases != 1 }}</dd></div>
-      <div><dt>Downloaded audio</dt><dd>{{ overview.delivered|count }} song{{ "s" if overview.delivered != 1 }} in place of {{ "its" if overview.delivered == 1 else "their" }} placeholder{% if kept_gb is not none %}, {{ kept_gb|number }} GB{% if limits.delivered_gb %} of at most {{ limits.delivered_gb|number }} GB{% endif %}{% endif %}{% if limits.delivered_days %}; each kept {{ limits.delivered_days|number }} days after its last use{% endif %}</dd></div>
+      <div><dt>Saved audio</dt><dd>{{ overview.delivered|count }} song{{ "s" if overview.delivered != 1 }} in place of {{ "its" if overview.delivered == 1 else "their" }} placeholder{% if kept_gb is not none %}, {{ kept_gb|number }} GB{% if limits.delivered_gb %} of at most {{ limits.delivered_gb|number }} GB{% endif %}{% endif %}{% if limits.delivered_days %}; each kept {{ limits.delivered_days|number }} days after its last use{% endif %}</dd></div>
       <div><dt>Taken out</dt><dd>{{ overview.removed_catalog|count }} catalog album{{ "s" if overview.removed_catalog != 1 }} and the added songs of {{ overview.removed_fills|count }} of your albums, {{ overview.removed_songs|count }} song{{ "s" if overview.removed_songs != 1 }} in all: shown as they were, and added back when used</dd></div>
     </dl>
   </div>
@@ -186,7 +190,7 @@
   <section class="group" aria-labelledby="settings-title">
     <div class="group-head">
       <h2 id="settings-title">Cleanup settings</h2>
-      <p class="group-help">Changes apply from the next check. Switching the cleanup on first shows what it would take out.</p>
+      <p class="group-help">Changes apply from the next check. Before the cleanup is switched on, you see what it would take out.</p>
     </div>
     <div class="rows">
 {% for row in settings %}
@@ -210,8 +214,8 @@
 {% endif %}
   <section class="group" aria-labelledby="downloads-title">
     <div class="group-head">
-      <h2 id="downloads-title">Downloaded audio</h2>
-      <p class="group-help">Songs fetched whole - downloads, and plays that need converting - replace their placeholder for a while; then it comes back.</p>
+      <h2 id="downloads-title">Saved audio</h2>
+      <p class="group-help">Whole songs fetched for app downloads, playlist preparation and plays that need converting replace their silent placeholder for a while, then the placeholder comes back. Streamed songs can be kept the same way.</p>
     </div>
     <div class="rows">
 {% for row in downloads %}
@@ -220,7 +224,7 @@
     </div>
   </section>
   <div class="form-actions">
-    <button class="btn-primary">Save downloaded audio limits</button>
+    <button class="btn-primary">Save saved audio settings</button>
 {{ form_status("delivery") }}
   </div>
 </form>

@@ -55,6 +55,11 @@ addon = "My add-on"       # its name, as on the Add-ons page or in [[addons]]
 - It has less to go on than an adapter's catalog:
   [known-issues.md](known-issues.md#the-catalog-of-an-add-on).
 
+Playlist imports also search the catalogs of other enabled add-ons that have one, for
+entries that neither your library nor the configured catalog has
+([playlist-imports.md](playlist-imports.md#add-on-catalogs)). This does not change the
+configured catalog and needs no restart.
+
 ## A catalog that answers slowly
 
 A search, the page of an artist in your library and an artist's top songs wait up to 8

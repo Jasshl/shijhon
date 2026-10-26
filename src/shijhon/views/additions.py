@@ -19,10 +19,14 @@ De-duplication against the library: catalog items that are in the library (commi
 filled), albums that are editions of a library album in the answer (the edition rules of
 ``catalog/editions.py``) - unless no release completes that album (in review, without a
 match, kept as it is: the catalog's editions show beside it) -, songs with an owned song's
-ISRC or with its title, artist and length, and artists with an owned artist's name. The
-catalog's search and artist answers are cached and coalesced (``catalog/cache.py``), so
-search-as-you-type does not become per-keystroke catalog traffic. Catalog items credited
-to a library artist link to that artist.
+ISRC or with its title, artist and length, and artists with an owned artist's name. A
+search lists the caller's selected songs and albums only (``collection/visibility.py``):
+a catalog song or album in the library whose library copy that selection hides (a
+placeholder not enabled) is kept, and stands for that copy as the copy would - opening
+or playing it uses the library's song or album; the catalog's other versions and
+editions of it stay out. The catalog's search and artist answers are cached and coalesced
+(``catalog/cache.py``), so search-as-you-type does not become per-keystroke catalog
+traffic. Catalog items credited to a library artist link to that artist.
 
 Every ``search3`` is logged without its text: its length, the requested counts and
 offsets, and what the catalog did. A client sending many different searches in a short
@@ -90,11 +94,11 @@ from shijhon.matching.normalize import (
 )
 from shijhon.navidrome.client import NavidromeError, NavidromeService
 from shijhon.proxy.app import Forward, Handler, HandlerResult, RequestContext
-from shijhon.proxy.params import RestCall
+from shijhon.proxy.params import RestCall, folders_read
 from shijhon.proxy.responses import subsonic_ok
 from shijhon.proxy.upstream import Upstream
 from shijhon.store import Store
-from shijhon.views.answers import LibraryAnswer, accepts_gzip, library_answer
+from shijhon.views.answers import LibraryAnswer, Shown, accepts_gzip, library_answer
 from shijhon.views.bursts import Burst, Bursts, Client
 from shijhon.views.covers import CoverPrefetch
 from shijhon.views.discographies import Discographies
@@ -399,7 +403,9 @@ class CatalogAdditions:
             return answer.reply(compress=compress)
         document, library_results = found
         try:
-            additions = await self._search_additions(term, wanted, library_results, results[0])
+            additions = await self._search_additions(
+                term, wanted, library_results, results[0], answer.shown
+            )
         except Exception as exc:  # Navidrome's answer, rather than asking it again
             log.warning("search additions failed: %s", type(exc).__name__)
             return answer.reply(compress=compress)
@@ -487,7 +493,10 @@ class CatalogAdditions:
         wanted: dict[str, int],
         library: dict[str, Any],
         found: SearchResults,
+        shown: Shown | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
+        """``shown``: what the caller's selection shows, when ``library`` is a selected
+        search (``LibraryAnswer.shown``)."""
         query = fold(term)
         library_artists = await self._library_entries()
         artists_index = {name: str(entry["id"]) for name, entry in library_artists.items()}
@@ -522,11 +531,11 @@ class CatalogAdditions:
             known = [library_album(a) for a in owned_albums if a.get("id") not in open_]
             # The albums of owned songs, unless listed (and typed) among the albums above.
             known += [album_of_song(s) for s in of_songs if s.get("albumId") not in open_]
-            albums = await self._missing_releases(found.albums, known)
+            albums = await self._missing_releases(found.albums, known, shown)
             albums.sort(key=lambda r: _album_rank(r, query))
             shown_albums = albums[:room]
         if (room := wanted.get("song", 0) - len(owned_songs)) > 0:
-            songs = await self._missing_songs(found.songs, owned_songs)
+            songs = await self._missing_songs(found.songs, owned_songs, shown)
             songs.sort(key=lambda t: query not in artist_names(t.artist))
             shown_songs = songs[:room]
         shown_albums, shown_songs = await self._with_artist_refs(
@@ -1244,52 +1253,128 @@ class CatalogAdditions:
         return await self.unsettled(str(a) for a in album_ids if a)
 
     async def _missing_releases(
-        self, releases: Iterable[CatalogRelease], library: list[LibraryAlbum]
+        self,
+        releases: Iterable[CatalogRelease],
+        library: list[LibraryAlbum],
+        shown: Shown | None = None,
     ) -> list[CatalogRelease]:
-        """One card per album the library does not have (edition rules)."""
+        """One card per album the library does not have (edition rules). A release in the
+        library whose album the caller's selection hides (``shown``: a selected search)
+        keeps its card: it stands for that album - unless the answer shows an edition of
+        it - and the catalog's other editions of it stay out, as for an album shown."""
         candidates = list(releases)
-        refs = [str(r.ref) for r in candidates]
-        committed = await self._known("SELECT ref AS k FROM releases", "ref", refs)
+        committed = await self._committed([str(r.ref) for r in candidates])
         known = [*library, *(as_library(r) for r in candidates if str(r.ref) in committed)]
-        return dedupe_editions(
+        kept = dedupe_editions(
             [r for r in candidates if str(r.ref) not in committed], known, twins=self.twins
         )
+        hidden = await self._hidden(shown, "album", committed)
+        if not hidden:
+            return kept
+        standing: list[CatalogRelease] = []
+        stood: set[str] = set()  # one card per library album
+        for release in candidates:
+            if str(release.ref) in hidden and not stood & set(committed[str(release.ref)]):
+                stood |= set(committed[str(release.ref)])
+                standing.append(release)
+        return _placed(candidates, dedupe_editions(standing, library, twins=self.twins), kept)
 
     async def _missing_songs(
-        self, tracks: Iterable[CatalogTrack], owned: list[dict[str, Any]]
+        self,
+        tracks: Iterable[CatalogTrack],
+        owned: list[dict[str, Any]],
+        shown: Shown | None = None,
     ) -> list[CatalogTrack]:
+        """The songs the library does not have: not linked to a library song, without an
+        owned song's ISRC or its title, artist and length; one version of a recording,
+        clean/explicit twins merged. A song linked to a library song the caller's
+        selection hides (``shown``: a selected search) is kept: it stands for that song -
+        unless the answer shows another copy of it - and the catalog's other versions of
+        it stay out, as for a song shown."""
         candidates = list(tracks)
-        linked = await self._known(
-            "SELECT track_ref AS k FROM track_links", "track_ref", [str(t.ref) for t in candidates]
-        )
-        isrcs = {i for s in owned for i in _isrcs(s)}
+        linked = await self._linked([str(t.ref) for t in candidates])
+        hidden = await self._hidden(shown, "song", linked)
+        standing = [t for t in candidates if str(t.ref) in hidden]
+        copies = [*owned, *(_copy_of(t) for t in standing)]
+        isrcs = {i for s in copies for i in _isrcs(s)}
         kept: list[CatalogTrack] = []
         for track in candidates:
             if str(track.ref) in linked or (track.isrc and track.isrc in isrcs):
                 continue
-            if any(_same_song(track, song) for song in owned):
+            if any(_same_song(track, song) for song in copies):
                 continue
             if track.isrc:
                 isrcs.add(track.isrc)  # one version of a recording
             if all(t.ref != track.ref for t in kept):
                 kept.append(track)
-        return merge_twins(kept, self.twins)  # clean/explicit twins
+        merged = merge_twins(kept, self.twins)  # clean/explicit twins
+        if not standing:
+            return merged
+        owned_isrcs = {i for s in owned for i in _isrcs(s)}
+        stand_ins: list[CatalogTrack] = []
+        stood: set[str] = set()  # the library songs stood for
+        recordings = set(owned_isrcs)
+        for track in standing:
+            if (track.isrc and track.isrc in owned_isrcs) or any(
+                _same_song(track, song) for song in owned
+            ):
+                continue  # the answer shows another copy of it
+            copies_of = set(linked[str(track.ref)])
+            if copies_of & stood or (track.isrc and track.isrc in recordings):
+                continue  # one entry per library song, and per recording
+            stood |= copies_of
+            if track.isrc:
+                recordings.add(track.isrc)
+            stand_ins.append(track)
+        # Clean/explicit twins as configured, as for the other catalog songs.
+        stand_ins = merge_twins(stand_ins, self.twins)
+        return _placed(candidates, stand_ins, merged)
 
-    async def _known(self, query: str, column: str, values: list[str]) -> set[str]:
-        found: set[str] = set()
+    async def _hidden(
+        self, shown: Shown | None, kind: str, copies: Mapping[str, tuple[str, ...]]
+    ) -> set[str]:
+        """The catalog items among ``copies`` (each with its library songs or albums) none
+        of whose library copies the caller's selection shows. None without a selection
+        (``shown``), or when the selection cannot be told: those items are the library's
+        and stay out, as before."""
+        if shown is None or not copies:
+            return set()
+        try:
+            visible = await shown(kind, sorted({c for ids in copies.values() for c in ids}))
+        except Exception as exc:
+            log.info("search: the selection's %ss not told (%s)", kind, type(exc).__name__)
+            return set()
+        return {item for item, ids in copies.items() if ids and visible.isdisjoint(ids)}
+
+    async def _committed(self, refs: list[str]) -> dict[str, tuple[str, ...]]:
+        """The releases among these the library has, with their albums: its own, and the
+        owned album it completes."""
+        rows = await self._rows(
+            "SELECT ref AS k, album_id AS a, owned_album_id AS b FROM releases", "ref", refs
+        )
+        return {str(r["k"]): tuple(str(v) for v in (r["a"], r["b"]) if v) for r in rows}
+
+    async def _linked(self, refs: list[str]) -> dict[str, tuple[str, ...]]:
+        """The catalog songs among these linked to a library song, with that song."""
+        rows = await self._rows(
+            "SELECT track_ref AS k, song_id AS a FROM track_links", "track_ref", refs
+        )
+        return {str(r["k"]): (str(r["a"]),) for r in rows}
+
+    async def _rows(self, query: str, column: str, values: list[str]) -> list[Any]:
+        found: list[Any] = []
         for start in range(0, len(values), 500):
             chunk = values[start : start + 500]
             if not chunk:
                 continue
             marks = ",".join("?" * len(chunk))
-            rows = await self.store.fetchall(f"{query} WHERE {column} IN ({marks})", chunk)
-            found |= {str(row["k"]) for row in rows}
+            found += await self.store.fetchall(f"{query} WHERE {column} IN ({marks})", chunk)
         return found
 
     # --- Navidrome ---------------------------------------------------------------------------
 
     def _this_library(self, call: RestCall) -> bool:
-        folders = call.getall("musicFolderId")
+        folders = folders_read(call)  # (as Navidrome reads them)
         return not folders or str(self.library_id) in folders
 
     async def _navidrome(self, call: RestCall) -> LibraryAnswer | None:
@@ -1298,6 +1383,31 @@ class CatalogAdditions:
 
 
 # --- helpers ------------------------------------------------------------------------------
+
+
+def _copy_of(track: CatalogTrack) -> dict[str, Any]:
+    """The library copy a catalog song stands for, as an answer would show it (its
+    placeholder's tags), for the rules that compare catalog songs with the library's."""
+    return {
+        "title": track.title,
+        "artist": track.artist,
+        "duration": track.seconds,
+        "isrc": [track.isrc] if track.isrc else [],
+    }
+
+
+def _placed[T](candidates: list[T], standing: list[T], others: list[T]) -> list[T]:
+    """``others`` in their order, each of ``standing`` before the first of them that came
+    after it among the ``candidates``."""
+    order = {id(item): n for n, item in enumerate(candidates)}
+    placed = list(others)
+    for item in standing:
+        at = next(
+            (n for n, other in enumerate(placed) if order[id(other)] > order[id(item)]),
+            len(placed),
+        )
+        placed.insert(at, item)
+    return placed
 
 
 def _printable(text: str) -> str:

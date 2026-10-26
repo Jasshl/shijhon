@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set title = "Audio quality" %}
+{% block main %}
+<div class="page-head">
+  <h1>Audio quality</h1>
+  <p class="page-summary">Choose the lowest quality you want to hear. A song whose file is below it plays from the add-ons when they have it, and files below it don't play for catalog songs. Other accounts choose their own.</p>
+</div>
+{% if saved_now %}
+<div class="notice notice-ok" role="status"><p>{{ saved_now }}</p></div>
+{% endif %}
+{% if not available %}
+<div class="notice notice-info" role="status"><p>Audio quality can be chosen once Shijhon has started.</p></div>
+{% else %}
+<form method="post" action="{{ prefix }}/quality">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <section class="group" aria-labelledby="minimum-title">
+    <div class="group-head">
+      <h2 id="minimum-title">Lowest quality</h2>
+      <p class="group-help">A bitrate is for compressed audio (MP3, AAC, Opus…); lossless audio (FLAC, ALAC…) is accepted at any bitrate, except that Lossless only accepts nothing else. Every choice but Any also needs 44.1 kHz. When the add-ons don't have a song, or only in a lower quality, its file plays.</p>
+      <p class="group-meta">{% if own %}Your choice: {{ words[chosen] }}{% else %}You use the server's default: {{ default_words }}{% endif %}</p>
+    </div>
+    <div class="rows music-card">
+      <div class="row">
+        <fieldset class="segmented">
+          <legend class="visually-hidden">Lowest quality (a bitrate: compressed audio; lossless audio at any bitrate)</legend>
+{% for value, label in choices %}
+          <label><input type="radio" name="minimum" value="{{ value }}"{% if value == chosen %} checked{% endif %}><span>{{ label }}</span></label>
+{% endfor %}
+        </fieldset>
+      </div>
+    </div>
+  </section>
+  <section class="group" aria-labelledby="upgrade-title">
+    <div class="group-head">
+      <h2 id="upgrade-title">Your imported songs</h2>
+      <p class="group-help">When you play one of your own imported songs whose file is below your lowest quality and the add-ons have it at or above it, keep the add-ons' audio as that song's file. It stays the same song, with its favorites, plays and playlist entries, in whatever format the add-ons have it. Your original file is kept privately. Songs other people imported and songs at or above your lowest quality are never changed.</p>
+    </div>
+    <div class="rows music-card">
+      <div class="row">
+        <label class="mix-check"><input type="checkbox" name="upgrade" value="on"{% if upgrades %} checked{% endif %}><span>Upgrade my imported songs from the add-ons</span></label>
+      </div>
+    </div>
+  </section>
+  <div class="form-actions">
+    <button class="btn-primary">Save quality</button>
+{% if own %}
+    <button name="reset" value="1">Use the server's default</button>
+{% endif %}
+  </div>
+</form>
+{% endif %}
+{% endblock %}

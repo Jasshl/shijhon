@@ -10,6 +10,7 @@ album tags and the exact title are unchanged.
 
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from collections.abc import Iterator
@@ -284,14 +285,17 @@ async def test_interrupted_swap_is_reconciled(
     song_id = world.songs[5]
     async with engine_for(navidrome, world.state) as parts:
         row = await parts.store.fetchone(
-            "SELECT path FROM placeholders WHERE song_id = ?", [song_id]
+            "SELECT path, tags FROM placeholders WHERE song_id = ?", [song_id]
         )
         assert row is not None
         placeholder = parts.layout.absolute(row["path"])
-        # A crash between the two moves of a swap: silent file in staging, delivered in place.
+        # A crash between the two moves of a swap: silent file in staging, delivered in place
+        # (tagged with the song's marker, as the swap's staged file is).
         parts.layout.ensure()
         placeholder.rename(parts.layout.staging / f"backup-{song_id}.flac")
-        shutil.copyfile(delivered(tmp_path, "m4a", "crash"), placeholder.with_suffix(".m4a"))
+        crashed = placeholder.with_suffix(".m4a")
+        shutil.copyfile(delivered(tmp_path, "m4a", "crash"), crashed)
+        tagging.write_delivered(crashed, json.loads(row["tags"]))
         new_path = await parts.engine.replace_with_delivered(
             song_id, delivered(tmp_path, "flac", "after")
         )

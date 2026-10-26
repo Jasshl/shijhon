@@ -173,6 +173,15 @@ If it fails, start nothing: an unreadable archive leaves the volume as it was, a
 while unpacking leaves part of it. Into an installation with another `PUID:PGID`, add
 `&& chown -R <PUID>:<PGID> /data` at the end of the quoted command.
 
+Restore Navidrome's database from the same backup too, so its song IDs and playlists
+match Shijhon's records. With [music imports](../music-imports.md), run the commands
+with both Compose files (`-f compose.yaml -f compose.imports.yaml`) and restore the
+imports directory's contents from the same backup into the existing directory. Do not
+delete, recreate or move the directory itself: Shijhon then refuses it ("The retained
+import root changed").
+Restore an older backup only if nothing was played, added, imported or published since
+it was taken; otherwise later work is lost or no longer matches the files.
+
 ## Undoing automatic fills
 
 `shijhon fills-undo` lists the automatic fills the fill policy would not make now; with

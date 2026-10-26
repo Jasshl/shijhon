@@ -50,6 +50,7 @@ import anyio
 import anyio.to_thread
 
 from shijhon.catalog.model import release_from_data
+from shijhon.collection.retention import KEPT_RELEASE
 from shijhon.navidrome.export import Snapshot
 from shijhon.navidrome.usage import (
     NO_EXPORT,
@@ -194,6 +195,9 @@ def listing(
             found.next_due = due if found.next_due is None else min(found.next_due, due)
             continue
         candidate.kept = used_here(rows) + there + past(recorded.get(candidate.ref, ()), there)
+        candidate.kept.extend(
+            why for sql, why in KEPT_RELEASE if shijhon.execute(sql, [candidate.ref]).fetchone()
+        )
         found.due.append(candidate)
     found.refused = foreign(navidrome, found.unused)
     return found
@@ -682,6 +686,9 @@ class Cleanup:
 
         async def check(rows: list[Any], gone: bool) -> list[str]:
             """Checked again under the release's locks, and once its files are gone."""
+            for sql, kept in KEPT_RELEASE:
+                if await self.engine.store.fetchone(sql, [candidate.ref]):
+                    return [kept]
             candidate.songs = [str(r["song_id"]) for r in rows]
             candidate.paths = recorded_paths(rows)
             if why := used_here(rows) or past(await self.engine.seen_uses(candidate.ref), ()):

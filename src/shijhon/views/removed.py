@@ -278,9 +278,14 @@ def _as(call: RestCall, name: str, params: dict[str, str]) -> RestCall:
     view = b".view" if call.raw_path.endswith(b".view") else b""
     changed = call.rewritten(lambda k, v: params.get(k))
     method = "GET" if call.http_method == "HEAD" else call.http_method
-    return RestCall.build(
+    asked = RestCall.build(
         name, method, b"/rest/" + name.encode() + view, changed.query, changed.headers, changed.body
     )
+    # Only called after recognizing a local removed record and authenticating its
+    # current caller. These direct discovery reads must use fresh native answers,
+    # including each getSong; a selected cache cannot replace the strict snapshot.
+    asked.catalog_discovery = True
+    return asked
 
 
 def _ok(xml: str) -> bool:

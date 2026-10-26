@@ -14,6 +14,10 @@ import anyio
 import anyio.abc
 import anyio.to_thread
 
+from shijhon.access import AccessService, Principal
+from shijhon.agents.app import Agents
+from shijhon.audiomuse import AudioMuse, AudioMuseClient
+from shijhon.catalog.addon import AddonCatalogs
 from shijhon.catalog.artwork import ArtworkCache, ArtworkIndex
 from shijhon.catalog.base import Catalog
 from shijhon.catalog.base import scope as catalog_scope
@@ -22,6 +26,17 @@ from shijhon.catalog.model import Twins
 from shijhon.catalog.paced import PacedCatalog
 from shijhon.catalog.setup import build_catalog
 from shijhon.cleanup import Cleanup, OldIds
+from shijhon.collection.contracts import CollectionError
+from shijhon.collection.gates import MusicGate
+from shijhon.collection.history import History
+from shijhon.collection.native import NativeVisibility
+from shijhon.collection.origins import Origins
+from shijhon.collection.query_index import QueryIndex
+from shijhon.collection.reader import CallerLibrary, SourceRefresh
+from shijhon.collection.reasons import Reasons
+from shijhon.collection.service import Collection
+from shijhon.collection.visibility import Visibility
+from shijhon.collection.written import Written
 from shijhon.config import Settings
 from shijhon.dashboard.app import PATH as DASHBOARD_PATH
 from shijhon.dashboard.app import Dashboard, printable
@@ -33,24 +48,35 @@ from shijhon.dashboard.saved import (
     hidden_by_environment,
     locked_keys,
     out_of_place,
+    token_withheld,
     withheld,
 )
 from shijhon.dashboard.sections import fields_of
 from shijhon.delivery.ahead import AheadGate
+from shijhon.delivery.bulk import BulkAcquisition
 from shijhon.delivery.dash import Dash, ffmpeg_path
 from shijhon.delivery.download_first import DownloadFirst
 from shijhon.delivery.expiry import DeliveredAudio
 from shijhon.delivery.intercept import Interceptor
+from shijhon.delivery.lengths import OnePiece
 from shijhon.delivery.limits import UserLimits
 from shijhon.delivery.listening import Listening
-from shijhon.delivery.netpolicy import Resolver, system_resolver
+from shijhon.delivery.netpolicy import Reach, Resolver, system_resolver
 from shijhon.delivery.playback import Deliverer, PlaybackSettings
+from shijhon.delivery.quality_gate import Minimums, QualityGate
+from shijhon.delivery.retain import Retention
 from shijhon.delivery.sources import SourceRegistry
 from shijhon.delivery.warm import WarmAhead
+from shijhon.downloads import Preparation
 from shijhon.fill.fills import FillPolicy, Fills
 from shijhon.fill.library_pass import LibraryPass
 from shijhon.fill.refresh import Refresh
 from shijhon.matching.matcher import Matcher
+from shijhon.music_imports import AssetResolver, ImportError, ImportLimits, MusicImports
+from shijhon.music_imports.catalog_audio import CatalogSongAudio
+from shijhon.music_imports.catalog_route import CatalogRoute
+from shijhon.music_imports.removal import ImportRemovals
+from shijhon.music_imports.upgrade import AfterPlay
 from shijhon.navidrome.checks import PlaceholderWrites, StartupChecks
 from shijhon.navidrome.client import NavidromeService
 from shijhon.navidrome.scans import ScanCoordinator
@@ -59,20 +85,27 @@ from shijhon.placeholders.backing import OwnedRecordings
 from shijhon.placeholders.engine import PlaceholderEngine
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.silence import SilenceMaker
+from shijhon.playlists.model import PlaylistError
+from shijhon.playlists.service import Playlists
 from shijhon.proxy.app import Handler, ProxyApp
 from shijhon.proxy.auth import CredentialChecker
 from shijhon.proxy.forwarding import Forwarding, learn_user_header
+from shijhon.proxy.params import RestCall
 from shijhon.proxy.upstream import Receive, Scope, Send, Upstream
+from shijhon.quality import Minimum
 from shijhon.store import Store
 from shijhon.store.writer import WriterLock
 from shijhon.views.additions import CatalogAdditions
 from shijhon.views.bursts import Bursts
 from shijhon.views.catalog_ids import CatalogIds
+from shijhon.views.collection_requests import CollectionRequests, CollectionRestorer
 from shijhon.views.commits import COMMITS, Commits
 from shijhon.views.complete import LISTS, CompleteAlbums
 from shijhon.views.covers import CoverPrefetch, CoverSizes
 from shijhon.views.discographies import Discographies
 from shijhon.views.library_artists import LibraryArtists
+from shijhon.views.native_collection_requests import NativeCollectionRequests
+from shijhon.views.real_audio import RealAudio, RealAudioAccounts
 from shijhon.views.removed import RemovedViews
 from shijhon.views.reports import REPORTS, Reports
 from shijhon.views.shown import ShownArtists
@@ -108,6 +141,16 @@ class Services:
     cleanup: Cleanup | None = None  # unused releases taken out again
     old_ids: OldIds | None = None  # ... and added back by a use of their old IDs
     removed: RemovedViews | None = None  # ... whose views write nothing
+    playlists: Playlists | None = None
+    downloads: Preparation | None = None
+    collection: Collection | None = None
+    collection_refresh: SourceRefresh | None = None
+    reasons: Reasons | None = None
+    written: Written | None = None
+    music_imports: MusicImports | None = None
+    music_import_removals: ImportRemovals | None = None
+    music_imports_problem: str = ""
+    quality: Minimums | None = None  # each person's minimum audio quality
 
 
 class ShijhonApp:
@@ -148,7 +191,8 @@ class ShijhonApp:
             forwarding=self.forwarding,
         )
         self.services: Services | None = None
-        self.dashboard = Dashboard(self, resolver=resolver)
+        self.agents: Agents | None = None
+        self.dashboard: Dashboard = Dashboard(self, resolver=resolver)
         if settings.server.dashboard:
             self.proxy.mounts[DASHBOARD_PATH] = self.dashboard
         self.loop: asyncio.AbstractEventLoop | None = None
@@ -357,6 +401,14 @@ class ShijhonApp:
             downloads_per_hour=delivery.user_downloads_per_hour,
             downloads_burst=delivery.user_download_burst,
         )
+        bulk = BulkAcquisition(
+            deliverer,
+            downloads=delivery.bulk_downloads,
+            source_downloads=delivery.addon_downloads,
+            preparations=delivery.addon_preparations,
+            users=delivery.user_downloads,
+        )
+        self._opened.append(bulk.aclose)
         download_first = DownloadFirst(
             deliverer,
             engine,
@@ -365,12 +417,26 @@ class ShijhonApp:
             timeout_seconds=delivery.download_timeout_seconds,
             expiry=expiry,
             limits=limits,
+            bulk=bulk,
         )
         # Downloads a stop left behind (before any request: none is running).
         left_over = await anyio.to_thread.run_sync(download_first.clear_left_over)
         if left_over:
             log.info("startup: %d download(s) a stop left behind removed", left_over)
+        # Audio streamed in full replaces its placeholder (when the setting is on).
+        retention = Retention(
+            download_first.keep_streamed,
+            download_first.work_dir,
+            enabled=delivery.keep_streamed_audio,
+            max_bytes=download_first.max_bytes,
+        )
+        retention.spawn = self.try_spawn
+        deliverer.retention = retention
+        dash.completed = retention.dash_completed
+        self.spawn(retention.run)
         self.spawn(expiry.run)
+        # Delivered audio from before whose length Navidrome reads as zero: in one piece.
+        self.spawn(OnePiece(store, download_first).run)
         # (The add-ons too: a catalog may be one of theirs.)
         inner = self._catalog or build_catalog(
             settings.catalog, resolver=self.resolver, addons=sources
@@ -419,6 +485,16 @@ class ShijhonApp:
             # A fetch ahead waits for its turn while its routing still fits the wait cap.
             wait_seconds=ahead_wait(delivery.budget_seconds, delivery.max_wait_seconds),
         )
+        # Each person's minimum audio quality: files below it play from the add-ons and stand
+        # in for no catalog song (never for an account that gets real audio only).
+        minimums = Minimums(store, navidrome, default=delivery.quality_default)
+        quality = QualityGate(
+            minimums,
+            navidrome,
+            library_id=settings.navidrome.library_id,
+            exempt=RealAudioAccounts(settings.placeholders.real_audio_accounts).named,
+        )
+        download_first.stands_in = quality.stands_in
         interceptor = Interceptor(
             store,
             deliverer,
@@ -429,6 +505,7 @@ class ShijhonApp:
             ahead=ahead,
             recordings=recordings,
             limits=limits,
+            quality=quality,
         )
         self.proxy.handlers.update(interceptor.handlers())
         self.proxy.path_interceptors["/share/"] = interceptor.share
@@ -644,7 +721,261 @@ class ShijhonApp:
             old_ids,
             removed,
         )
+        self.services.quality = minimums
+        # Imports also ask the catalogs of the add-ons, as the Add-ons page has them now.
+        addon_catalogs = AddonCatalogs(
+            sources,
+            skip=catalog.key if catalog is not None else None,
+            timeout=settings.catalog.timeout_seconds,
+            ttl=settings.catalog.cache_seconds,
+            resolver=self.resolver,
+        )
+        self._opened.append(addon_catalogs.aclose)
+        playlists = Playlists(
+            store, navidrome, catalog, commits, settings.playlists, addons=addon_catalogs
+        )
+        self.services.playlists = playlists
+        self._opened.append(playlists.aclose)
+        token_held = token_withheld(self.configured, values, locked=self.locked)
+        if token_held:
+            log.warning(
+                "sound analysis: the token was entered for another address and is not used;"
+                " enter it again on the Sound analysis page"
+            )
+        sound = self._sound(settings, store, token_held=token_held)
+        if sound is not None:
+            self._opened.append(sound.aclose)
+            playlists.sound = sound
+            self.spawn(sound.run)  # (its first look comes after a delay: startup is not held)
+        caller_library = CallerLibrary(playlists)
+        playlists.imports.library_reader = caller_library
+        self._opened.append(caller_library.aclose)
+        # Make the historical baseline explicit, once. Personal ownership is sticky:
+        # disabling uploads or losing the writable mount never restores shared originals.
+        library_id = str(settings.navidrome.library_id)
+        if (
+            await store.fetchone(
+                "SELECT 1 FROM collection_library_policy WHERE library_id=?", [library_id]
+            )
+            is None
+        ):
+            await Origins(store).initialize_legacy(library_id)
+        history = History(store)
+        collection_requests = CollectionRequests(commits, self.upstream, history)
+        commits.requested = collection_requests
+        # Accepted actions kept to record (large ones, preparations, favorites read).
+        self.spawn(collection_requests.run)
+        playlists.published = collection_requests.published
+        # Favorites and imported playlists bring whole albums into each account's Original
+        # imported library; its recorded activity into its Shijhon library.
+        reasons = Reasons(store, library_id, self.upstream, self.try_spawn)
+        self.services.reasons = reasons
+        collection_requests.reasons = reasons
+        reasons.learned = collection_requests.notify
+        playlists.imported = reasons.imported
+        collection = Collection(
+            store,
+            caller_library,
+            managed_folder=settings.placeholders.folder,
+            restore=CollectionRestorer(commits, caller_library, history),
+        )
+        self.services.collection = collection
+        collection.index.asset_lookup = AssetResolver(
+            store,
+            library_id=library_id,
+            library_path=settings.navidrome.library_path,
+            imports_folder=settings.music_imports.folder,
+            managed_folder=settings.placeholders.folder,
+        )
+        if settings.music_imports.enabled:
+
+            async def import_minimum(owner: str) -> Minimum:
+                return await minimums.minimum_for(user_id=owner)
+
+            # An import album below its person's minimum quality: the catalog's version.
+            versions = (
+                CatalogRoute(Matcher(catalog, twins=twins), commits)
+                if catalog is not None
+                else None
+            )
+
+            async def write_gate() -> None:
+                if await writes.refused(fresh=True):
+                    raise ImportError(
+                        "identity",
+                        "Navidrome must keep missing files before imports "
+                        "can be removed, restored or upgraded.",
+                    )
+
+            imports = MusicImports(
+                store,
+                caller_library,
+                library_id=library_id,
+                library_path=settings.navidrome.library_path,
+                imports_folder=settings.music_imports.folder,
+                managed_folder=settings.placeholders.folder,
+                limits=ImportLimits(
+                    **settings.music_imports.model_dump(exclude={"enabled", "folder"})
+                ),
+                scan=scans.scan,
+                native_lookup=caller_library.imported_file,
+                refresh=collection.refresh,
+                native_song=caller_library.song,
+                artwork=caller_library.artwork,
+                minimum=import_minimum,
+                catalog=versions,
+                catalog_audio=CatalogSongAudio(engine),
+                write_gate=write_gate,
+                forget=quality.forget,
+            )
+            self._opened.append(imports.aclose)
+            try:
+                await imports.initialize()
+            except (ImportError, OSError):
+                self.services.music_imports_problem = (
+                    "The dedicated music-import folder is unavailable. Ask the administrator "
+                    "to check its mount and permissions."
+                )
+                log.warning("music imports unavailable: check the dedicated mount and permissions")
+            else:
+                self.services.music_imports = imports
+                self.spawn(imports.run)
+                interceptor.upgrade_after = AfterPlay(
+                    imports.upgrades,
+                    minimums,
+                    download_first.fetch,
+                    quality.forget,
+                    self.try_spawn,
+                )
+
+                async def removal_admin(owner: str) -> bool:
+                    connection = await playlists.connection(owner)
+                    return (await playlists.client.principal(connection)).is_admin
+
+                removals = ImportRemovals(
+                    imports,
+                    usage=configured(
+                        settings.navidrome.usage_export_path, settings.navidrome.database_path
+                    ),
+                    gate=write_gate,
+                    administrator=removal_admin,
+                    native_absent=caller_library.imported_file_absent,
+                )
+                self.services.music_import_removals = removals
+                self.spawn(removals.run)
+
+        async def library_context(owner: str, limit: int) -> list[dict[str, str]]:
+            try:
+                return await collection.context_names(
+                    owner, str(settings.navidrome.library_id), limit=limit
+                )
+            except CollectionError as exc:
+                raise PlaylistError(str(exc)) from None
+
+        playlists.library_context = library_context
+        self.services.collection_refresh = SourceRefresh(
+            caller_library, collection.refresh, self.try_spawn
+        )
+        query_index = QueryIndex(
+            settings.state_dir / "collection-queries" / "native.sqlite3",
+            settings.database_path,
+            self.spawn,
+        )
+        self._opened.append(query_index.close)
+        await query_index.open()
+        access = AccessService(navidrome)
+        visibility = Visibility(
+            self.upstream,
+            self.checker,
+            access,
+            collection,
+            query_index,
+            token_for=caller_library.token_for,
+            artist_participations=settings.navidrome.artist_participations,
+            complete_albums=settings.fill.complete_lists,
+        )
+        # Songs Shijhon wrote since the last full refresh join the library index from apps'
+        # own requests: apps never start that refresh (it needs a native sign-in).
+        written = Written(
+            store,
+            collection.index,
+            library_id,
+            self.upstream,
+            self.try_spawn,
+            query_index=query_index,
+        )
+        self.services.written = written
+
+        async def learn(principal: Principal, call: RestCall) -> None:
+            await reasons.due(principal, call)
+            await written.due(principal, call)
+
+        visibility.learn = learn
+        visibility.attach(self.proxy)
+        source_refresh = self.services.collection_refresh
+
+        async def native_verified(principal: Principal, token: str) -> None:
+            """A verified native-website request: the library index's refresh when due,
+            and the account's favorites, read with its own native sign-in."""
+            await source_refresh.verified(principal, token)
+            owner = principal.user_id
+            if caller_library.has_bearer(owner):
+                await reasons.due_with(owner, lambda: caller_library.starred(owner))
+
+        NativeVisibility(visibility, verified=native_verified).attach(self.proxy)
+        NativeCollectionRequests(collection_requests, caller_library).attach(self.proxy)
+        self.proxy.music_gate = MusicGate(access, settings.navidrome.library_id)
+        # Accounts that get real audio only (an analyzer's): last, around every handler.
+        real_audio = RealAudioAccounts(settings.placeholders.real_audio_accounts)
+        if real_audio:
+            RealAudio(
+                real_audio,
+                store,
+                self.checker,
+                interceptor,
+                engine,
+                visibility,
+                self.upstream,
+                library_id=library_id,
+            ).attach(self.proxy)
+        downloads = Preparation(store, navidrome, download_first, playlists=playlists)
+        # Audio prepared on the Downloads page brings its albums into the Shijhon library.
+        downloads.attribution = collection_requests
+        self.services.downloads = downloads
+        self._opened.append(downloads.aclose)
         self.dashboard.attach(store, settings, problems)
+        if settings.agents.public_url:
+            self.agents = Agents(self, playlists, settings.agents.public_url)
+            if self.try_spawn(self.agents.run):
+                with anyio.fail_after(10):
+                    await self.agents.ready.wait()
+        self.spawn(playlists.run)
+        self.spawn(downloads.run)
+        self.spawn(collection.run)
+
+    def _sound(
+        self, settings: Settings, store: Store, *, token_held: bool = False
+    ) -> AudioMuse | None:
+        """The AudioMuse-AI connection when its address is set (else playlists have no sound
+        analysis). Its token goes to no other place than its client."""
+        section = settings.audiomuse
+        if not section.url:
+            return None
+        client = AudioMuseClient(
+            section.url,
+            section.api_token(),
+            server=section.server,
+            reach=Reach(section.reach),
+            timeout=section.timeout_seconds,
+            resolver=self.resolver,
+            token_withheld=token_held,
+        )
+        return AudioMuse(
+            client,
+            store,
+            sync_hours=section.sync_hours,
+            library_id=str(settings.navidrome.library_id),
+        )
 
     async def shutdown(self) -> None:
         """Close what startup opened, the last opened first (the add-ons' measurements are
@@ -670,6 +1001,9 @@ class ShijhonApp:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan":
             await self._lifespan(receive, send)
+            return
+        if self.agents and scope["type"] == "http" and self.agents.owns(scope["path"]):
+            await self.agents(scope, receive, send)
             return
         await self.proxy(scope, receive, send)
 

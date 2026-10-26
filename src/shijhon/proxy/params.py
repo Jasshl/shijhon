@@ -208,6 +208,9 @@ class RestCall:
     body: bytes | None = None
     form: bool = False
     params: list[tuple[str, str]] = field(default_factory=list)
+    # Trusted request provenance retained across catalog-to-native rewrites. No
+    # query parameter or header can set it independently of an explicit catalog ID.
+    catalog_discovery: bool = False
     # Each key's first value (as Navidrome reads one), made at the first lookup.
     _first: dict[str, str] | None = field(default=None, repr=False, compare=False)
 
@@ -260,7 +263,54 @@ class RestCall:
         """A copy with values replaced (or left out) in the query and (form) body."""
         query = rewrite_pairs(self.query, change, drop)
         body = rewrite_pairs(self.body, change, drop) if self.form and self.body else self.body
-        return RestCall.build(self.name, self.http_method, self.raw_path, query, self.headers, body)
+        rewritten = RestCall.build(
+            self.name, self.http_method, self.raw_path, query, self.headers, body
+        )
+        rewritten.catalog_discovery = self.catalog_discovery or (self.get("id") or "").startswith(
+            "sh."
+        )
+        return rewritten
+
+
+# The methods whose musicFolderId Navidrome 0.64.2 reads (selectedMusicFolderIds: its
+# album lists, shuffle, genre songs, favorites, artist indexes and searches) - as base-10
+# numbers, leaving out a value that is none - and an inaccessible one is an error. Every
+# other method ignores it (audio, songs, album, artist and folder pages, covers...).
+_FOLDERED = frozenset(
+    {
+        "getAlbumList",
+        "getAlbumList2",
+        "getRandomSongs",
+        "getSongsByGenre",
+        "getStarred",
+        "getStarred2",
+        "getArtists",
+        "getIndexes",
+        "search2",
+        "search3",
+    }
+)
+
+
+def folders_read(call: RestCall) -> list[str]:
+    """The libraries Navidrome reads from the request's ``musicFolderId``: none for a
+    method that does not read it; for one that does, each value Go's ``ParseInt`` takes,
+    as a plain number ("01", "+1": "1")."""
+    if call.name not in _FOLDERED:
+        return []
+    found = []
+    for value in call.getall("musicFolderId"):
+        sign = value[:1] if value[:1] in ("+", "-") else ""
+        digits = value[len(sign) :]
+        if not digits or not digits.isascii() or not digits.isdigit():
+            continue
+        digits = digits.lstrip("0") or "0"
+        if len(digits) > 19:
+            continue  # beyond 64 bits (and no long text converted)
+        parsed = int(sign + digits)
+        if -(2**63) <= parsed < 2**63:
+            found.append(str(parsed))
+    return list(dict.fromkeys(found))
 
 
 def header(headers: list[tuple[bytes, bytes]], name: bytes) -> str:

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% set title = "Set up personal music libraries" %}
+{% block main %}
+<div class="page-head">
+  <div class="page-title">
+    <p class="page-back"><a href="{{ prefix }}/collection">← Back to Collection</a></p>
+    <h1>Set up personal music libraries</h1>
+    <p class="page-summary">Choose who receives the existing original music, and keep what existing listeners have chosen.</p>
+  </div>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if policy and policy.mode == 'personal' %}
+<section class="group" aria-labelledby="setup-title"><div class="group-head"><h2 id="setup-title">Setup complete</h2><p class="group-meta"><span class="tag tag-set">Personal libraries</span></p></div>
+<div class="rows music-card">
+<p>Personal music libraries are active. Existing original music has its reviewed assignment; new accounts start empty.</p>
+<p>Each person’s Original imported library then holds their own imports (with their favorites and imported playlists). Existing shared selections and explicit choices are kept. Setup cannot be repeated to change the owner.</p>
+<p class="field-help">Current policy revision: {{ policy.revision }}.</p>
+</div></section>
+{% elif policy and accounts %}
+<section class="group" aria-labelledby="setup-title"><div class="group-head"><h2 id="setup-title">{% if review %}Review existing music{% else %}Existing music{% endif %}</h2><p class="group-meta">Current policy: Shared original library (legacy). Revision {{ policy.revision }}.</p></div>
+<div class="rows music-card">
+{% if review %}
+<p><strong>{{ review.originals|count }} existing original songs</strong> will count as imports for {% for account in accounts if account.user_id == chosen %}<strong>{{ account.username }}</strong> (account ID <code>{{ account.user_id }}</code>){% endfor %}.</p>
+<ul class="setup-review">
+<li>{{ review.others|count }} other existing accounts keep these songs as shared selections in All and their original-based custom libraries. Explicit saved and removed choices are kept.</li>
+<li>{{ review.profiles|count }} original-based selections are included in that preservation.</li>
+<li>If someone currently uses Original in apps, setup preserves those exact songs in an independent custom library named “Shared original library” and uses it in apps. A library choice changed after this review is kept.</li>
+<li>New accounts start empty. Later files and accounts are outside this review.</li>
+</ul>
+<p class="field-help">Reviewed policy revision: {{ review.expected_revision }}. This one-time assignment keeps the existing files, song IDs, playlists, favorites and listening history.</p>
+<form method="post" action="{{ prefix }}/collection/setup">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="setup_id" value="{{ review.id }}"><input type="hidden" name="revision" value="{{ review.expected_revision }}">
+<div class="form-actions"><button class="btn-primary" name="action" value="approve">Approve personal libraries</button><a class="btn" href="{{ prefix }}/collection/setup">Change owner / review again</a></div>
+</form>
+{% else %}
+<dl class="counts"><div><dt>Original songs</dt><dd>{{ counts.originals|count }}</dd></div><div><dt>Indexed songs</dt><dd>{{ counts.songs|count }}</dd></div><div><dt>Existing accounts with access</dt><dd>{{ accounts|length|count }}</dd></div></dl>
+<p>Assign existing originals to the account that imported them. Other existing accounts keep their current shared selections; new accounts start empty. Your account is selected for review.</p>
+{% if ready %}
+<form class="field" method="post" action="{{ prefix }}/collection/setup">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="legacy-owner">Existing original music belongs to</label>
+<select id="legacy-owner" name="legacy_owner_id" required aria-describedby="legacy-owner-help">{% for account in accounts %}<option value="{{ account.user_id }}"{% if account.user_id == chosen %} selected{% endif %}>{{ account.username }} · {{ account.user_id }}</option>{% endfor %}</select>
+<p class="field-help" id="legacy-owner-help">Review freezes the exact songs, existing accounts and original-based selections before approval.</p>
+<div class="form-actions"><button class="btn-primary" name="action" value="review">Review setup</button></div>
+</form>
+{% else %}<p class="notice notice-warn">Prepare the music index before reviewing setup. <a href="{{ prefix }}/collection">Open Collection to prepare music</a>.</p>{% endif %}
+{% endif %}
+</div>
+</section>
+{% elif not error %}<p class="notice notice-info">The music-library policy is not ready. <a href="{{ prefix }}/collection">Open Collection to prepare music</a>, then return here.</p>{% endif %}
+{% endblock %}

@@ -22,7 +22,7 @@ from shijhon.placeholders.engine import PlaceholderEngine
 
 log = logging.getLogger(__name__)
 
-AUDIO_SUFFIXES = {".flac", ".m4a", ".mp4", ".mp3", ".ogg", ".opus"}
+AUDIO_SUFFIXES = tagging.DELIVERED_SUFFIXES
 
 
 @dataclass

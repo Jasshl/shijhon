@@ -4,15 +4,20 @@ concurrent materialization of one release."""
 
 from __future__ import annotations
 
+import json
 import shutil
+import sys
 import zlib
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import anyio
 import pytest
 
+from shijhon.delivery.download_first import kept_suffix
 from shijhon.placeholders import layout as layout_module
+from shijhon.placeholders import tags as tagging
 from shijhon.placeholders.engine import MaterializeError, ReplaceError
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.recover import recover
@@ -20,6 +25,7 @@ from shijhon.placeholders.silence import SilenceMaker
 from tests.conftest import NavidromeFactory
 from tests.harness.engine import catalog_release, engine_for
 from tests.harness.library import frequency_for, tone
+from tests.harness.music_import_formats import IMPORT_FORMATS, import_tone
 from tests.harness.navidrome import NavidromeInstance
 
 pytestmark = pytest.mark.anyio
@@ -284,3 +290,195 @@ async def test_placeholder_length_matches_delivered_audio(
         await parts.engine.replace_with_delivered(song, delivered)
         after = navidrome.client().ok("getSong", {"id": song})["song"]["duration"]
     assert before == after == 3
+
+
+async def test_delivered_audio_never_takes_the_place_of_another_file(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    """Audio of another format goes beside the silent file's name: a file already there is
+    left as it is, and so is a placeholder file that is not the silent one (someone's
+    audio put there) or a link - nothing is moved, the row stays a placeholder."""
+    release = catalog_release("pe-collide", "Colliding", "Colliding Artist", 3)
+    delivered = tmp_path / "delivered.m4a"
+    shutil.copyfile(tone(frequency_for("pe-collide"), 3, "m4a"), delivered)
+    async with engine_for(navidrome, tmp_path / "state") as parts:
+        result = await parts.engine.materialize(release)
+        songs = [result.created[track.ref] for track in release.tracks]
+        rows = [await parts.engine.placeholder_row(song) for song in songs]
+        paths = [parts.layout.absolute(row["placeholder_path"]) for row in rows]
+
+        beside = paths[0].with_suffix(".m4a")
+        beside.write_bytes(b"someone's file")
+        with pytest.raises(ReplaceError, match="another file is at"):
+            await parts.engine.replace_with_delivered(songs[0], delivered)
+        assert beside.read_bytes() == b"someone's file" and paths[0].exists()
+
+        audio = tone(frequency_for("pe-collide-own"), 3, "flac").read_bytes()
+        paths[1].write_bytes(audio)
+        with pytest.raises(ReplaceError, match="not its silent file"):
+            await parts.engine.replace_with_delivered(songs[1], delivered)
+        assert paths[1].read_bytes() == audio
+
+        elsewhere = tmp_path / "elsewhere.flac"
+        elsewhere.write_bytes(audio)
+        paths[2].unlink()
+        paths[2].symlink_to(elsewhere)
+        with pytest.raises(ReplaceError, match="is a link"):
+            await parts.engine.replace_with_delivered(songs[2], delivered)
+        assert paths[2].is_symlink() and elsewhere.read_bytes() == audio
+        for song in songs:
+            row = await parts.engine.placeholder_row(song)
+            assert row["state"] == "placeholder"
+
+
+# Every container a kept stream may be (``download_first._EVERY``), as music imports'
+# made-up samples have it.
+DELIVERED_FORMATS = (
+    "flac", "aac-m4a", "alac-m4a", "mp3", "opus", "vorbis", "ogg-flac", "speex-spx", "speex-ogg",
+    "wav-pcm", "aiff", "dsf", "trueaudio", "monkeys-audio", "wavpack", "musepack", "wma",
+    "matroska-flac",
+)  # fmt: skip
+# The pinned Darwin build does not index valid TrueAudio files; the Linux ARM64 one does
+# (``docs/music-imports.md``). Where it does not, Navidrome's check of the swap fails and the
+# placeholder is put back; elsewhere TrueAudio is checked as every other container.
+UNINDEXED = ("trueaudio",) if sys.platform == "darwin" else ()
+
+
+async def test_delivered_audio_of_every_container_keeps_its_song_and_album(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    """Delivered audio in each container Shijhon tags (Vorbis comments, ID3, MPEG-4, APEv2,
+    ASF; Matroska by an ffmpeg stream copy): Navidrome reads it under the same song ID in
+    the same album, with the placeholder's title, artist and track number, and Shijhon's
+    marker in it is read again (recovery, a revert) - and its silent placeholder comes
+    back."""
+    formats = {f.key: f for f in IMPORT_FORMATS}
+    release = catalog_release("pe-formats", "Every Format", "Format Artist", len(DELIVERED_FORMATS))
+    async with engine_for(navidrome, tmp_path / "state") as parts:
+        result = await parts.engine.materialize(release)
+        songs = [result.created[track.ref] for track in release.tracks]
+        before = {song: await parts.navidrome.song(song) for song in songs}
+        album = {s["albumId"] for s in before.values() if s is not None}
+        assert len(album) == 1
+        for key, track, song in zip(DELIVERED_FORMATS, release.tracks, songs, strict=True):
+            sample = import_tone(tmp_path / "samples" / key, formats[key], tagged=False)
+            suffix = kept_suffix(sample)
+            assert suffix is not None, key
+            delivered = sample.with_name(f"delivered{suffix}")
+            sample.rename(delivered)
+            if key in UNINDEXED:
+                with pytest.raises(ReplaceError, match="the placeholder was restored"):
+                    await parts.engine.replace_with_delivered(song, delivered)
+                row = await parts.engine.placeholder_row(song)
+                assert row["state"] == "placeholder" and (await parts.navidrome.song(song)), key
+                continue
+            path = await parts.engine.replace_with_delivered(song, delivered)
+            assert path.endswith(suffix), key
+            found = await parts.navidrome.song(song)
+            assert found is not None and not found.get("missing"), key
+            assert found["albumId"] in album and found["path"] == path, key
+            assert (found["title"], found["artist"]) == (track.title, track.artist), key
+            assert found.get("trackNumber") == track.number, (key, found.get("trackNumber"))
+            marker = tagging.marker_of(parts.layout.absolute(path))
+            assert marker is not None and not marker.silence, key
+            assert marker.track == str(track.ref), key
+        for key, song in zip(DELIVERED_FORMATS, songs, strict=True):
+            if key in UNINDEXED:
+                continue
+            assert await parts.engine.revert_to_placeholder(song), key
+            back = await parts.navidrome.song(song)
+            assert back is not None and back["path"].endswith(".flac") and back["albumId"] in album
+
+
+async def test_a_missing_placeholder_file_is_written_anew_only_beside_shijhon_s_own_files(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    """The silent file is gone, a file of its name in another format beside it: someone's
+    own (no marker of this track) stays as it is, byte for byte, and the swap is refused;
+    Shijhon's own file of this track (a delivered file left there) goes, and the swap is
+    made."""
+    release = catalog_release("pe-beside", "Beside", "Beside Artist", 2)
+    delivered = tmp_path / "delivered.m4a"
+    shutil.copyfile(tone(frequency_for("pe-beside"), 3, "m4a"), delivered)
+    async with engine_for(navidrome, tmp_path / "state") as parts:
+        result = await parts.engine.materialize(release)
+        songs = [result.created[track.ref] for track in release.tracks]
+        rows = [await parts.engine.placeholder_row(song) for song in songs]
+        paths = [parts.layout.absolute(row["placeholder_path"]) for row in rows]
+
+        owned = paths[0].with_suffix(".wav")
+        sample = import_tone(tmp_path / "owned", {f.key: f for f in IMPORT_FORMATS}["wav-pcm"],
+                             tagged=True)  # fmt: skip
+        shutil.copyfile(sample, owned)
+        before = owned.read_bytes()
+        paths[0].unlink()
+        with pytest.raises(ReplaceError, match="another file is at"):
+            await parts.engine.replace_with_delivered(songs[0], delivered)
+        assert owned.read_bytes() == before
+        assert (await parts.engine.placeholder_row(songs[0]))["state"] == "placeholder"
+        owned.unlink()
+
+        stale = paths[1].with_suffix(".m4a")
+        shutil.copyfile(delivered, stale)
+        tagging.write_delivered(stale, json.loads(rows[1]["tags"]))
+        assert (marker := tagging.marker_of(stale)) is not None and not marker.silence
+        paths[1].unlink()
+        path = await parts.engine.replace_with_delivered(songs[1], delivered)
+        assert path.endswith(".m4a")
+        assert (await parts.engine.placeholder_row(songs[1]))["state"] == "delivered"
+
+
+def _as_listed(song: dict[str, Any]) -> dict[str, Any]:
+    """What Navidrome tells of a song's identity and metadata (not of its file)."""
+    roles = song.get("participants") or {}
+    return {
+        "id": song["id"], "albumId": song["albumId"], "title": song["title"],
+        "artist": song.get("artist"), "albumArtist": song.get("albumArtist"),
+        "genres": sorted(g["name"] for g in song.get("genres") or []),
+        "participants": {r: sorted(p["name"] for p in roles[r]) for r in sorted(roles)},
+        "track": song.get("trackNumber"), "disc": song.get("discNumber"),
+    }  # fmt: skip
+
+
+async def test_delivered_matroska_keeps_every_genre_and_refuses_what_it_cannot_carry(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    """Matroska with the placeholder's several genres (one value Navidrome splits again):
+    Navidrome lists the song as before - its ID, album, genres, artists. Several artists
+    Matroska cannot carry (ffmpeg writes one value a name, Navidrome splits no artists):
+    the engine refuses it rather than flatten them, the placeholder stays."""
+    sample = import_tone(tmp_path / "mka", {f.key: f for f in IMPORT_FORMATS}["matroska-flac"],
+                         tagged=False)  # fmt: skip
+    base = catalog_release("pe-mka-genres", "Matroska Genres", "Genre Artist", 1)
+    genres = replace(base, genres=("Folk", "Jazz"))
+    duo = catalog_release("pe-mka-duo", "Matroska Duo", "Ann", 1)
+    duo = replace(
+        duo, artists=("Ann", "Bob"), genres=("Folk", "Jazz"),
+        tracks=(replace(duo.tracks[0], artists=("Ann", "Bob")),),
+    )  # fmt: skip
+    async with engine_for(navidrome, tmp_path / "state") as parts:
+        for release in (genres, duo):
+            await parts.engine.materialize(release)
+        row = await parts.store.fetchone(
+            "SELECT * FROM placeholders WHERE track_ref = ?", [str(genres.tracks[0].ref)]
+        )
+        song = str(row["song_id"])
+        before = await parts.navidrome.song(song)
+        delivered = tmp_path / "delivered.mka"
+        shutil.copyfile(sample, delivered)
+        path = await parts.engine.replace_with_delivered(song, delivered)
+        after = await parts.navidrome.song(song)
+        assert path.endswith(".mka") and before is not None and after is not None
+        assert _as_listed(after) == _as_listed(before)
+        assert _as_listed(after)["genres"] == ["Folk", "Jazz"]
+        marker = tagging.marker_of(parts.layout.absolute(path))
+        assert marker is not None and not marker.silence
+        assert await parts.engine.revert_to_placeholder(song)
+
+        row = await parts.store.fetchone(
+            "SELECT * FROM placeholders WHERE track_ref = ?", [str(duo.tracks[0].ref)]
+        )
+        with pytest.raises(ReplaceError, match="cannot tag"):
+            await parts.engine.replace_with_delivered(str(row["song_id"]), delivered)
+        row = await parts.engine.placeholder_row(str(row["song_id"]))
+        assert row["state"] == "placeholder"

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% from "_macros.html" import playlist_tabs %}
+{% set title = "Import a playlist" %}
+{% block main %}
+{{ playlist_tabs(prefix, "import", detail=shown is not none) }}
+{% if shown %}
+{% set run = shown.run %}
+{% set completion = run.data.completion if run.data.completion is defined else none %}
+{% set base = prefix ~ "/playlists/import/" ~ shown.id %}
+{% set view = "&show=missing" if shown.only_missing else "" %}
+{% set state_label = {'queued':'Waiting','generating':'Matching entries','publishing':'Publishing','published':'Published','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped'}.get(run.state, run.state|capitalize) %}
+<div class="page-head">
+  <div class="page-title">
+    <p class="page-back"><a href="{{ prefix }}/playlists/import">← Imported playlists</a></p>
+    <h1>{{ shown.name }}</h1>
+    <p class="page-summary"><span class="tag{{ ' tag-set' if run.state == 'published' else ' tag-restart' if run.state in ['preview','uncertain'] else ' tag-error' if run.state == 'failed' else '' }}">{{ state_label }}</span> {{ shown.total }} entries · {{ shown.matched }} found · {{ shown.missing }} not found{% if shown.removed %} · {{ shown.removed }} removed by you{% endif %}</p>
+  </div>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if run.error %}<div class="notice notice-error" role="alert"><p>{{ run.error }}</p></div>{% endif %}
+{% if run.state in ['queued','generating'] %}<p class="notice notice-info" role="status">Checked {{ shown.checked }} of {{ shown.checking }} entries.{% if run.data.path_scan is defined and not run.data.path_scan.complete %} {{ run.data.path_scan.offset }} library songs read.{% endif %}</p>{% endif %}
+{% if run.state == 'publishing' and run.data.import_publish is defined %}{% set progress = run.data.import_publish %}<p class="notice notice-info" role="status">{{ run.data.native_ids|length }} of {{ run.data.selected|length }} prepared{% if not completion %} · {{ progress.appended }} written{% elif progress.written is defined %} · playlist updated{% endif %} · {{ progress.verified }} verified.</p>{% endif %}
+{% if run.data.created_id is defined and run.data.created_id and run.state != 'published' and not completion %}<p class="notice notice-info">Until this finishes, Navidrome may list the playlist as <strong>{{ run.data.provisional }}</strong>.</p>{% endif %}
+{% if run.data.stopped is defined %}<p class="notice notice-warn">Stopped. Songs already added stay.</p>{% endif %}
+{% if shown.unfinished %}<p class="notice notice-warn">This update stopped partway and can have left extra copies. Resume or retry it, or remove the copies yourself and keep the playlist as it is.</p>{% endif %}
+{% if completion and completion.plan is defined and run.data.kept_as_is is not defined and (run.state in ['preview','publishing','failed','uncertain'] or run.data.stopped is defined) %}
+<section class="group" aria-labelledby="changes-title">
+<div class="group-head"><h2 id="changes-title">Changes to your playlist: {{ shown.length[0] }} → {{ shown.length[1] }} songs</h2></div>
+<div class="rows music-card">
+{% if shown.change_total %}<ul>{% for change in shown.changes %}<li>{% if change.kind == 'found' %}Already in your playlist: {{ change.song }}{% else %}Add {{ change.song }} {% if change.after %}after {{ change.after }}{% else %}at the start{% endif %}{% endif %}</li>{% endfor %}</ul>{% if shown.change_total > 100 %}<p>{{ shown.change_total }} changes, 100 per page.</p>{% endif %}{% else %}<p>No new songs found.</p>{% endif %}
+<p class="field-help">Your own edits in Navidrome stay.{% if completion.staged %} Large playlists update in steps and can briefly hold extra copies; after a stop, use Resume update.{% endif %}</p>
+</div>
+</section>
+{% endif %}
+<section class="group" aria-labelledby="entries-title">
+<div class="group-head"><h2 id="entries-title">Entries</h2><p class="group-meta">{% if shown.only_missing %}<a href="{{ base }}">Show all entries</a>{% elif shown.missing %}<a href="{{ base }}?show=missing">Show only entries not found</a>{% endif %}</p>
+{% if run.state == 'preview' %}<p class="group-help">Choose a recording where several fit. Publishing can add catalog releases to your library; it does not download audio.</p>{% endif %}</div>
+{% if run.state == 'preview' and shown.release_total %}<details class="form-more"><summary>Publishing adds {{ shown.release_total }} release{{ 's' if shown.release_total != 1 }} to your library</summary><ul>{% for release in shown.releases %}<li>{{ release.artist }} · {{ release.title }} · {{ release.tracks }} tracks</li>{% endfor %}</ul></details>{% endif %}
+{% if shown.pages > 1 %}<nav class="pager" aria-label="Import entry pages"><p class="pager-status">Entries {{ shown.page * 100 + 1 }}–{{ [shown.page * 100 + 100, shown.listed]|min }} of {{ shown.listed }}</p><p>{% if shown.page %}<a href="{{ base }}?page={{ shown.page - 1 }}{{ view }}">Previous 100</a>{% endif %}{% if shown.page and shown.page + 1 < shown.pages %} · {% endif %}{% if shown.page + 1 < shown.pages %}<a href="{{ base }}?page={{ shown.page + 1 }}{{ view }}">Next 100</a>{% endif %}</p></nav>{% endif %}
+<div class="table-wrap"><table class="table table-stack"><thead><tr><th scope="col">Entry</th><th scope="col">Requested</th><th scope="col">Status</th><th scope="col">Match</th></tr></thead><tbody>
+{% for row in shown.rows %}<tr><td data-label="Entry">{{ row.number }}</td><td data-label="Requested">{% if row.input.artist %}{{ row.input.artist }} · {% endif %}{{ row.input.title }}{% if row.input.album %}<br>Album: {{ row.input.album }}{% endif %}{% if row.input.version %}<br>Version: {{ row.input.version }}{% endif %}{% for location in row.input.get('locations', []) %}<br><code>{{ location }}</code>{% endfor %}{% if row.input.get('native_id') %}<br>Native ID: <code>{{ row.input.native_id }}</code>{% endif %}</td><td data-label="Status"><span class="tag{{ ' tag-set' if row.state == 'matched' else ' tag-restart' if row.state == 'ambiguous' else ' tag-error' if row.state == 'unresolved' else '' }}">{{ {'matched': 'Found', 'unresolved': 'Not found', 'ambiguous': 'Several matches', 'removed': 'Removed by you', 'pending': 'Not checked yet'}.get(row.state, row.state|capitalize) }}</span>{% if row.note is defined %}<br>{{ row.note }}{% endif %}</td><td data-label="Match">{% if row.track %}{{ row.track.artist }} · {{ row.track.title }}<br>{{ row.track.album }}{% if row.path is defined and row.path %}<br><code>{{ row.path }}</code>{% endif %}{% else %}None{% if run.state == 'preview' %}
+<form class="playlist-choice" method="post" action="{{ base }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="run" value="{{ run.id }}"><input type="hidden" name="review" value="{{ shown.review_key }}"><input type="hidden" name="entry" value="{{ row.number }}">
+{% if row.choices is defined and row.choices %}<label>Recording for entry {{ row.number }}<select name="choice" required><option value="">Choose a recording</option>{% for option in row.choices %}<option value="{{ option.track.id }}">{{ option.track.artist }} · {{ option.track.title }} · {{ option.track.album }}{% if option.path %} · {{ option.path }}{% endif %}</option>{% endfor %}</select></label>{% else %}<label>Native song ID for entry {{ row.number }}<input name="choice" maxlength="256" required></label>{% endif %}
+<button class="btn-small" name="action" value="choose">Use this recording</button></form>
+{% if row.overflow is defined and row.overflow %}<p>More files match than can be listed.</p><form class="playlist-choice" method="post" action="{{ base }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="run" value="{{ run.id }}"><input type="hidden" name="review" value="{{ shown.review_key }}"><input type="hidden" name="entry" value="{{ row.number }}"><label>Exact native song ID<input name="choice" maxlength="256" required></label><button class="btn-small" name="action" value="choose">Use this native recording</button></form>{% endif %}
+{% endif %}{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+</section>
+<form class="form-actions form-actions-bar" method="post" action="{{ base }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="run" value="{{ run.id }}"><input type="hidden" name="review" value="{{ shown.review_key }}">
+{% if run.state == 'preview' %}
+{% if (completion and shown.change_total) or (not completion and shown.matched) %}{% if shown.missing %}<label class="mix-check"><input type="checkbox" name="excluded" value="{{ shown.missing }}" required> Publish without the entries not found ({{ shown.missing }}); they stay saved for Recheck.</label>{% else %}<input type="hidden" name="excluded" value="0">{% endif %}<button class="btn-primary" name="action" value="publish">{% if completion %}Update playlist{% else %}Publish {{ shown.matched }} entries{% endif %}</button>{% endif %}
+<button name="action" value="discard" formnovalidate>Discard review</button>{% if shown.missing and not completion %}<button name="action" value="retry" formnovalidate>Retry entries not found</button>{% endif %}
+{% endif %}
+{% if run.state == 'discarded' and run.data.stopped is defined and run.data.kept_as_is is not defined and completion and completion.staged and run.data.import_review is defined %}<button name="action" value="resume">Resume update</button>{% endif %}
+{% if shown.unfinished %}<button name="action" value="keep" formnovalidate>Keep playlist as it is</button>{% endif %}
+{% if shown.recheck_available %}<button{% if run.state != 'preview' and not shown.unfinished %} class="btn-primary"{% endif %} name="action" value="recheck" formnovalidate>{% if run.state in ['published','discarded'] %}Recheck {{ shown.published_missing }} missing entries{% else %}Recheck again{% endif %}</button>{% endif %}
+{% if run.state in ['failed','uncertain'] %}<button name="action" value="retry">Retry</button>{% endif %}
+{% if run.state in ['queued','generating','publishing','failed','uncertain'] %}<button name="action" value="stop" formnovalidate>Stop</button>{% endif %}
+<a class="btn btn-quiet" href="{{ base }}?page={{ shown.page }}{{ view }}">Reload progress</a>
+{% if shown.recheck_available %}<p class="form-status">Recheck searches your library and the catalog again; nothing changes until you confirm.</p>{% endif %}
+</form>
+{% else %}
+<div class="page-head">
+  <div class="page-title">
+    <h1>Import a playlist</h1>
+    <p class="page-summary">Bring in a playlist you already have. Order and repeated songs are kept, and you review the matches before publishing.</p>
+  </div>
+  <details class="page-about"><summary>How importing works</summary>
+    <p>Each entry is matched against your library and the catalog. Where several recordings fit, you choose one; entries not found stay saved, so you can recheck them later.</p>
+    <p>Publishing can add catalog releases to your library; it does not download audio.</p>
+  </details>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if connected %}
+<section class="group" aria-label="New playlist import"><form class="rows playlist-form" method="post" enctype="multipart/form-data" action="{{ prefix }}/playlists/import"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="request_key" value="{{ request_key }}">
+<div class="mix-fields"><label class="mix-wide">Playlist name<input name="name" maxlength="100" required value="{{ form.get('name', '') }}"></label>
+<label class="mix-wide">Paste Artist — Title lines or playlist text<textarea name="lines" rows="8" placeholder="Glass Orchard — First Light&#10;Glass Orchard — First Light&#10;Tideline — Harbor (Live)">{{ form.get('lines', '') }}</textarea></label>
+<label class="mix-wide">Or upload a playlist file<input type="file" name="file" accept=".m3u,.m3u8,.pls,.xspf,.jspf,.asx,.wpl,.csv,.tsv,.txt,.json"><span class="field-help">M3U, PLS, XSPF, JSPF, ASX, WPL, CSV, TSV or text; up to {{ max_entries }} entries and {{ (max_bytes / 1048576)|round(1) }} MiB. Files and URLs are never opened.</span></label></div>
+{% if form.get('file') or form.get('csv') %}<p class="notice notice-warn">Fix the file's format, encoding or columns and choose it again.</p>{% endif %}
+<details class="form-more"{% if form.get('format', 'auto') != 'auto' or form.get('encoding', 'utf-8-sig') != 'utf-8-sig' %} open{% endif %}><summary>File format, encoding and columns</summary>
+<div class="mix-fields">
+<label>Format<select name="format">{% for format in formats %}<option value="{{ format }}"{% if form.get('format', 'auto') == format %} selected{% endif %}>{{ 'Detect' if format == 'auto' else format|upper }}</option>{% endfor %}</select></label>
+<label>File encoding<select name="encoding">{% for value,label in [('utf-8-sig','UTF-8 (UTF-16 BOM also detected)'),('utf-16','UTF-16'),('cp1252','Windows-1252'),('latin-1','Latin-1')] %}<option value="{{ value }}"{% if form.get('encoding', 'utf-8-sig') == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+</div>
+<p class="field-help">CSV or TSV: common headers are detected. Otherwise enter the column names.</p>
+<div class="mix-fields">{% for column in columns %}<label>{{ 'Native song ID' if column == 'native_id' else column|capitalize }} column<input name="{{ column }}_column" maxlength="300" value="{{ form.get(column + '_column', '') }}"></label>{% endfor %}</div>
+</details>
+<div class="form-actions"><button class="btn-primary">Match entries for review</button></div></form></section>
+{% else %}<div class="notice notice-info"><p class="notice-title">Connect first</p><p><a href="{{ prefix }}/playlists#settings">Connect your Navidrome account</a> to import a playlist.</p></div>{% endif %}
+<section class="group" aria-labelledby="imports-title"><div class="group-head"><h2 id="imports-title">Your imported playlists</h2>{% if listing %}<p class="group-meta">{{ listing|length }}</p>{% endif %}</div>
+{% if listing %}<ul class="rows playlist-list">{% for item in listing %}<li><a href="{{ prefix }}/playlists/import/{{ item.id }}">{{ item.spec.name }}</a>{% if item.import_state %}<span>{{ item.import_state|capitalize }}</span>{% endif %}{% if item.missing_count %}<span class="tag tag-restart">{{ item.missing_count }} not found</span>{% endif %}</li>{% endfor %}</ul>{% else %}<p class="empty">No imports yet.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

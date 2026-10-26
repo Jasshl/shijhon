@@ -63,8 +63,8 @@ class UserLimits:
         self,
         *,
         routings: int = 4,
-        downloads: int = 2,
-        downloads_per_hour: int = 120,
+        downloads: int = 4,
+        downloads_per_hour: int = 0,
         downloads_burst: int = 0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = anyio.sleep,
@@ -155,23 +155,36 @@ class UserLimits:
 
     @asynccontextmanager
     async def download(
-        self, user: str, *, queue: bool = True, promoted: anyio.Event | None = None
+        self,
+        user: str,
+        *,
+        queue: bool = True,
+        promoted: anyio.Event | None = None,
+        now: bool = False,
     ) -> AsyncIterator[Callable[[], None]]:
         """One of the user's download-first fetches: waits for a turn among the user's
         fetches, then for the hour's allowance, in order. ``queue`` False - the song being
         played - waits for neither; nor does a fetch once ``promoted`` is set (the client
-        plays it now). Yields a callable that gives the allowance back (the fetch turned out
-        not to need the add-ons)."""
+        plays it now). ``now``: a turn and the allowance at once, or ``Limited`` (a
+        background fetch that holds a scarce slot meanwhile). Yields a callable that gives
+        the allowance back (the fetch turned out not to need the add-ons)."""
         async with self._user(user) as record:
             waiting = queue and not (promoted is not None and promoted.is_set())
             slot = False
-            if waiting and (downloads := record.downloads) is not None:
+            if waiting and now:
+                slot = self._now(record)
+            elif waiting and (downloads := record.downloads) is not None:
                 slot = await _unless(promoted, downloads.acquire, undo=downloads.release)
             try:
                 # (A cancellation that comes once the allowance is taken, before the turn
                 # is had, gives it back: nothing was fetched for it.)
-                took = waiting and await _unless(
-                    promoted, lambda: self._take(record), undo=lambda: self._give_back(record)
+                took = waiting and (
+                    now
+                    or await _unless(
+                        promoted,
+                        lambda: self._take(record),
+                        undo=lambda: self._give_back(record),
+                    )
                 )
                 if not took:
                     self._take_now(record)
@@ -187,6 +200,24 @@ class UserLimits:
             finally:
                 if slot and record.downloads is not None:
                     record.downloads.release()
+
+    def _now(self, record: _User) -> bool:
+        """A turn among the user's fetches and one of the hour's downloads, both at once
+        (nothing taken when either is not to be had: ``Limited``). Returns whether a turn
+        was taken (one is to be given back)."""
+        downloads = record.downloads
+        if downloads is not None:
+            try:
+                downloads.acquire_nowait()
+            except anyio.WouldBlock:
+                raise Limited("no turn free among the user's fetches") from None
+        if self.per_hour > 0 and (record.pace.locked() or self._refill(record) < 1):
+            if downloads is not None:
+                downloads.release()
+            raise Limited("the hour's downloads are used or awaited")
+        if self.per_hour > 0:
+            record.allowance -= 1
+        return downloads is not None
 
     def _give_back(self, record: _User) -> None:
         """One download back to the allowance; a download waiting for it goes now."""

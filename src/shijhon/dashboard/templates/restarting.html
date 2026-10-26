@@ -18,15 +18,16 @@
     <h1>Shijhon was not restarted</h1>
     <div class="notice notice-error" role="alert">
       <p>{{ refused }}</p>
-      <p><a href="{{ next }}">Back</a></p>
     </div>
+    <p class="signin-actions"><a class="btn" href="{{ next }}">Back</a></p>
   </div>
 </main>
 {% else %}
   <div class="signin-panel" id="restarting" data-boot="{{ boot }}" data-alive="{{ prefix }}/alive" data-next="{{ next }}">
     <h1>Shijhon is restarting</h1>
+    <p>It stops, and Docker or your service manager starts it again with the saved settings. A track being added to the library is given time to finish first.</p>
+    <div class="wait" aria-hidden="true"></div>
     <div class="notice" role="status">
-      <p>It stops, and Docker or your service manager starts it again with the saved settings. A track being added to the library is given time to finish first.</p>
       <p>This page goes back to where you were once Shijhon answers again. <a href="{{ next }}">Go there now</a></p>
     </div>
     <div class="notice notice-error" role="alert" id="restart-late" hidden>
@@ -35,6 +36,12 @@
     </div>
   </div>
 </main>
+{% endif %}
+{% from "_macros.html" import legal %}
+<footer class="signin-footer">
+  {{ legal(version, copyright, license, source_url) }}
+</footer>
+{% if not refused %}
 <script src="{{ prefix }}/static/restart.js"></script>
 {% endif %}
 </body>

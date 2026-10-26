@@ -12,7 +12,10 @@
   <p class="wordmark">Shijhon</p>
   <div class="signin-panel">
     <h1>Sign in</h1>
-    <p>Use a Navidrome account with admin rights.</p>
+    <p>Use your Navidrome account. Administrators also manage Shijhon's settings here.</p>
+{% if info|default('') %}
+    <div class="notice" role="status"><p>{{ info }}</p></div>
+{% endif %}
 {% if error %}
     <div class="notice notice-error" role="alert">
 {% if error_title %}

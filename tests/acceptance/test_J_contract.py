@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.replay import Replay, fixture
@@ -341,6 +342,7 @@ def world(
         write_album(nd.music, album)
     nd.scan(full=True)
     with delivery_world(nd, tmp_path_factory.mktemp("contract"), catalog=replay.catalog()) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 

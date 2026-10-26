@@ -33,6 +33,11 @@ def _bundled_migrations() -> list[tuple[int, str, str]]:
     return sorted(found)
 
 
+def latest_schema() -> int:
+    """The schema version this Shijhon's migrations end at."""
+    return len(_bundled_migrations())
+
+
 def load_migrations(folder: Path) -> list[tuple[int, str, str]]:
     found = []
     for path in folder.iterdir():

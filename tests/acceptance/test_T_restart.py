@@ -92,6 +92,7 @@ class Served:
             self.env |= {
                 f"SHIJHON_TEST_{name.upper()}": str(value) for name, value in waits.items()
             }
+            self.env["SHIJHON_TEST_PAUSE_MARKER"] = str(tmp / "paused-in-place")
         self.command += ["--config", str(self.config), "serve"]
         self.start()
 
@@ -193,7 +194,7 @@ def test_one_press_stops_shijhon_in_order_and_the_next_start_has_the_saved_setti
         back = browser.get(pressed.headers["location"])
         assert back.status_code == 303 and back.headers["location"] == f"{PATH}/diagnostics"
         page = browser.get("diagnostics").text
-        assert "Restart needed" not in page and "no saved setting is waiting for a restart" in page
+        assert "Restart needed" not in page and "No saved setting is waiting for a restart" in page
         assert 'value="1234"' in browser.get("catalog").text
         # A second restart works like the first (nothing was left behind by the first).
         assert browser.submit("diagnostics", {}, "restart").status_code == 303
@@ -330,6 +331,14 @@ def pending(database: Path) -> int:
         return int(db.execute("SELECT count(*) FROM pending_placeholders").fetchone()[0])
 
 
+def source_ready(database: Path) -> bool:
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=30) as db:
+        row = db.execute(
+            "SELECT state,generation,updated_at FROM collection_index WHERE library_id='1'"
+        ).fetchone()
+        return bool(row and row[0] == "ready" and row[1] and row[2] > 0)
+
+
 def until(what: Any, within: float = 60.0) -> None:
     deadline = time.monotonic() + within
     while not what():
@@ -354,15 +363,17 @@ def test_a_press_during_a_commit_that_cannot_end_leaves_the_library_in_step(
         more=DEMO,
         write_wait=1.0,  # (seconds the restart waits for the write: 30 otherwise)
         restart_bound=20.0,
-        pause_staged=1.0,  # (the write stays at one step long enough to be met there)
+        pause_in_place=60.0,  # canceled by shutdown after files reached the library
     )
     client = SubsonicClient(served.base_url, ADMIN_USER, ADMIN_PASSWORD)
     answers: list[Any] = []
     try:
         first = served.run()
         browser = served.signed_in()
+        until(lambda: source_ready(served.database))
         found = client.ok("search3", {"query": "restless islands", "albumCount": 0})
         song = next(s for s in found["searchResult3"]["song"] if s["id"].startswith("sh.tr."))
+        assert song["albumId"].startswith("sh.al.")
 
         def star() -> None:
             try:
@@ -372,12 +383,16 @@ def test_a_press_during_a_commit_that_cannot_end_leaves_the_library_in_step(
 
         adding = threading.Thread(target=star)
         adding.start()
-        until(lambda: pending(served.database) > 0)  # the files are being written
+        served.said("test: placeholders in place")
+        assert pending(served.database) > 0
+        # The restart needs a fresh admin check. Authorize it while Navidrome still
+        # answers, then make the in-flight write unable to finish its scan.
+        assert browser.submit("diagnostics", {}, "restart").status_code == 303
+        assert pending(served.database) > 0
         assert nd.process is not None
         navidrome = nd.process.pid  # (its process group: the harness starts it so)
         os.killpg(navidrome, signal.SIGSTOP)  # Navidrome answers nothing from here
         try:
-            assert browser.submit("diagnostics", {}, "restart").status_code == 303
             served.said("restart: a library write did not end within 1s")
             assert served.ended(within=25) == RESTART_STATUS  # (the bound is 20 s)
         finally:
@@ -396,7 +411,9 @@ def test_a_press_during_a_commit_that_cannot_end_leaves_the_library_in_step(
         assert pending(served.database) == 0
         starred = client.ok("getStarred2")["starred2"]["song"]
         assert [s["title"] for s in starred] == [song["title"]]
-        album = client.ok("getAlbum", {"id": starred[0]["albumId"]})["album"]
+        # Recovery does not enable catalog music in the personal collection. Its
+        # discovery reference still proves that the whole album survived.
+        album = client.ok("getAlbum", {"id": song["albumId"]})["album"]
         titles = [s["title"] for s in album["song"]]
         assert len(titles) == len(set(titles)) == album["songCount"]
         browser.close()

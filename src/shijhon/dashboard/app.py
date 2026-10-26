@@ -4,7 +4,7 @@
 ``/auth``, ``/share``, ``/jellyfin``, ``/backgrounds``, ``/debug`` and its metrics path
 (everything else redirects to ``/app``), unless Navidrome's own ``BaseURL`` is set to
 ``/shijhon``. Server-rendered pages and forms: every change is a form post answered with a
-redirect. One small script, on the restart's waiting page only (``static/restart.js``).
+redirect. Small scripts improve the restart waiting page and playlist forms.
 """
 
 from __future__ import annotations
@@ -18,20 +18,27 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import parse_qsl, quote
+from urllib.parse import SplitResult, parse_qsl, quote, urlsplit
 
 import anyio
 import httpx
 from jinja2 import Environment, PackageLoader, StrictUndefined
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from shijhon import __copyright__, __license__, __version__
+from shijhon.access import AccessDenied, AccessService, AccessUnavailable
 from shijhon.catalog import plugin
 from shijhon.catalog.addon import AddonCatalog
 from shijhon.catalog.base import CatalogError
@@ -53,9 +60,9 @@ from shijhon.dashboard.addons import (
     representable,
     setting_text,
     shown,
+    transfer_limit,
 )
 from shijhon.dashboard.auth import (
-    AdminCheck,
     Attempts,
     Session,
     Sessions,
@@ -63,8 +70,20 @@ from shijhon.dashboard.auth import (
     navidrome_login,
     same,
 )
+from shijhon.dashboard.collection import Pages as CollectionPages
+from shijhon.dashboard.downloads import Pages as DownloadPages
 from shijhon.dashboard.errors import RecentErrors
-from shijhon.dashboard.fields import Group, Invalid, format_number, parse_number, spoken_unit
+from shijhon.dashboard.fields import (
+    Group,
+    Invalid,
+    counted,
+    format_number,
+    parse_number,
+    spoken_unit,
+)
+from shijhon.dashboard.library_setup import Pages as LibrarySetupPages
+from shijhon.dashboard.music_imports import Pages as MusicImportPages
+from shijhon.dashboard.playlists import Pages as PlaylistPages
 from shijhon.dashboard.saved import (
     ACCENTS,
     APPEARANCE,
@@ -79,13 +98,16 @@ from shijhon.dashboard.saved import (
     out_of_place,
     withheld,
 )
+from shijhon.delivery.bulk import effective_capacity
 from shijhon.delivery.netpolicy import PROJECT_URL, Reach, Resolver, system_resolver
 from shijhon.delivery.pacing import AddonPace, Limits, origin
+from shijhon.delivery.quality_gate import CHOICES as QUALITY_CHOICES
 from shijhon.delivery.sources import MAX_LIMIT, StoredSource
 from shijhon.fill.fills import ChoiceRefused
 from shijhon.locks import KeyedLocks
 from shijhon.navidrome.client import NavidromeError
 from shijhon.placeholders.engine import MaterializeError
+from shijhon.playlists.model import Connection
 from shijhon.proxy.forwarding import Forwarding
 from shijhon.store import Store
 
@@ -97,17 +119,53 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 PATH = "/shijhon"
+# A person's lowest audio quality (the Audio quality page), as the choices read.
+# A number is for compressed audio alone: lossless audio is accepted at any bitrate, except
+# with "Lossless only"; every choice but "Any" also asks for 44.1 kHz.
+QUALITY_LABELS = {
+    "any": "Any",
+    "128": "128 kb/s",
+    "160": "160 kb/s",
+    "192": "192 kb/s",
+    "256": "256 kb/s",
+    "320": "320 kb/s",
+    "lossless": "Lossless only",
+}
+# What a choice asks for, both kinds of audio apart.
+QUALITY_WORDS = {
+    "any": "Any quality.",
+    "lossless": "Lossless audio only (FLAC, ALAC…), at 44.1 kHz or more.",
+    **{
+        kbps: f"Compressed audio (MP3, AAC, Opus…): at least {kbps} kb/s."
+        " Lossless audio (FLAC, ALAC…) at any bitrate. Both at 44.1 kHz or more."
+        for kbps in ("128", "160", "192", "256", "320")
+    },
+}
 SESSION_COOKIE = "shijhon_session"
 SIGNIN_COOKIE = "shijhon_signin"
 MAX_FORM_BYTES = 64 * 1024
-NAV = (
-    ("addons", "Add-ons"),
-    ("playback", "Playback"),
-    ("catalog", "Catalog"),
-    ("library", "Library"),
-    ("cleanup", "Cleanup"),
-    ("diagnostics", "Diagnostics"),
+# The sidebar: (heading, ((page, label), ...)). Everyone sees "Music"; administrators
+# also see "Server", the installation's settings and health.
+MUSIC_NAV = (
+    "Music",
+    (("collection", "Collection"), ("playlists", "Playlists"), ("downloads", "Downloads")),
 )
+NAV = (
+    MUSIC_NAV,
+    (
+        "Server",
+        (
+            ("addons", "Add-ons"),
+            ("playback", "Playback"),
+            ("catalog", "Catalog"),
+            ("library", "Library"),
+            ("sound", "Sound analysis"),
+            ("cleanup", "Cleanup"),
+            ("diagnostics", "Diagnostics"),
+        ),
+    ),
+)
+PERSONAL_NAV = (MUSIC_NAV,)
 ACCENT_NAMES = {
     "green": "Deep green",
     "teal": "Teal",
@@ -115,17 +173,19 @@ ACCENT_NAMES = {
     "graphite": "Graphite",
     "purple": "Purple",
 }
-PAGE_SECTIONS = {"playback": "delivery", "catalog": "catalog"}
+PAGE_SECTIONS = {"playback": "delivery", "catalog": "catalog", "sound": "audiomuse"}
 SECTION_WORDS = {
     "playback": (
         "Playback",
-        "How a catalog song's audio is found: which add-ons are asked, and how long a"
-        " client waits.",
+        "How Shijhon finds audio for songs you don't own, and how long apps wait for it.",
     ),
     "catalog": (
         "Catalog",
-        "Where the catalog comes from: a catalog adapter you install, or one of your"
-        " add-ons that has a catalog.",
+        "The music Shijhon shows beyond your own, in searches, artist pages and complete albums.",
+    ),
+    "sound": (
+        "Sound analysis",
+        "AudioMuse-AI analyzes how your songs sound; described playlists use it as a hint.",
     ),
 }
 HEADERS = {
@@ -141,13 +201,39 @@ HEADERS = {
 # The page that waits for a restart: its script file and what that asks, nothing more.
 RESTARTING_POLICY = HEADERS["content-security-policy"] + "; script-src 'self'; connect-src 'self'"
 FAILING_IN_A_ROW = 3  # failures without a success before an add-on shows "Error"
-# Downloaded audio's limits: on the Cleanup page, not with Playback's other settings.
-DOWNLOAD_LIMITS = ("delivered_days", "delivered_gb")
+# Saved audio: whether streams are kept, and its limits - on the Cleanup page, not with
+# Playback's other settings.
+DOWNLOAD_LIMITS = ("keep_streamed_audio", "delivered_days", "delivered_gb")
 # Of [search], on the Catalog page (a form of its own): the wait for the catalog.
 SEARCH_WAIT = ("budget_seconds",)
 SEARCH_WAIT_FORM = "wait"
 CONFIRM_SECONDS = 900.0  # how long the cleanup's confirmation stands (from its dry run)
 ADDON_BUDGET = {"low": 0.0, "high": 600.0}  # SourceRegistry's limits for its own budget
+
+
+def _page_of(section: str, key: str) -> str:
+    """The name of the page a section's setting is on (for the restart banner)."""
+    if section == "delivery":
+        return "Cleanup" if key in DOWNLOAD_LIMITS else "Playback"
+    if section == "search":
+        return "Catalog"
+    pages = {"catalog": "Catalog", "fill": "Library", "cleanup": "Cleanup"}
+    return pages.get(section, "Sound analysis")
+
+
+def _wants_json(request: Request) -> bool:
+    """A page script's request (it saves without leaving the page), not a form's."""
+    return request.headers.get("accept", "").startswith("application/json")
+
+
+class _Static(StaticFiles):
+    """The stylesheet and scripts, checked again on every page (a 304 when unchanged), so a
+    browser never pairs a new page with a file it kept from before an upgrade."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["cache-control"] = "no-cache"
+        return response
 
 
 @dataclass(frozen=True)
@@ -162,6 +248,7 @@ class _OwnLimit:
     whole: bool
     low: int
     help: str
+    transfer: bool = False  # stored on the source, rather than its API pacing limits
 
 
 ADDON_LIMITS = (
@@ -173,8 +260,8 @@ ADDON_LIMITS = (
         "requests a second",
         False,
         0,
-        "Requests sent to this add-on a second, for everyone together. Raise it only for an"
-        " add-on of your own. 0: no limit.",
+        "Requests sent to this add-on each second, for all users together. Raise it only for"
+        " an add-on you run yourself. 0: no limit.",
     ),
     _OwnLimit(
         "request_burst",
@@ -184,7 +271,7 @@ ADDON_LIMITS = (
         "requests",
         True,
         1,
-        "How many may go at once after a quiet moment, before the rate applies.",
+        "How many requests may go at once after a quiet moment, before the rate above applies.",
     ),
     _OwnLimit(
         "audio_openings",
@@ -194,21 +281,51 @@ ADDON_LIMITS = (
         "songs",
         True,
         0,
-        "Songs whose audio this add-on is asked for at the same time; the song being played"
+        "Songs whose audio this add-on is asked for at the same time. The song being played"
         " never waits. 0: no limit.",
     ),
 )
-# An add-on's "More settings": its own time and limits, in place of the installation's.
+ADDON_TRANSFER_LIMITS = (
+    _OwnLimit(
+        "downloads",
+        "addon_downloads",
+        "Songs fetched at once",
+        "songs",
+        "songs",
+        True,
+        0,
+        "Whole songs fetched from this add-on at the same time, for all users together."
+        " Each counts until its transfer ends. Empty: Playback's setting applies. 0: no"
+        " limit of its own, though a limit of the add-ons it shares with still applies.",
+        transfer=True,
+    ),
+    _OwnLimit(
+        "preparations",
+        "addon_preparations",
+        "New preparations at once",
+        "songs",
+        "songs",
+        True,
+        0,
+        "Songs this add-on may be asked to prepare at the same time, when it hasn't"
+        " confirmed their audio is ready. Empty: Playback's setting applies. 0: no limit of"
+        " its own, though a limit of the add-ons it shares with still applies.",
+        transfer=True,
+    ),
+)
+# An add-on's "Advanced settings": its own time and limits, in place of the installation's.
 ADDON_MORE = Group(
     "limits",
     "Time and limits",
-    "Empty: as set on Playback. Add-ons at one address share their limits; the strictest apply.",
+    "An empty field uses Playback's setting. Add-ons at one address, or with the same shared"
+    " group label, share their limits on fetched songs and new preparations, and the"
+    " strictest applies. Request limits are shared by address only.",
     more=True,
 )
 # Where an add-on runs (its settings, and the form that adds one).
 REACH_HELP = (
-    "Where the add-on runs; one on this machine or the local network is refused unless chosen"
-    " here. In a container, the Docker host is on the local network."
+    "Where the add-on runs. An address on this machine or your local network is refused"
+    " unless chosen here. In a container, the Docker host is on the local network."
 )
 
 
@@ -298,7 +415,6 @@ class Dashboard:
         self.attempts = Attempts()
         # The client's address, as the proxy names it for Navidrome.
         self.forwarding = host.forwarding
-        self.admins = AdminCheck()
         # (Its manifest requests take their turn at each add-on's request limit.)
         self.checks = ManifestChecks(resolver=resolver, pace=self._pace)
         self.errors = RecentErrors()
@@ -336,10 +452,12 @@ class Dashboard:
             Route("/", self.home),
             Route("/sign-in", self.sign_in_page, methods=["GET"]),
             Route("/sign-in", self.sign_in, methods=["POST"]),
-            Route("/sign-out", page(self.sign_out), methods=["POST"]),
+            Route("/sign-out", self._personal_page(self.sign_out), methods=["POST"]),
             Route("/addons", page(self.addons_page), methods=["GET"]),
             Route("/addons", page(self.addon_add), methods=["POST"]),
             Route("/addons/configuration", page(self.addons_hand_back), methods=["POST"]),
+            Route("/addons/order", page(self.addons_order), methods=["POST"]),
+            Route("/addons/enabled", page(self.addons_enabled), methods=["POST"]),
             Route("/addons/{addon:int}/enabled", page(self.addon_enabled), methods=["POST"]),
             Route("/addons/{addon:int}/move", page(self.addon_move), methods=["POST"]),
             Route("/addons/{addon:int}/settings", page(self.addon_settings), methods=["POST"]),
@@ -348,11 +466,13 @@ class Dashboard:
             Route("/catalog", page(self.section_page), methods=["GET", "POST"]),
             Route("/catalog/check", page(self.catalog_check_now), methods=["POST"]),
             Route("/catalog/wait", page(self.catalog_wait_save), methods=["POST"]),
+            Route("/sound", page(self.section_page), methods=["GET", "POST"]),
             Route("/library", page(self.library_page), methods=["GET"]),
             Route("/library/policy", page(self.library_save), methods=["POST"]),
             Route("/library/pass", page(self.library_save), methods=["POST"]),
             Route("/library/settings", page(self.library_save), methods=["POST"]),
             Route("/library/review/{album}", page(self.library_review), methods=["POST"]),
+            Route("/library/no-match/{album}", page(self.library_recheck), methods=["POST"]),
             Route("/cleanup", page(self.cleanup_page), methods=["GET"]),
             Route("/cleanup/settings", page(self.cleanup_save), methods=["POST"]),
             Route("/cleanup/downloads", page(self.cleanup_save), methods=["POST"]),
@@ -361,9 +481,17 @@ class Dashboard:
             Route("/restart", page(self.restart_now), methods=["POST"]),
             Route("/restarting", page(self.restarting_page), methods=["GET"]),
             Route("/alive", self.alive, methods=["GET"]),
-            Route("/appearance", page(self.appearance_page), methods=["GET", "POST"]),
-            Mount("/static", StaticFiles(packages=[("shijhon.dashboard", "static")])),
+            Route(
+                "/appearance", self._personal_page(self.appearance_page), methods=["GET", "POST"]
+            ),
+            Route("/quality", self._personal_page(self.quality_page), methods=["GET", "POST"]),
+            Mount("/static", _Static(packages=[("shijhon.dashboard", "static")])),
         ]
+        routes.extend(DownloadPages(self).routes())
+        routes.extend(PlaylistPages(self).routes())
+        routes.extend(LibrarySetupPages(self).routes())
+        routes.extend(MusicImportPages(self).routes())
+        routes.extend(CollectionPages(self).routes())
         self.app = Starlette(routes=[Mount(PATH, routes=routes)])
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
@@ -406,24 +534,40 @@ class Dashboard:
         status_code: int = 200,
         **context: Any,
     ) -> HTMLResponse:
-        accent = await self.saved.accent() if self.saved is not None else DEFAULT_ACCENT
+        accent = (
+            await self.saved.accent(session.user_id if session else "")
+            if self.saved is not None
+            else DEFAULT_ACCENT
+        )
         html = self.env.get_template(template).render(
             prefix=PATH,
             accent=accent,
             user=session.username if session else "",
             csrf=session.csrf if session else "",
             current=current,
-            nav=NAV,
+            nav=NAV if session and session.is_admin else PERSONAL_NAV,
+            is_admin=bool(session and session.is_admin),
+            home="addons" if session and session.is_admin else "collection",
             version=__version__,
             copyright=__copyright__,
             license=__license__,
             source_url=PROJECT_URL,
-            pending=await self._pending() if session else [],
+            pending=await self._pending() if session and session.is_admin else [],
             # "Restart Shijhon" is offered where something starts Shijhon again.
-            can_restart=bool(session) and self.host.can_restart,
+            can_restart=bool(session and session.is_admin) and self.host.can_restart,
             **context,
         )
-        return HTMLResponse(html, status_code, headers=HEADERS)
+        headers = dict(HEADERS)
+        if template == "playlists.html":
+            headers["content-security-policy"] += "; script-src 'self'"
+        elif template in {
+            "addons.html",
+            "collection.html",
+            "music_imports.html",
+            "music_import_manage.html",
+        }:
+            headers["content-security-policy"] += "; script-src 'self'; connect-src 'self'"
+        return HTMLResponse(html, status_code, headers=headers)
 
     async def _form(self, request: Request) -> dict[str, str]:
         """A submitted form (URL-encoded; an empty body is an empty form). A field sent twice
@@ -445,51 +589,73 @@ class Dashboard:
     # --- sign-in ------------------------------------------------------------------------
 
     async def _session(self, request: Request) -> Session:
-        """The signed-in admin, or :class:`Refused` with a redirect to sign-in."""
+        """A currently verified personal owner, with no stale authorization grace."""
         if self.sessions is None:
             raise Refused(PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS))
         token = request.cookies.get(SESSION_COOKIE)
         session = await self.sessions.get(token)
         if session is None:
-            where = request.url.path if request.method == "GET" else f"{PATH}/addons"
+            where = request.url.path if request.method == "GET" else f"{PATH}/collection"
             raise Refused(self._see(f"/sign-in?next={quote(where, safe='/')}"))
         services = self.services
-        verdict = await self.admins.admin(
-            services.navidrome if services else None, session.username
-        )
-        if verdict is False:
-            await self.sessions.end_user(session.username)
-            self.admins.forget(session.username)
-            log.info(
-                "dashboard: %s signed out: not a Navidrome admin any more",
-                printable(session.username),
+        try:
+            if not services or not services.navidrome:
+                raise AccessUnavailable
+            principal = await AccessService(services.navidrome).personal(
+                session.username, expected_user_id=session.user_id
             )
-            raise Refused(self._see("/sign-in?reason=admin"))
-        if verdict is None:
+        except AccessDenied:
+            await self.sessions.end_owner(session.user_id)
+            log.info("dashboard: a session ended because identity or library access changed")
+            raise Refused(self._see("/sign-in?reason=access")) from None
+        except AccessUnavailable:
             raise Refused(
                 await self._render(
                     "unverified.html",
                     session=None,
                     status_code=503,
-                    title="Admin rights can't be checked",
+                    title="Account access can't be checked",
                 )
-            )
-        return session
+            ) from None
+        return replace(session, username=principal.username, principal=principal)
 
     def _page(
-        self, handler: Callable[[Request, Session], Awaitable[Response]]
+        self,
+        handler: Callable[[Request, Session], Awaitable[Response]],
+        *,
+        form_reader: Callable[[Request], Awaitable[dict[str, str]]] | None = None,
     ) -> Callable[[Request], Awaitable[Response]]:
-        """Pages for signed-in admins; posts need the session's CSRF token."""
+        """Installation pages require a currently verified administrator."""
+        return self._personal_page(handler, form_reader=form_reader, require_admin=True)
+
+    def _personal_page(
+        self,
+        handler: Callable[[Request, Session], Awaitable[Response]],
+        *,
+        form_reader: Callable[[Request], Awaitable[dict[str, str]]] | None = None,
+        require_admin: bool = False,
+    ) -> Callable[[Request], Awaitable[Response]]:
+        """Own-account pages; identity/library verification precedes form reads/work.
+
+        Collection adapters can wrap their routes with this callback. Session.user_id
+        is immutable; session.principal contains this request's current native grants.
+        """
 
         async def endpoint(request: Request) -> Response:
             try:
                 session = await self._session(request)
+                if require_admin and not session.is_admin:
+                    raise Refused(
+                        PlainTextResponse(
+                            "This page requires a Navidrome administrator.\n", 403, headers=HEADERS
+                        )
+                    )
                 if request.method == "POST":
                     if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
                         raise Refused(
                             PlainTextResponse("Cross-site form refused.\n", 403, headers=HEADERS)
                         )
-                    form = await self._form(request)
+                    form = await (form_reader or self._form)(request)
                     if not same(form.get("csrf", ""), session.csrf):
                         log.warning("dashboard: a form without its session's token was refused")
                         raise Refused(
@@ -506,20 +672,112 @@ class Dashboard:
 
         return endpoint
 
+    def _personal_api(
+        self,
+        handler: Callable[[Request, Session], Awaitable[Response]],
+        *,
+        require_admin: bool = False,
+    ) -> Callable[[Request], Awaitable[Response]]:
+        """Authorize private JSON/binary requests before their bodies are consumed.
+
+        The handler owns bounded JSON parsing or binary streaming. CSRF travels in a
+        header so an upload never needs parsing or staging before authorization.
+        """
+
+        def refused(code: str, message: str, status: int) -> JSONResponse:
+            return JSONResponse({"error": code, "message": message}, status, headers=HEADERS)
+
+        async def endpoint(request: Request) -> Response:
+            try:
+                session = await self._session(request)
+                if require_admin and not session.is_admin:
+                    return refused("admin_required", "This action requires an administrator.", 403)
+                if request.headers.get("sec-fetch-site") == "cross-site":
+                    return refused("origin_refused", "Send this request from Shijhon.", 403)
+                origins = request.headers.getlist("origin")
+                if origins:
+                    try:
+                        supplied = urlsplit(origins[0])
+                        expected = urlsplit(
+                            ("https" if _secure(request) else request.url.scheme)
+                            + "://"
+                            + request.url.netloc
+                        )
+
+                        def authority(url: SplitResult) -> tuple[str, str | None, int | None]:
+                            return (
+                                url.scheme,
+                                url.hostname,
+                                url.port or (443 if url.scheme == "https" else 80),
+                            )
+
+                        valid = (
+                            len(origins) == 1
+                            and supplied.scheme in ("http", "https")
+                            and supplied.username is None
+                            and supplied.password is None
+                            and not supplied.path
+                            and not supplied.query
+                            and not supplied.fragment
+                            and authority(supplied) == authority(expected)
+                        )
+                    except ValueError:
+                        valid = False
+                    if not valid:
+                        return refused("origin_refused", "Send this request from Shijhon.", 403)
+                if request.method not in ("GET", "HEAD"):
+                    tokens = request.headers.getlist("x-csrf-token")
+                    if len(tokens) != 1 or not same(tokens[0], session.csrf):
+                        return refused("csrf_refused", "Reload the import page and try again.", 403)
+                return await handler(request, session)
+            except Refused as failure:
+                status = failure.response.status_code
+                if status >= 500:
+                    return refused(
+                        "access_unavailable",
+                        "Account access could not be verified. Try again.",
+                        503,
+                    )
+                if status in (301, 302, 303, 307, 308):
+                    if "reason=access" in failure.response.headers.get("location", ""):
+                        return refused(
+                            "access_changed", "Your account or music-library access changed.", 403
+                        )
+                    return refused("sign_in_required", "Sign in to continue this import.", 401)
+                return refused("request_refused", "This request was refused.", status)
+
+        return endpoint
+
     async def home(self, request: Request) -> Response:
-        return self._see("/addons")
+        try:
+            session = await self._session(request)
+            return self._see("/addons" if session.is_admin else "/collection")
+        except Refused as refused:
+            return refused.response
 
     async def sign_in_page(self, request: Request, **context: Any) -> Response:
-        if self.sessions is not None and await self.sessions.get(
-            request.cookies.get(SESSION_COOKIE)
+        if (
+            request.query_params.get("reauth") != "1"
+            and self.sessions is not None
+            and await self.sessions.get(request.cookies.get(SESSION_COOKIE))
         ):
-            return self._see("/addons")
+            try:
+                session = await self._session(request)
+                return self._see("/addons" if session.is_admin else "/collection")
+            except Refused:
+                pass
         token = request.cookies.get(SIGNIN_COOKIE) or os.urandom(24).hex()
         reason = request.query_params.get("reason")
         context.setdefault("error", None)
         context.setdefault("error_title", None)
-        if reason == "admin" and context["error"] is None:
-            context["error"] = "Signed out: this account no longer has admin rights in Navidrome."
+        if reason == "access" and context["error"] is None:
+            context["error"] = "Signed out: your account or library access changed in Navidrome."
+        context.setdefault(
+            "info",
+            "Sign in again to refresh your music. Your library choices are kept."
+            if request.query_params.get("reauth") == "1"
+            else None,
+        )
         response = await self._render(
             "sign_in.html",
             session=None,
@@ -590,20 +848,48 @@ class Dashboard:
             return await again(
                 "Wrong username or password. Check them in Navidrome if you are unsure."
             )
-        if not login.admin:
-            log.info(
-                "dashboard: sign-in refused for %s: not a Navidrome admin", printable(username)
+        services = self.services
+        try:
+            if not services or not services.navidrome:
+                raise AccessUnavailable
+            principal = await AccessService(services.navidrome).personal(
+                login.username, expected_user_id=login.user_id
             )
-            return await again(
-                "This account has no admin rights in Navidrome. The dashboard is for admins only.",
-                code=403,
+        except AccessDenied:
+            return await again("This account cannot access Shijhon's library.", code=403)
+        except AccessUnavailable:
+            return await again("Account access could not be verified. Try again later.", code=503)
+        if services.playlists and login.token.get_secret_value() and login.salt.get_secret_value():
+            # A normal sign-in also authorizes caller-owned library reads, without
+            # another password form or any history/AI configuration. Keep prior settings.
+            async with services.playlists.changes:
+                old = await services.playlists.repo.connection(login.user_id)
+                values: dict[str, Any] = dict(
+                    user_id=login.user_id,
+                    username=principal.username,
+                    token=login.token,
+                    salt=login.salt,
+                )
+                connected = (
+                    old.model_copy(update=values)
+                    if old
+                    else Connection(**values, history_source="navidrome", use_shared_ai=True)
+                )
+                await services.playlists.repo.connect(connected)
+        token, _ = await self.sessions.create(login.username, login.user_id)
+        if services.collection_refresh and login.native_token.get_secret_value():
+            await services.collection_refresh.signed_in(
+                principal, login.native_token.get_secret_value()
             )
-        token, _ = await self.sessions.create(login.username)
-        self.admins.signed_in(login.username)
         log.info("dashboard: %s signed in", printable(login.username))
         target = form.get("next", "")
         if not target.startswith(PATH + "/") or target.startswith(PATH + "//") or "\\" in target:
-            target = f"{PATH}/addons"
+            target = f"{PATH}/{'addons' if principal.is_admin else 'collection'}"
+        if not principal.is_admin and not any(
+            target.split("?", 1)[0] == f"{PATH}/{p}" or target.startswith(f"{PATH}/{p}/")
+            for p in ("collection", "playlists", "downloads", "appearance", "quality")
+        ):
+            target = f"{PATH}/collection"
         response = RedirectResponse(target, status_code=303, headers=HEADERS)
         response.set_cookie(
             SESSION_COOKIE,
@@ -658,9 +944,17 @@ class Dashboard:
                 if getattr(now, f.key, f.builtin) == getattr(running, f.key, f.builtin):
                     continue
                 item = saved.get(section, {}).get(f.key)
-                waiting.append({"label": f.meta.label, "at": item.saved_at if item else None})
+                waiting.append(
+                    {
+                        "label": f.meta.label,
+                        "page": _page_of(section, f.key),
+                        "at": item.saved_at if item else None,
+                    }
+                )
         if self.addons_handed_back:
-            waiting.append({"label": "Add-on list from the configuration file", "at": None})
+            waiting.append(
+                {"label": "Add-on list from the configuration file", "page": "Add-ons", "at": None}
+            )
         return waiting
 
     async def _addon_names(self) -> list[str]:
@@ -750,6 +1044,8 @@ class Dashboard:
             extra["wait_problem"] = self.problems.get("search")
         if page == "playback":
             extra = {"missing": self._missing_sources(saved, names)}
+        if page == "sound":
+            extra = await self._sound_status(saved)
         groups = sections.rows(
             section,
             self.host.configured,
@@ -1029,6 +1325,24 @@ class Dashboard:
         ]
         return info
 
+    async def _sound_status(self, saved: Any) -> dict[str, Any]:
+        """The Sound page's status: whether AudioMuse-AI is connected in this run, whether it
+        answers, how many songs have facts, when they were read, and what went wrong."""
+        applying = effective(self.host.configured, saved, locked=self.host.locked)[0].audiomuse
+        services = self.services
+        sound = services.playlists.sound if services and services.playlists else None
+        info: dict[str, Any] = {
+            "configured": bool(applying.url),
+            "running": sound is not None,
+            "status": None,
+        }
+        if sound is not None:
+            try:
+                info["status"] = await sound.status()
+            except Exception:
+                log.exception("dashboard: the sound analysis status could not be read")
+        return info
+
     async def catalog_wait_save(self, request: Request, session: Session) -> Response:
         """The Catalog page's second form: how long a search or an artist page waits for
         the catalog (``[search] budget_seconds``, applied at once)."""
@@ -1125,7 +1439,8 @@ class Dashboard:
         marks = self._marks.get(addon.id, {})
         own = dataclasses.astuple(addon.limits)
         content = [
-            addon.base_url, str(addon.reach), addon.settings, addon.budget, declared, marks, own
+            addon.base_url, str(addon.reach), addon.settings, addon.budget, declared, marks, own,
+            addon.downloads, addon.preparations, addon.capacity_group
         ]  # fmt: skip
         text = json.dumps(content, sort_keys=True, default=str)
         return hmac.new(self._form_key, text.encode(), hashlib.sha256).hexdigest()[:32]
@@ -1201,9 +1516,10 @@ class Dashboard:
         addon: StoredSource,
         form: dict[str, str] | None,
         problems: dict[str, sections.Problem],
+        capacity: tuple[int, int] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """The rows of an add-on's settings form: its manifest's, then where it runs and its
-        address; and those under its "More settings": its time and its limits."""
+        address; and those under its "Advanced settings": its time and its limits."""
         running = self.running or self.host.configured
         prefix = f"addon-{addon.id}"
         if form is not None:
@@ -1234,8 +1550,8 @@ class Dashboard:
                 kind="secret",
                 label="Manifest URL",
                 state=("set", f"at {host_of(addon.base_url)}"),
-                help="The add-on's address, which often holds its key; never shown. Empty: the"
-                " current one is kept.",
+                help="The add-on's address. It often contains a key, so it is never shown."
+                " Leave it empty to keep the current one.",
                 problem=_row(problems.get("manifest")),
                 clear_label="",
             ),
@@ -1249,13 +1565,42 @@ class Dashboard:
                 spoken="seconds",
                 unit="s",
                 text=budget_text,
-                help="How long this add-on has to start the audio. Empty: it shares the time to"
-                " first audio set on Playback.",
-                default=f"Default: shares Playback's, {total} s",
+                help="How long this add-on has to start a song, in place of Playback's time to"
+                " first audio. Give more to one that prepares whole files first. Playlist"
+                " imports give its catalog at least this long too. Empty: Playback's setting"
+                " applies.",
+                default=f"Default {total} s, from Playback",
                 problem=_row(problems.get("budget_seconds")),
                 modified=addon.budget is not None,
             ),
             *(self._limit_row(addon, limit, form, problems) for limit in ADDON_LIMITS),
+            *(
+                self._limit_row(
+                    addon,
+                    limit,
+                    form,
+                    problems,
+                    effective=capacity[index] if capacity is not None else None,
+                )
+                for index, limit in enumerate(ADDON_TRANSFER_LIMITS)
+            ),
+            _setting(
+                id=f"{prefix}-capacity-group",
+                name="capacity_group",
+                kind="text",
+                label="Shared account or worker group",
+                text=form.get("capacity_group", addon.capacity_group)
+                if form is not None
+                else addon.capacity_group,
+                max_length=100,
+                help="Give add-ons that use one account or worker the same label, even at"
+                " different addresses: Shijhon can't tell that from the address. They then"
+                " share their limits on fetched songs and new preparations, and the strictest"
+                " applies. The label is not sent to the add-on.",
+                default="Default none: only add-ons at one address share limits",
+                problem=_row(problems.get("capacity_group")),
+                modified=bool(addon.capacity_group),
+            ),
         ]
         return rows, more
 
@@ -1265,16 +1610,36 @@ class Dashboard:
         limit: _OwnLimit,
         form: dict[str, str] | None,
         problems: dict[str, sections.Problem],
+        *,
+        effective: int | None = None,
     ) -> dict[str, Any]:
         """One of the add-on's own limits on what Shijhon sends it; empty: the
-        installation's (Playback, "Limits per add-on")."""
+        installation's (Playback, "Limits per add-on", or "Downloads and playlist
+        preparation" for a transfer limit)."""
         running = self.running or self.host.configured
-        own = getattr(addon.limits, limit.name)
+        own = getattr(addon if limit.transfer else addon.limits, limit.name)
         if form is not None:
             text = form.get(limit.name, "")
         else:
             text = format_number(own) if own is not None else ""
         shared = format_number(getattr(running.delivery, limit.setting))
+        default = f"Default {counted(shared, limit.unit)}, from Playback"
+        if limit.transfer:
+            inherited = int(getattr(running.delivery, limit.setting))
+            alone = own if own is not None else inherited
+            effective = effective if effective is not None else alone
+
+            def amount(value: int) -> str:
+                return "no limit" if value == 0 else counted(str(value), limit.unit)
+
+            # What applies: its own or Playback's, or a stricter one of the add-ons it
+            # shares its limits with (at its address, or in its shared group).
+            applies = f"In effect: {amount(effective)}"
+            if effective != alone:
+                applies += ", from the add-ons it shares limits with"
+            default = f"Default {amount(inherited)}, from Playback. {applies}."
+            if not addon.enabled:
+                default = f"Default {amount(inherited)}, from Playback. Not in effect while off."
         return _setting(
             id=f"addon-{addon.id}-{_slug(limit.name)}",
             name=limit.name,
@@ -1284,7 +1649,7 @@ class Dashboard:
             unit=limit.unit,
             text=text,
             help=limit.help,
-            default=f"Default: as every add-on, {shared}",
+            default=default,
             problem=_row(problems.get(limit.name)),
             modified=own is not None,
         )
@@ -1373,13 +1738,20 @@ class Dashboard:
         await self.checks.check(await self._stored())
         # (Nothing waits from here to the rows: the marks are these add-ons'.)
         addons = await self._stored_marked()
+        running = self.running or self.host.configured
+        capacities = effective_capacity(
+            addons, running.delivery.addon_downloads, running.delivery.addon_preparations
+        )
         flash = self._flash_for(session, "addons")
         items: list[dict[str, Any]] = []
         for index, addon in enumerate(addons):
             check = self.checks.known(addon)
             mine = form_for == addon.id
             rows, more = self._addon_rows(
-                addon, form if mine else None, problems or {} if mine else {}
+                addon,
+                form if mine else None,
+                problems or {} if mine else {},
+                capacity=capacities.get(addon.id),
             )
             _, fold = sections.folded([(ADDON_MORE, more)])
             if flash is not None and flash.addon == addon.id and set(flash.keys):
@@ -1415,9 +1787,6 @@ class Dashboard:
         cooling = sum(1 for item in items if item["health"]["light"] == "cool")
         owner = await self.saved.addons_owner()
         in_file = self.host.configured.addons
-        differs: list[str] = []
-        if in_file is not None and owner is not None and self.services is not None:
-            differs = await self.services.sources.differs(in_file)  # the file's, not applied
         # DASH links not played for want of ffmpeg (turned off in the settings: not said).
         deliverer = self.services.deliverer if self.services is not None else None
         running = self.running or self.host.configured
@@ -1462,7 +1831,6 @@ class Dashboard:
             from_file=in_file is not None,
             env_list=self._env_list(),
             owner=owner,
-            differs=differs,
             stale=stale,
             handed_back=self.addons_handed_back,
             dash_off=dash_off,
@@ -1546,7 +1914,55 @@ class Dashboard:
                 printable(session.username),
                 printable(addon.name),
             )
+        if _wants_json(request):  # addons.js: the page already shows the move
+            return JSONResponse({"saved": True}, headers=HEADERS)
         return self._see(f"/addons#addon-{addon.id}")
+
+    async def addons_order(self, request: Request, session: Session) -> Response:
+        """The order addons.js saves after an add-on was pulled to another place: a position
+        for every add-on, answered as JSON. Refused (the list changed meanwhile), the page
+        reloads and its notice says so."""
+        self._editable_list()
+        assert self.services is not None
+        form: dict[str, str] = request.state.form
+        addons = await self._stored()
+        ids = [addon.id for addon in addons]
+        sent = {key for key in form if key.startswith("position-")}
+        positions: dict[int, int] = {}
+        for source_id in ids:
+            raw = form.get(f"position-{source_id}", "").strip()
+            if not raw.isdigit():
+                positions = {}
+                break
+            positions[source_id] = int(raw)
+        if not positions or sent != {f"position-{source_id}" for source_id in ids}:
+            refused = "Order not saved: the list changed meanwhile. Here it is as it is now."
+            self._remember(session, Flash("addons", words=refused, tone="error"))
+            return JSONResponse({"saved": False}, 409, headers=HEADERS)
+        ordered = sorted(ids, key=lambda source_id: (positions[source_id], ids.index(source_id)))
+        if ordered != ids:
+            await self.services.sources.reorder(ordered)
+            await self._owned(session)
+            log.info("dashboard: %s changed the add-ons' order", printable(session.username))
+        return JSONResponse({"saved": True}, headers=HEADERS)
+
+    async def addons_enabled(self, request: Request, session: Session) -> Response:
+        """Every add-on on, or every one off."""
+        self._editable_list()
+        assert self.services is not None
+        wanted = request.state.form.get("enabled") == "true"
+        changes = {addon.id: wanted for addon in await self._stored() if addon.enabled != wanted}
+        if changes:
+            await self.services.sources.set_enabled_many(changes)
+            await self._owned(session)
+            log.info(
+                "dashboard: %s turned every add-on %s",
+                printable(session.username),
+                "on" if wanted else "off",
+            )
+        words = "Every add-on is on." if wanted else "Every add-on is off."
+        self._remember(session, Flash("addons", words=words))
+        return self._see("/addons")
 
     async def addon_remove(self, request: Request, session: Session) -> Response:
         self._editable_list()
@@ -1631,6 +2047,20 @@ class Dashboard:
                 own[limit.name] = value
             except Invalid:
                 problem(limit.name, f"Enter {rule}.", f"must be {rule}.")
+        transfers = {limit.name: getattr(addon, limit.name) for limit in ADDON_TRANSFER_LIMITS}
+        for limit in ADDON_TRANSFER_LIMITS:
+            if limit.name not in form:
+                continue
+            try:
+                transfers[limit.name] = transfer_limit(form[limit.name])
+            except Invalid as exc:
+                rule = f"a whole number from 0 to {MAX_LIMIT}"
+                problem(limit.name, str(exc), f"must be {rule}.")
+        capacity_group = form.get("capacity_group", addon.capacity_group).strip()
+        if len(capacity_group) > 100:
+            problem(
+                "capacity_group", "Enter at most 100 characters.", "must be at most 100 characters."
+            )
         reach = form.get("reach", addon.reach)
         if reach not in REACHES:
             problem("reach", "Choose where the add-on runs.", "must be one of the listed places.")
@@ -1746,6 +2176,11 @@ class Dashboard:
             budget_seconds=None if keep_budget else budget,
             clear_budget=not keep_budget and budget is None,
             limits=Limits(**own),  # type: ignore[arg-type]  # (whole numbers where they are)
+            downloads=transfers["downloads"],
+            preparations=transfers["preparations"],
+            clear_downloads="downloads" in form and transfers["downloads"] is None,
+            clear_preparations="preparations" in form and transfers["preparations"] is None,
+            capacity_group=capacity_group,
             also=also,
         )
         if fresh is not None:  # read a moment ago at its address: not asked for again
@@ -1762,13 +2197,24 @@ class Dashboard:
         words = ""
         if dropped:
             words = (
-                f"{addon.name}'s address is on another host now, so {len(dropped)} setting(s)"
-                " its manifest does not declare plain were removed: they are not sent there."
-                " Its secret settings can be entered again below if the new address needs them."
+                f"{addon.name}'s address is on another host now. {len(dropped)} setting(s)"
+                " that may be secret were removed, so they are not sent there. Enter them"
+                " again below if the new address needs them."
             )
-        # (Its time or limits changed: their "More settings" is open on the page that follows.)
-        before = {"budget_seconds": addon.budget, **dataclasses.asdict(addon.limits)}
-        after = {"budget_seconds": budget if not keep_budget else addon.budget, **own}
+        # (Its time or limits changed: their "Advanced settings" is open on the next page.)
+        before = {
+            "budget_seconds": addon.budget,
+            **dataclasses.asdict(addon.limits),
+            "downloads": addon.downloads,
+            "preparations": addon.preparations,
+            "capacity_group": addon.capacity_group,
+        }
+        after = {
+            "budget_seconds": budget if not keep_budget else addon.budget,
+            **own,
+            **transfers,
+            "capacity_group": capacity_group,
+        }
         self._remember(
             session,
             Flash(
@@ -1838,6 +2284,8 @@ class Dashboard:
         page_number = int(text) if text.isdigit() and len(text) < 7 else 1
         text = request.query_params.get("picks", "1")
         picks_page = int(text) if text.isdigit() and len(text) < 7 else 1
+        text = request.query_params.get("no_match", "1")
+        no_match_page = int(text) if text.isdigit() and len(text) < 7 else 1
         context: dict[str, Any] = {
             "fills_on": fills is not None,
             "songs": songs,
@@ -1854,11 +2302,15 @@ class Dashboard:
             "jobs": self.jobs.recent(session.token_hash),
             "page": page_number,
             "picks_page": picks_page,
+            "no_match_page": no_match_page,
         }
         if fills is not None:
             scope = fills.scope
             rows, total, page_number = await library.review(self.store, scope, page_number)
             picked, picks_total, picks_page = await library.picks(self.store, scope, picks_page)
+            unmatched, no_match_total, no_match_page = await library.no_matches(
+                self.store, scope, no_match_page
+            )
             albums: set[str] | None = None
             # The pass's own cached catalog, when there is one (not the listeners' cache);
             # nothing is asked while the catalog rests after errors.
@@ -1914,6 +2366,14 @@ class Dashboard:
                 picks_pages=max(1, -(-picks_total // library.PAGE)),
                 picks_first=(picks_page - 1) * library.PAGE + 1,
                 picks_last=min(picks_total, picks_page * library.PAGE),
+                no_matches=[
+                    {"row": row, "job": self.jobs.running(row.album_id)} for row in unmatched
+                ],
+                no_match_total=no_match_total,
+                no_match_page=no_match_page,
+                no_match_pages=max(1, -(-no_match_total // library.PAGE)),
+                no_match_first=(no_match_page - 1) * library.PAGE + 1,
+                no_match_last=min(no_match_total, no_match_page * library.PAGE),
                 running=self._pass_running(passing),
                 resting=_wall(fills.resting_until, fills.clock) if fills.resting else None,
                 pass_mode=passing.mode if passing is not None else "",
@@ -2078,6 +2538,82 @@ class Dashboard:
             return note(f"{name}: Shijhon is stopping; nothing done.", "error")
         return note(words)
 
+    async def library_recheck(self, request: Request, session: Session) -> Response:
+        """Match one current negative result again, without adding files."""
+        services = self.services
+        fills = services.fills if services is not None else None
+        form: dict[str, str] = request.state.form
+        album_id = request.path_params["album"]
+        back = f"/library?no_match={quote(form.get('page', '1'))}#no-match"
+        if fills is None:
+            raise Refused(PlainTextResponse("Filling albums is off.\n", 409, headers=HEADERS))
+
+        def note(words: str, tone: str = "info") -> Response:
+            self._remember(session, Flash("library", words=words, tone=tone))
+            return self._see(back)
+
+        found = await self._negative_row(fills, album_id)
+        if found is None:
+            return note("That album's match has changed or it is no longer in No match.")
+        title = found["title"] or f"Unknown album ({album_id})"
+        name = f"{found['artist'] or 'Unknown artist'} \u2013 {title}"
+        if form.get("action") != "recheck":
+            return note("Choose Match again.", "error")
+        if fills.resting:
+            until = when(_wall(fills.resting_until, fills.clock))
+            return note(
+                f"{name} is not matched again now: the catalog is resting after errors."
+                f" Try again after {until}.",
+                "error",
+            )
+        job = self.jobs.claim(album_id, name, "recheck")
+        if job is None:
+            return note(f"{name} is busy with the last action; wait for its result.")
+        log.info("dashboard: %s asked to recheck %s", printable(session.username), printable(name))
+        if not self.host.try_spawn(lambda: self._recheck(fills, job)):
+            words = f"{name}: Shijhon is stopping; nothing done."
+            self.jobs.finish(job, ok=False, message=words)
+            return note(words, "error")
+        return note(f"Matching {name} again. No files are added. Reload to see the result.")
+
+    async def _negative_row(self, fills: Any, album_id: str) -> Any:
+        """The current scope's negative result; other outcomes never use this action."""
+        assert self.store is not None
+        return await self.store.fetchone(
+            "SELECT title, artist FROM album_matches"
+            " WHERE album_id = ? AND scope = ? AND outcome = 'none'",
+            [album_id, fills.scope],
+        )
+
+    async def _recheck(self, fills: Any, job: library.Job) -> None:
+        """Check eligibility again in the job; Fills guards the rematch atomically."""
+        changed = f"{job.title}: the match has changed. Reload to see its current result."
+        try:
+            if await self._negative_row(fills, job.album_id) is None:
+                self.jobs.finish(job, ok=False, message=changed)
+                return
+            decision = await fills.recheck(job.album_id)
+            if decision is None:
+                reason = (
+                    "the catalog is resting" if fills.resting else "it could not be checked now"
+                )
+                self.jobs.finish(
+                    job,
+                    ok=False,
+                    message=f"{job.title} was not matched: {reason}. Reload and try again.",
+                )
+                return
+            await self._match_result(fills, job)
+        except ChoiceRefused:
+            self.jobs.finish(job, ok=False, message=changed)
+        except BaseException as exc:
+            self.jobs.finish(
+                job, ok=False, message=f"{job.title} could not be matched ({type(exc).__name__})."
+            )
+            if not isinstance(exc, Exception):
+                raise
+            log.exception("dashboard: rechecking %s failed", printable(job.title))
+
     async def _review_row(self, fills: Any, album_id: str) -> Any:
         """The album's row in the review list: in review, or matched by an automatic pick
         and not filled yet."""
@@ -2143,12 +2679,7 @@ class Dashboard:
         try:
             await fills.rematch(job.album_id)
             await fills.fill(job.album_id, hold=True, matcher=paced)
-            assert self.store is not None
-            row = await self.store.fetchone(
-                "SELECT outcome, reason, picked FROM album_matches"
-                " WHERE album_id = ? AND scope = ?",
-                [job.album_id, fills.scope],
-            )
+            await self._match_result(fills, job)
         except BaseException as exc:
             self.jobs.finish(
                 job, ok=False, message=f"{job.title} could not be matched ({type(exc).__name__})."
@@ -2157,6 +2688,14 @@ class Dashboard:
                 raise
             log.exception("dashboard: matching %s again failed", printable(job.title))
             return
+
+    async def _match_result(self, fills: Any, job: library.Job) -> None:
+        """Report the album's own saved result, including when a group match moved it."""
+        assert self.store is not None
+        row = await self.store.fetchone(
+            "SELECT outcome, reason, picked FROM album_matches WHERE album_id = ? AND scope = ?",
+            [job.album_id, fills.scope],
+        )
         outcome, reason = (row["outcome"], row["reason"] or "") if row else (None, "")
         if outcome is None:
             if fills.resting:
@@ -2183,6 +2722,8 @@ class Dashboard:
             words, ok = f"{job.title} is complete as it is.", True
         elif outcome == "none":
             words, ok = f"No release matches {job.title}.", False
+        elif outcome == "kept":
+            words, ok = f"{job.title} is kept as it is.", True
         else:
             words, ok = f"{job.title} could not be matched: {reason}.", False
         self.jobs.finish(job, ok=ok, message=words)
@@ -2552,9 +3093,9 @@ class Dashboard:
             accent = request.state.form.get("accent", "")
             if accent in ACCENTS:
                 await self.saved.put(
-                    APPEARANCE,
+                    f"{APPEARANCE}:{session.user_id}",
                     {"accent": REMOVE if accent == DEFAULT_ACCENT else accent},
-                    session.username,
+                    session.user_id,
                 )
                 log.info("dashboard: %s chose the accent %s", printable(session.username), accent)
                 self._remember(session, Flash("appearance", words="Accent color saved."))
@@ -2566,8 +3107,52 @@ class Dashboard:
             session=session,
             current="appearance",
             accents=[(key, ACCENT_NAMES[key]) for key in ACCENTS],
-            chosen=await self.saved.accent(),
+            chosen=await self.saved.accent(session.user_id),
             saved_now=saved_now,
+        )
+
+    async def quality_page(self, request: Request, session: Session) -> Response:
+        """Each person's lowest audio quality (``delivery/quality_gate.py``)."""
+        services = self.services
+        minimums = services.quality if services is not None else None
+        if request.method == "POST":
+            if minimums is not None:
+                form = request.state.form
+                if form.get("reset"):
+                    await minimums.set(session.user_id, None, by=session.user_id)
+                    words = "You use the server's default again."
+                elif (choice := form.get("minimum", "")) in QUALITY_CHOICES:
+                    await minimums.set(session.user_id, choice, by=session.user_id)
+                    await minimums.set_upgrades(
+                        session.user_id, form.get("upgrade") == "on", by=session.user_id
+                    )
+                    words = "Lowest quality saved."
+                else:
+                    words = ""
+                if words:
+                    log.info(
+                        "dashboard: %s chose the lowest quality %s",
+                        printable(session.username),
+                        "default" if form.get("reset") else form.get("minimum", ""),
+                    )
+                    self._remember(session, Flash("quality", words=words))
+            return self._see("/quality")
+        flash = self._flash_for(session, "quality")
+        own = await minimums.choice(session.user_id) if minimums is not None else None
+        upgrades = await minimums.upgrades(session.user_id) if minimums is not None else True
+        default = minimums.default if minimums is not None else "any"
+        return await self._render(
+            "quality.html",
+            session=session,
+            current="quality",
+            available=minimums is not None,
+            choices=[(value, QUALITY_LABELS[value]) for value in QUALITY_CHOICES],
+            chosen=own or default,
+            own=own is not None,
+            default_words=QUALITY_WORDS.get(default, ""),
+            upgrades=upgrades,
+            words=QUALITY_WORDS,
+            saved_now=flash.words if flash is not None else "",
         )
 
 

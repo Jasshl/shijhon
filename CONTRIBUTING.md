@@ -1,16 +1,17 @@
 # Contributing to Shijhon
 
-Shijhon is a beta, written by one person. Bug reports, findings from real apps and patches
-are welcome; so are questions before you start on something large.
+Shijhon is a beta with a single maintainer. AI writes most of its code. Bug reports,
+findings from real apps and patches are welcome, and so are questions before you start on
+something large.
 
 ## Before you write code
 
-- Read the [README](README.md) and [docs/development.md](docs/development.md): the setup,
-  the tests, a map of the source.
+- Use the [README](README.md) for the product overview and
+  [docs/development.md](docs/development.md) for setup, tests and the source map.
 - Look at [docs/known-issues.md](docs/known-issues.md) and
   [docs/reference/known-gaps.md](docs/reference/known-gaps.md): what you found may be
   recorded there.
-- Discuss a change to established behavior in an issue before you build it.
+- Discuss substantial changes to established product behavior before implementation.
 
 ## The rules that matter most
 
@@ -30,9 +31,12 @@ cheap and fast. Changes keep it that way:
 **2. Navidrome stays the authority, unmodified.** Users, the library, IDs, playlists,
 favorites, scrobbling and the metadata of owned music are Navidrome's. Shijhon does not
 rewrite Navidrome's answers about owned items: it adds catalog data and serves the audio
-of placeholder tracks. (One exception: a partly owned album that is shown complete carries
-the complete album's song count and length.) Credentials are checked with Navidrome before
-Shijhon does any work for a request.
+of placeholder tracks. Two exceptions: a partly owned album that is shown complete carries
+the complete album's song count and length; and a song whose file is below the listener's
+minimum audio quality (each person's choice) plays the add-ons' audio of that recording
+under its own ID, when they have it and it is not known to be below that minimum too - its
+entry, favorites and plays stay Navidrome's. Credentials
+are checked with Navidrome before Shijhon does any work for a request.
 
 **3. Providers stay outside.** Code for a specific catalog or add-on provider does not
 go into this repository: no code, comment, test or fixture, and no token or token service.
@@ -64,14 +68,16 @@ uv run pytest -n auto        # every default suite, in parallel
 uv run ruff check . && uv run ruff format --check . && uv run mypy
 ```
 
-- Run the whole suite, the linters and the type check before you send a change
-  ([docs/development.md](docs/development.md#checks) says what can fail because of the
-  machine).
-- A change in behavior comes with a test.
-- **Server-side answers do not establish what an app does.** A change to what apps see
-  needs a check with real apps
-  ([docs/development.md](docs/development.md#checks-with-real-apps)); say in your change
-  which apps you tried, and with which versions.
+- For routine changes, run focused tests and relevant lint/type checks. Run the full
+  suite for library writes/recovery, migrations, authentication, audio routing,
+  startup/shutdown, dependency changes or broad changes.
+  [docs/development.md](docs/development.md#checks) describes machine-specific failures.
+  Documentation-only changes need diff and link checks, not the application suite.
+- Cover changed behavior with meaningful tests.
+- **Server-side answers do not establish what an app does.** When client behavior
+  changes, check the affected flows in a real app; one is enough
+  ([docs/development.md](docs/development.md#checks-with-real-apps)). Say in your change
+  which app you tried, and its version.
 - A change to how Shijhon reads or follows Navidrome should pass the canary suite
   (`uv run pytest -m canary`).
 

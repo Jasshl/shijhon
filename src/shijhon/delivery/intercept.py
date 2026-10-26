@@ -15,7 +15,11 @@ For a placeholder song (and only then) Shijhon does work, so it checks credentia
   in place;
 - placeholders already replaced by delivered audio are Navidrome's to serve - but a play
   that began at the add-ons keeps its file for its later ranges while the song's link
-  is kept (the library's copy is another file).
+  is kept (the library's copy is another file);
+- a song whose file (owned, or delivered audio) is below the listener's minimum quality
+  plays from the add-ons when they have audio that meets it (``_from_addons``): a
+  ``stream``, a ``download``, and a transcode stream whose decision at original quality
+  was direct play (``_below_minimum``).
 
 A catalog song that is not in the library yet is played from the add-ons without being
 committed (``catalog_play``): the client's "now playing" report, or another action,
@@ -58,6 +62,7 @@ from shijhon.delivery.download_first import (
 from shijhon.delivery.limits import Limited, UserLimits
 from shijhon.delivery.listening import Listener
 from shijhon.delivery.playback import (
+    Accept,
     ByteRange,
     Deliverer,
     Departure,
@@ -66,13 +71,14 @@ from shijhon.delivery.playback import (
     PinBroken,
     Track,
 )
+from shijhon.delivery.quality_gate import LibrarySong, QualityGate, refusal
 from shijhon.delivery.warm import WarmAhead
 from shijhon.navidrome.client import NavidromeError, NavidromeService
 from shijhon.placeholders.backing import OwnedRecordings
 from shijhon.proxy.app import Forward, HandlerResult, Reply, RequestContext
 from shijhon.proxy.auth import Caller, CheckFailed
 from shijhon.proxy.params import RestCall, header
-from shijhon.proxy.responses import not_implemented, subsonic_error
+from shijhon.proxy.responses import music_send, not_implemented, subsonic_error
 from shijhon.proxy.upstream import (
     Receive,
     Scope,
@@ -84,8 +90,10 @@ from shijhon.proxy.upstream import (
     send_bytes,
     send_stream,
 )
+from shijhon.quality import ANY, Minimum
 from shijhon.store import Store
 from shijhon.views.answers import library_answer
+from shijhon.views.ids import ABSENT
 
 log = logging.getLogger(__name__)
 
@@ -99,9 +107,12 @@ _CONDITIONAL = {
     b"if-unmodified-since",
 }
 MAX_SHARE_TRACKS = 20
+MAX_SHARE_COLLECTIONS = 20
 # Listeners' latest plays of songs remembered (past it: the least recently asked for go) -
 # more than the songs' links kept (``playback.MAX_PINS``), which a play's file needs too.
 MAX_PLAYS = 20000
+# Direct-play decisions of songs below their listener's minimum remembered (``_direct``).
+MAX_DECISIONS = 4096
 # How long a request for a new placeholder being written waits for its row.
 WRITE_WAIT_SECONDS = 15.0
 # How long an archive waits for Navidrome's answer to start while new placeholders wait for
@@ -162,13 +173,14 @@ class _BeingWritten(Exception):
 
 @dataclass
 class _AsIs:
-    """What a request for a format or bitrate gets: ``reply``, a plain stream (or its
-    failure), or None: download-first (``resume``: continuing a routing that found no
-    audio); ``at``: when its start was noted."""
+    """What a request for a format or bitrate gets: ``reply``, a plain stream (``served``:
+    of audio opened) or its failure, or None: download-first (``resume``: continuing a
+    routing that found no audio); ``at``: when its start was noted."""
 
     reply: Reply | None = None
     at: float | None = None
     resume: bool = False
+    served: bool = False
 
 
 @dataclass
@@ -182,10 +194,21 @@ class _Kept:
 
 
 _KEPT = "download-first:"  # a request's kept fetch of a song (by its track key)
-# A listener's play of a song: (listener, the song's key, the format and bitrate asked for),
-# and its start: that, and its number.
+# A listener's play of a song: (listener, the song's key, the format and bitrate asked for
+# - a transcode stream's: ``_TRANSCODE``), and its start: that, and its number.
 _PlayKey = tuple[Listener, str, tuple[str, int] | None]
 _Start = tuple[_PlayKey, int]
+# A transcode stream's play (``getTranscodeStream``): one of its own, which goes on only
+# with the decision it was accepted with (``Interceptor._decided``).
+_TRANSCODE = ("transcode", -1)
+
+
+def _processing(call: RestCall) -> tuple[str, int] | None:
+    """A play's processing (``_PlayKey``): the format and bitrate a stream asks for
+    (``requested_processing``); a transcode stream's own (``_TRANSCODE``)."""
+    if call.name == "getTranscodeStream":
+        return _TRANSCODE
+    return requested_processing(call)
 
 
 @dataclass
@@ -211,8 +234,15 @@ class Interceptor:
         ahead: AheadGate | None = None,
         recordings: OwnedRecordings | None = None,
         limits: UserLimits | None = None,
+        quality: QualityGate | None = None,
     ) -> None:
         self.store = store
+        # Each listener's minimum quality: a file below it plays from the add-ons
+        # (``delivery/quality_gate.py``).
+        self.quality = quality
+        # After a play of a song whose file is below the listener's minimum went to the
+        # add-ons: the listener's name and the song (an upgrade of their own import).
+        self.upgrade_after: Callable[[str, LibrarySong], None] | None = None
         self.limits = limits  # per user: songs looked up at the add-ons at once
         # Recordings the owner has on other albums: a catalog song plays that file.
         self.recordings = recordings
@@ -232,9 +262,23 @@ class Interceptor:
         # format and bitrate (``requested_processing``): when it began (a number) and
         # whether at the add-ons. Once the song's audio is in the library, a play that
         # began there keeps its file for its later ranges while the song's link is kept
-        # (``_on_its_file``). The newest last.
+        # (``_on_its_file``). The newest last. Changed only through ``_set_play`` and
+        # ``_drop_play``, which keep ``_at_addons``.
         self._plays: dict[_PlayKey, tuple[int, bool]] = {}
         self._play_numbers = itertools.count()
+        # The songs (keys) with plays among them that began at the add-ons, and how many:
+        # such a song's requests are looked at even while no one can have a minimum
+        # (``_going_on``).
+        self._at_addons: dict[str, int] = {}
+        # Navidrome's latest direct-play decisions at original quality for songs whose
+        # file is below the listener's minimum, by (listener, client, token): the formats
+        # the client plays as it is (``_below_minimum``) - for new plays only. The newest
+        # last.
+        self._direct: dict[tuple[str, str, str], DirectPlay] = {}
+        # A transcode stream's play from the add-ons (``_TRANSCODE``): its number, the
+        # decisions (tokens) it goes on with and the client profile they were accepted
+        # with (``_from_addons``). Kept with its play, whatever later decisions say.
+        self._decided: dict[_PlayKey, tuple[int, frozenset[str], DirectPlay]] = {}
 
     def handlers(self) -> dict[str, Any]:
         return {
@@ -313,6 +357,14 @@ class Interceptor:
             if waited.cancelled_caught:
                 return subsonic_error(call, 0, "audio unavailable: its album is being added")
         if row is None:
+            if (going := await self._going_on(call, ctx, ident)) is not None:
+                return going  # a play from the add-ons: its later ranges stay on their file
+            low = await self._below(ctx, ident)
+            if low is not None:  # its file is below the listener's minimum: the add-ons
+                caller, song, minimum = low
+                return await self._from_addons(
+                    call, ctx, caller, song.track(), minimum, upgrade=song
+                )
             # An owned song: its start still tells fetches ahead apart.
             await self._note_start(call, ctx, call.get("id"))
             # (New placeholders written while that was noted - a credential check can take
@@ -345,6 +397,18 @@ class Interceptor:
             # Navidrome's copy (another file).
             return self._serve(call, track, ctx.head, who, start=start)
         backing = None if delivered else await self._backing(row)
+        if self.quality is not None and (delivered or backing):
+            minimum = await self.quality.minimum(caller.username)
+            heard = str(row["song_id"]) if delivered else str(backing)
+            if minimum != ANY and await self.quality.below(caller.username, heard) is not None:
+                # Its file (delivered audio, or the owned recording it plays) is below the
+                # listener's minimum: the add-ons, the file only when they have nothing.
+                if delivered or requested_processing(call) is None:
+                    fallback = (
+                        None if delivered else self._swap(call, "id", {row["song_id"]: heard})
+                    )
+                    return await self._from_addons(call, ctx, caller, track, minimum, fallback)
+                backing = None  # converted: download-first takes the add-ons' audio
         if delivered or backing:
             # Played from a file: its start still tells fetches ahead apart.
             await self._note_start(call, ctx, track.key)
@@ -387,6 +451,12 @@ class Interceptor:
         who = (caller.username, call.client)
         start = self._starting(call, ctx, who, track_of(row).key)
         backing = await self._backing(row)
+        if backing and not await self._stands_in(caller, backing):
+            if requested_processing(call) is None:
+                minimum = await self._minimum(caller)
+                fallback = self._swap(call, "id", {str(row["song_id"]): backing})
+                return await self._from_addons(call, ctx, caller, track_of(row), minimum, fallback)
+            backing = None  # a conversion goes the placeholder's way (download-first)
         if backing:
             await self._note_start(call, ctx, track_of(row).key)
             return self._swap(call, "id", {str(row["song_id"]): backing})
@@ -424,6 +494,13 @@ class Interceptor:
             except Exception as exc:  # the add-ons, then
                 log.info("owned recording lookup failed: %s", type(exc).__name__)
                 owned = None
+            if owned is not None and not await self._stands_in(caller, owned):
+                if requested_processing(call) is None:
+                    minimum = await self._minimum(caller)
+                    fallback = self._swap(call, "id", {ident: owned})
+                    played = catalog_track(track)
+                    return await self._from_addons(call, ctx, caller, played, minimum, fallback)
+                owned = None  # converted: committed first (its placeholder is gated alike)
             if owned is not None:
                 played = catalog_track(track)
                 await self._note_start(call, ctx, played.key, played)
@@ -438,6 +515,163 @@ class Interceptor:
                 return self._serve(call, played, ctx.head, who, resume=True, start=start)
             return as_is.reply
         return self._serve(call, catalog_track(track), ctx.head, who, start=start)
+
+    # --- each listener's minimum quality (delivery/quality_gate.py) -------------------
+
+    async def _minimum(self, caller: Caller) -> Minimum:
+        return ANY if self.quality is None else await self.quality.minimum(caller.username)
+
+    async def _stands_in(self, caller: Caller, song_id: str) -> bool:
+        """Whether the file of ``song_id`` may play for a catalog song (or a placeholder)
+        this listener plays: not below their minimum."""
+        return self.quality is None or await self.quality.stands_in(caller.username, song_id)
+
+    async def _below(
+        self, ctx: RequestContext, ident: str
+    ) -> tuple[Caller, LibrarySong, Minimum] | None:
+        """For a song with its own file (no placeholder): the caller, the song and their
+        minimum when its file is below that minimum; None otherwise - Navidrome's file, with
+        nothing more asked (no catalog or add-on work); also, when no one can have a
+        minimum, no credential check or look-up of the listener."""
+        if self.quality is None or not ident or not await self.quality.anyone():
+            return None
+        try:
+            caller = await ctx.caller()
+        except CheckFailed:
+            return None  # Navidrome answers for its own file
+        if caller is None:
+            return None
+        minimum = await self.quality.minimum(caller.username)
+        if minimum == ANY:
+            return None
+        song = await self.quality.below(caller.username, ident)
+        return None if song is None else (caller, song, minimum)
+
+    async def _going_on(
+        self, call: RestCall, ctx: RequestContext, ident: str, track: Track | None = None
+    ) -> Reply | None:
+        """A later range of the listener's play of a song with its own file that began at
+        the add-ons - its file was below their minimum then (``_from_addons``): it stays on
+        the add-ons' file whatever the file's quality is now (an upgrade, another file,
+        another minimum, also no one's minimum at all) - never the same offsets of another
+        file. An owned song's play goes on there (its link renewed when it expired); a
+        catalog song's delivered audio (``track``) while the song's link is kept
+        (``_on_its_file``, as its ``stream``). A transcode stream's later range goes on
+        with a decision its play went on with (``_decided``), whatever decisions came
+        after; another token is Navidrome's to accept first (``_below_minimum``), and one
+        it refuses gets its answer. None otherwise: the request is looked at as a new one
+        - a GET at byte zero begins the listener's next play of the song, wherever it is
+        served from (``_starting``): the earlier play's file no longer counts. A transcode
+        decision is no play. While no one can have a minimum, an owned song with no play
+        at the add-ons under way (``_at_addons``, in memory) is Navidrome's at once, its
+        credentials not checked."""
+        if self.quality is None or not ident or ctx.head or not self._plays:
+            return None
+        if call.name == "getTranscodeDecision":
+            return None
+        if track is None and not self._at_addons.get(ident) and not await self.quality.anyone():
+            return None  # (no one has a minimum: an owned song's credentials not checked)
+        try:
+            caller = await ctx.caller()
+        except CheckFailed:
+            return None  # Navidrome answers for its own file
+        if caller is None:
+            return None
+        who = (caller.username, call.client)
+        play = (who, track.key if track else ident, _processing(call))
+        if self._starts(call, ctx.head):
+            if play in self._plays:
+                self._starting(call, ctx, who, play[1])
+            return None
+        found = self._plays.get(play)
+        if found is None or not found[1]:
+            return None
+        if play[2] == _TRANSCODE and not self._goes_on(play, found[0], call):
+            return None
+        if track is None:
+            song = await self.quality.song(ident)
+            track = song.track() if song is not None else Track(ident, None, "", "", 0)
+        elif not self._on_its_file(call, ctx, who, track):
+            return None
+        start = self._starting(call, ctx, who, track.key)
+        http_errors = call.name == "getTranscodeStream"
+        return self._serve(call, track, ctx.head, who, http_errors=http_errors, start=start)
+
+    async def _from_addons(
+        self,
+        call: RestCall,
+        ctx: RequestContext,
+        caller: Caller,
+        track: Track,
+        minimum: Minimum,
+        fallback: HandlerResult = None,
+        *,
+        plays: Callable[[str | None], bool] | None = None,
+        upgrade: LibrarySong | None = None,
+        decision: tuple[str, DirectPlay] | None = None,
+    ) -> HandlerResult:
+        """A song whose file is below the listener's minimum, played from the add-ons under
+        the song's own ID - or ``fallback`` (None: Navidrome's file) when they have
+        nothing, or only audio that told a quality below the minimum too: audio below it is
+        passed over for the next add-on, in the routing's order and budget. Nothing is
+        written: a plain stream, or a format and bitrate their audio meets as it is (one it
+        needs converting for plays the file, converted by Navidrome). ``plays``: whether
+        the app plays audio of a format as it is (a transcode stream's direct play: what it
+        does not play is passed over too). A later range stays where its play began: the
+        add-ons' audio is another file than the library's. ``upgrade``: a song with its own
+        file, whose play from the start, served from the add-ons, may upgrade a person's
+        own imported song with their audio afterwards (``music_imports/upgrade.py``).
+        ``decision``: a transcode stream's - its token and client profile, accepted by
+        Navidrome: its play goes on with it, and with another one of the same profile."""
+        who = (caller.username, call.client)
+        http_errors = call.name == "getTranscodeStream"  # as Navidrome answers it
+        parsed = ByteRange.parse(header(call.headers, b"range") or None)
+        if not (parsed is None or parsed.at_zero):
+            play = (who, track.key, _processing(call))
+            found = self._plays.get(play)
+            if found is None or not found[1]:
+                return fallback  # a play that began on the file goes on there
+            if decision is not None and not self._accept_decision(play, found[0], decision):
+                return fallback  # another client profile than its play's: the file's
+            start = self._starting(call, ctx, who, track.key)
+            return self._serve(call, track, ctx.head, who, http_errors=http_errors, start=start)
+        start = self._starting(call, ctx, who, track.key)
+        if decision is not None and start is not None:
+            self._decided[start[0]] = (start[1], frozenset({decision[0]}), decision[1])
+
+        def accept(kind: str | None, kbps: int | None) -> str | None:
+            why = refusal(minimum, kind, kbps)
+            if why is None and plays is not None and not plays(kind):
+                why = f"the app does not play {kind or 'audio of an unknown format'} as it is"
+            return why
+
+        def played() -> None:
+            # The add-ons had it well enough: a person's own imported song may be upgraded
+            # with their audio after a play from the start.
+            later = self.upgrade_after
+            if upgrade is not None and later is not None and self._starts(call, ctx.head):
+                later(caller.username, upgrade)
+
+        wanted = requested_processing(call)
+        if wanted is not None:
+            as_is = await self._as_is(call, ctx, track, who, wanted, start, accept=accept)
+            if as_is.served:
+                played()
+            return as_is.reply if as_is.reply is not None else fallback
+        opening = self._opening(call, track, ctx.head, who, accept=accept)
+        try:
+            opened = await opening.open(Departure())
+        except (NoSource, PinBroken) as exc:
+            log.info("%r: no audio at the add-ons that does (%s); its file plays", track.title, exc)
+            return fallback
+        except Exception as exc:  # the file, never a 500
+            log.warning("add-on audio failed: %s; the file plays", type(exc).__name__)
+            return fallback
+        played()
+        return self._serve(
+            call, track, ctx.head, who, http_errors=http_errors, opening=opening, opened=opened,
+            start=start,
+        )  # fmt: skip
 
     async def _note_start(
         self, call: RestCall, ctx: RequestContext, key: str | None, track: Track | None = None
@@ -480,22 +714,66 @@ class Interceptor:
         before a restart, is new)."""
         if ctx.head:
             return None
-        play = (who, key, requested_processing(call))
-        found = self._plays.pop(play, None)  # newest last: the oldest go first
+        play = (who, key, _processing(call))
+        found = self._plays.get(play)
         if found is None or self._starts(call, ctx.head):
             found = (next(self._play_numbers), False)
-        self._plays[play] = found
+        self._set_play(play, found)
         while len(self._plays) > MAX_PLAYS:
-            self._plays.pop(next(iter(self._plays)))
+            self._drop_play(next(iter(self._plays)))
         return play, found[0]
+
+    def _set_play(self, play: _PlayKey, found: tuple[int, bool]) -> None:
+        """The listener's play of the song is ``found`` (its number, whether it began at
+        the add-ons), the newest (the oldest go first)."""
+        self._drop_play(play, decided=False)
+        self._plays[play] = found
+        if found[1]:
+            self._at_addons[play[1]] = self._at_addons.get(play[1], 0) + 1
+
+    def _drop_play(self, play: _PlayKey, *, decided: bool = True) -> None:
+        """The listener's play of the song is no longer remembered (``decided``: nor the
+        decisions it went on with)."""
+        found = self._plays.pop(play, None)
+        if decided:
+            self._decided.pop(play, None)
+        if found is not None and found[1]:
+            left = self._at_addons.get(play[1], 0) - 1
+            if left > 0:
+                self._at_addons[play[1]] = left
+            else:
+                self._at_addons.pop(play[1], None)
+
+    def _goes_on(self, play: _PlayKey, number: int, call: RestCall) -> bool:
+        """Whether a transcode stream's later range goes on with the play under way: its
+        token one the play went on with - accepted by Navidrome for it, with its profile.
+        Kept with the play, whatever decisions came after (the same token with another
+        profile in the same second, a bitrate limit, older decisions forgotten): those
+        decide the client's next plays (``_direct``)."""
+        bound = self._decided.get(play)
+        token = call.get("transcodeParams") or ""
+        return bound is not None and bound[0] == number and token in bound[1]
+
+    def _accept_decision(
+        self, play: _PlayKey, number: int, decision: tuple[str, DirectPlay]
+    ) -> bool:
+        """Another decision Navidrome accepted for a transcode stream's play under way: the
+        play goes on with it too when it has the play's profile."""
+        bound = self._decided.get(play)
+        token, profile = decision
+        if bound is None or bound[0] != number or bound[2] != profile:
+            return False
+        self._decided[play] = (number, bound[1] | {token}, profile)
+        return True
 
     def _began(self, start: _Start) -> None:
         """The play ``start`` was served from the add-ons (its first bytes are sent) -
         unless the listener began another play of the song meanwhile."""
         play, number = start
         found = self._plays.get(play)
-        if found is not None and found[0] == number:
-            self._plays[play] = (number, True)
+        if found is not None and found[0] == number and not found[1]:
+            self._plays[play] = (number, True)  # (in its place)
+            self._at_addons[play[1]] = self._at_addons.get(play[1], 0) + 1
 
     def _on_its_file(
         self, call: RestCall, ctx: RequestContext, who: Listener, track: Track
@@ -508,13 +786,13 @@ class Interceptor:
         Navidrome's file."""
         if ctx.head or self._starts(call, ctx.head):
             return False
-        play = (who, track.key, requested_processing(call))
+        play = (who, track.key, _processing(call))
         found = self._plays.get(play)
         if found is None or not found[1]:
             return False
         if self.deliverer.holds(track):
             return True
-        del self._plays[play]  # its link expired: Navidrome's file from now on
+        self._drop_play(play)  # its link expired: Navidrome's file from now on
         return False
 
     def _playing(
@@ -545,6 +823,8 @@ class Interceptor:
         who: Listener,
         wanted: tuple[str, int],
         start: _Start | None = None,
+        *,
+        accept: Accept | None = None,
     ) -> _AsIs:
         """A stream for a format or bitrate the delivered audio already meets - its own
         format, at or below the bitrate - needs no converting: Navidrome serves such a file
@@ -561,7 +841,9 @@ class Interceptor:
         hour's allowance - a bulk sync's lookups are paced like its downloads - unless
         it is the song being played; its download-first fetch follows in that turn, reading
         on from the answer opened (kept in ``ctx`` for it: its link is not asked again). A
-        request served as it is takes nothing from the allowance."""
+        request served as it is takes nothing from the allowance. ``accept``: the request's
+        own test of the audio opened (``Deliverer.open``): what it refuses is passed over
+        for the next add-on; none that does is a routing that found no audio."""
         if _KEPT + track.key in ctx.kept:
             return _AsIs()  # opened already in this request (before its commit): fetched
         head = ctx.head
@@ -582,7 +864,7 @@ class Interceptor:
         at_zero = not head and (parsed is None or parsed.at_zero)
         if not at_zero and known is None:
             return _AsIs()  # nothing read to tell by: download-first, as before
-        opening = self._opening(call, track, head, who)
+        opening = self._opening(call, track, head, who, accept=accept)
         turn: Turn | None = None
         if at_zero:
             playing = self._playing(call, who, track, opening.at)
@@ -602,7 +884,7 @@ class Interceptor:
             if row is not None and row["state"] == "delivered":
                 ctx.kept[_KEPT + track.key] = _Kept(turn)
                 return _AsIs(at=opening.at)
-            opening = self._opening(call, track, head, who, at=opening.at)
+            opening = self._opening(call, track, head, who, at=opening.at, accept=accept)
         try:
             # (In its download turn it is as urgent at the add-ons' limits as that turn.)
             with pacing.urgent(turn.urgency) if turn is not None else contextlib.nullcontext():
@@ -639,7 +921,7 @@ class Interceptor:
                 wanted[1] or "any bitrate",
             )
         reply = self._serve(call, track, head, who, opening=opening, opened=opened, start=start)
-        return _AsIs(reply, opening.at)
+        return _AsIs(reply, opening.at, served=True)
 
     @staticmethod
     def _keep(
@@ -714,13 +996,15 @@ class Interceptor:
         *,
         resume: bool = False,
         at: float | None = None,
+        accept: Accept | None = None,
     ) -> _Opening:
         """How a plain stream from the add-ons is opened: in the user's turn when it routes,
         a play first and its fetches ahead one at a time; its start is noted
         (``at``: noted already, then). Every plain stream that looks a song up at the
         add-ons takes one of the user's turns: a probe (HEAD) of a song without a
         link one of the lookups', like a GET - as a later range of a song never played; a
-        later range of a play whose link is gone one of the plays'."""
+        later range of a play whose link is gone one of the plays'. ``accept``: the
+        request's own test of the audio (``Deliverer.open``)."""
         range_header = header(call.headers, b"range") or None
         parsed = ByteRange.parse(range_header)
         starts = not head and (parsed is None or parsed.at_zero)
@@ -743,7 +1027,7 @@ class Interceptor:
             if not cold or self.limits is None:
                 return await self.deliverer.open(
                     track, range_header, head=head, purpose=purpose, waited=waited,
-                    departure=departure, resume=resume,
+                    departure=departure, resume=resume, accept=accept,
                 )  # fmt: skip
             settings = self.deliverer.settings
             cap = settings.max_wait_seconds - waited
@@ -784,6 +1068,7 @@ class Interceptor:
                         return await self.deliverer.open(
                             track, range_header, head=head, purpose=purpose, budget=budget,
                             waited=waited + turn, departure=departure, resume=resume,
+                            accept=accept,
                         )  # fmt: skip
             except Limited as exc:
                 log.info("no audio for %r: %s", track.title, exc.reason)
@@ -862,6 +1147,10 @@ class Interceptor:
             if departure.at is not None:  # nobody to send it to
                 await result.close()
                 return
+            if result.capture is not None and result.status in (200, 206):
+                # It goes to a client: its bytes are kept, and once the whole file is
+                # there it replaces the song's placeholder (``delivery/retain.py``).
+                result.capture.accept(track)
             if start is not None and result.status in (200, 206):
                 self._began(start)
             if self.warm is not None and starts:
@@ -893,16 +1182,29 @@ class Interceptor:
             if self.engine.writing():  # (written while Navidrome was asked: looked at again)
                 row = await self.placeholder(ident, ctx)
             if row is None:
+                if (going := await self._going_on(call, ctx, ident)) is not None:
+                    return going
+                low = await self._below(ctx, ident)
+                if low is not None:  # its file is below the listener's minimum: the add-ons
+                    return await self._from_addons(call, ctx, low[0], low[1].track(), low[2])
                 return None  # a song that is no placeholder: Navidrome's to serve
         caller = await ctx.caller()  # before any work for the placeholder
         if caller is None:
             return None
         row = await self._settled(row)
-        if row is None or row["state"] == "delivered":
+        if row is None:
             return None
-        if backing := await self._backing(row):
+        if row["state"] == "delivered":
+            going = await self._going_on(call, ctx, row["song_id"], track_of(row))
+            if going is not None:
+                return going
+            low = await self._below(ctx, row["song_id"])
+            if low is None:
+                return None
+            return await self._from_addons(call, ctx, caller, track_of(row), low[2])
+        if (backing := await self._backing(row)) and await self._stands_in(caller, backing):
             return self._swap(call, "id", {row["song_id"]: backing})
-        failure = await self.download_first.ensure(row["song_id"], caller.username)
+        failure = await self.download_first.ensure(row["song_id"], caller.username, bulk=True)
         if failure is None:
             return None
         return subsonic_error(call, 0, f"download unavailable: {failure}")
@@ -1066,19 +1368,35 @@ class Interceptor:
         asks for no bitrate limit and that Navidrome answers with direct play is answered at
         once (the client then streams the file as it is: a plain stream from the add-ons,
         like ``format=raw``), and a transcode stream whose decision was direct play is a
-        plain stream."""
+        plain stream. A song with its own file - owned, or a catalog song's delivered
+        audio - is Navidrome's, unless the file is below the listener's minimum
+        (``_below_minimum``)."""
         if call.get("mediaType") != "song":
             return None  # Navidrome's own answer (only songs; the parameter is required)
-        row = await self.placeholder(call.get("mediaId"), ctx)
+        ident = call.get("mediaId") or ""
+        row = await self.placeholder(ident, ctx)
         if row is None:
-            return None
+            if (going := await self._going_on(call, ctx, ident)) is not None:
+                return going
+            low = await self._below(ctx, ident)
+            if low is None:
+                return None  # Navidrome's file, with nothing more asked
+            return await self._below_minimum(call, ctx, low[0], low[1].track(), low[2], low[1])
         caller = await ctx.caller()  # before any work for the placeholder
         if caller is None:
             return None
         row = await self._settled(row)
-        if row is None or row["state"] == "delivered":
+        if row is None:
             return None
-        if backing := await self._backing(row):
+        if row["state"] == "delivered":
+            going = await self._going_on(call, ctx, row["song_id"], track_of(row))
+            if going is not None:
+                return going
+            low = await self._below(ctx, row["song_id"])
+            if low is None:
+                return None
+            return await self._below_minimum(call, ctx, caller, track_of(row), low[2])
+        if (backing := await self._backing(row)) and await self._stands_in(caller, backing):
             return self._swap(call, "mediaId", {row["song_id"]: backing})
         who = (caller.username, call.client)
         if call.name == "getTranscodeStream" and direct_play(call, row["song_id"]):
@@ -1098,6 +1416,59 @@ class Interceptor:
             row["song_id"], caller.username, playing=self._playing(call, who, track_of(row))
         )
         return None if failure is None else subsonic_error(call, 0, f"audio unavailable: {failure}")
+
+    async def _below_minimum(
+        self,
+        call: RestCall,
+        ctx: RequestContext,
+        caller: Caller,
+        track: Track,
+        minimum: Minimum,
+        song: LibrarySong | None = None,
+    ) -> HandlerResult:
+        """The transcoding extension for a song whose file is below the listener's minimum
+        (credentials checked). Navidrome decides from the file and signs its decision, as
+        always; its direct play is noted for the client (by its name: per device) with
+        the formats it plays as it is (``DirectPlay``) when the decision was at original
+        quality (``original_quality``) - Navidrome's token tells neither, and is the same
+        for another decision of the song in the same second: the latest decides a new
+        play, while a play under way keeps the decisions it went on with (``_goes_on``). A
+        transcode stream with such a decision - Navidrome accepting it first
+        (``_accepted``) - plays from the add-ons as a ``stream`` does (``_from_addons``),
+        with audio the client plays as it is; otherwise, and for any other decision (a
+        bitrate limit, a conversion), Navidrome serves the file. ``song``: an owned song,
+        whose play may upgrade a person's import."""
+        key = (caller.username, call.client, call.get("transcodeParams") or "")
+        if call.name == "getTranscodeDecision":
+            answer = await library_answer(self.upstream, call)
+            if answer is None:
+                return None  # (unreachable: the proxy's own answer)
+            token = _decision_token(answer.body) if answer.status == 200 else ""
+            key = (caller.username, call.client, token)
+            direct = DirectPlay.of(call) if token and original_quality(call) else None
+            self._direct.pop(key, None)  # newest last
+            if direct is not None:
+                self._direct[key] = direct
+                while len(self._direct) > MAX_DECISIONS:
+                    self._direct.pop(next(iter(self._direct)))
+
+            async def reply(receive: Receive, send: Send) -> None:
+                await send_bytes(send, answer.status, answer.body, answer.headers)
+
+            return reply
+        direct = self._direct.get(key)
+        if direct is None or not direct_play(call, str(call.get("mediaId"))):
+            return None  # Navidrome's file, converted or as it is
+        accepted = await self._accepted(call, ctx.head)
+        if accepted is not True:
+            # Refused, or not told: Navidrome answers for its own file (a Subsonic error
+            # it gave: as it gave it).
+            return None if accepted is None or accepted is False else accepted
+        token = str(call.get("transcodeParams") or "")
+        return await self._from_addons(
+            call, ctx, caller, track, minimum, plays=direct.plays, upgrade=song,
+            decision=(token, direct),
+        )  # fmt: skip
 
     async def _decision(self, call: RestCall) -> Reply | None:
         """Navidrome's transcode decision for the placeholder itself, when it is direct play
@@ -1208,6 +1579,72 @@ class Interceptor:
                 return subsonic_error(call, 0, f"audio unavailable: {failure}")
         return self._swap(call, "id", backed) if backed else None
 
+    # --- accounts that get real audio only ------------------------------------------------
+
+    async def real_audio(
+        self,
+        call: RestCall,
+        ctx: RequestContext,
+        absent: Callable[[list[str]], Awaitable[set[str]]],
+    ) -> HandlerResult:
+        """An audio request - ``stream``, ``download``, ``getTranscodeDecision``,
+        ``getTranscodeStream`` - of an account that gets real audio only
+        (``[placeholders] real_audio_accounts``; its credentials checked): Navidrome's
+        own file, never the add-ons. A song without its audio in the library - a silent
+        placeholder (also one an owned recording plays for: that recording is the
+        account's song), or one ``absent`` names (catalog songs, removed releases' songs)
+        - goes to Navidrome as an ID it does not have, for its own answer to that ("not
+        found"). Delivered audio has its use recorded first, so that no revert slips in
+        before Navidrome serves it. A new placeholder still being written is waited for,
+        as for everyone, and an archive of an album, artist or playlist with a silent file
+        is refused. No delivery, preparation, fetch ahead or add-on request, ever."""
+        try:
+            return await self._real_audio(call, ctx, absent)
+        except _BeingWritten:
+            return _being_written(call)
+        except Unsettled:
+            return _being_written(call, "its file is being put right after a stop")
+
+    async def _real_audio(
+        self,
+        call: RestCall,
+        ctx: RequestContext,
+        absent: Callable[[list[str]], Awaitable[set[str]]],
+    ) -> HandlerResult:
+        key = "mediaId" if call.name in ("getTranscodeDecision", "getTranscodeStream") else "id"
+        if key == "mediaId" and call.get("mediaType") != "song":
+            return None  # Navidrome's own answer (only songs)
+        idents = list(dict.fromkeys(v for v in call.getall(key) if v))
+        missing = set(await absent(idents))
+        native: list[str] = []
+        for ident in idents:
+            if ident in missing:
+                continue
+            row = await self.placeholder(ident, ctx)
+            if row is None:
+                native.append(ident)  # an owned song, or an album, artist or playlist
+            elif row["state"] != "delivered":
+                missing.add(ident)
+            else:
+                row = await self.download_first.settled(ident, used=True)
+                if row is None or row["state"] != "delivered":
+                    missing.add(ident)  # reverted, or taken out, meanwhile
+        if call.name == "download" and not missing and native:
+            # Albums, artists and playlists are downloaded as archives: refused with a
+            # silent file in them, as for everyone.
+            song = None
+            with contextlib.suppress(NavidromeError):
+                song = await self.navidrome.song(native[0])
+            if song is None:
+                return self._archive(call, native[0])
+            if self.engine.writing() and await self.placeholder(native[0], ctx) is not None:
+                missing.add(native[0])  # a new placeholder, its row recorded meanwhile
+        if missing:
+            return Forward(
+                call.rewritten(lambda k, v: ABSENT if k == key and v in missing else None)
+            )
+        return None
+
     def _jukebox_fresh(self) -> bool | None:
         """The jukebox's state while what was last learned still holds; None otherwise."""
         known = self._jukebox
@@ -1253,8 +1690,12 @@ class Interceptor:
 
     # --- share links ------------------------------------------------------------------
 
-    async def share(self, scope: Scope, receive: Receive, send: Send) -> bool:
-        """``/share/s/<token>`` and ``/share/d/<id>``. Returns True if it answered."""
+    async def share(
+        self, scope: Scope, receive: Receive, send: Send, *, deliver: bool = True
+    ) -> bool:
+        """``/share/s/<token>`` and ``/share/d/<id>``. Returns True if it answered.
+        ``deliver`` False (a share of an account that gets real audio only): a silent
+        placeholder in it is refused, never fetched."""
         path: str = scope["path"]
         if scope["method"] not in ("GET", "HEAD"):
             return False
@@ -1265,14 +1706,21 @@ class Interceptor:
         # first may be written while Navidrome lists it.)
         if kind == "s" and not await self._may_hold_placeholders(delivered=True):
             return False
+        answered = music_send(scope["method"], list(scope["headers"]), send)
         try:
-            return await self._share(scope, receive, send, kind, ident)
+            return await self._share(scope, receive, answered, kind, ident, deliver)
         except (_BeingWritten, Unsettled):
-            await send_bytes(send, 503, b"Audio unavailable\n", [(b"content-type", b"text/plain")])
+            await send_bytes(
+                answered,
+                503,
+                b"Audio unavailable\n",
+                [(b"content-type", b"text/plain")],
+                head=scope["method"] == "HEAD",
+            )
             return True
 
     async def _share(
-        self, scope: Scope, receive: Receive, send: Send, kind: str, ident: str
+        self, scope: Scope, receive: Receive, send: Send, kind: str, ident: str, deliver: bool
     ) -> bool:
         valid = False
         shared: list[str] = []
@@ -1296,6 +1744,8 @@ class Interceptor:
         for song_id in await self.silent_among(songs, state="delivered"):
             await self.download_first.settled(song_id, used=True)  # played through the link
         silent = await self.silent_among(songs)
+        if silent and not deliver:
+            raise _BeingWritten(ident)  # (answered "Audio unavailable")
         for song_id in silent[:MAX_SHARE_TRACKS]:
             await self.download_first.used(song_id)  # played through the link
             # The link is the credential: its downloads count as the share's own.
@@ -1313,13 +1763,12 @@ class Interceptor:
         async with self.engine.listing(wait=WRITE_WAIT_SECONDS) as ended:
             if not ended:
                 raise _BeingWritten(ident)
-            try:  # (with files left half written, a share that cannot be listed is refused)
-                unfinished = self.engine.left() or bool(self.engine.interrupted())
-                shared_now = await self._shared_songs(ident, strict=unfinished)
+            try:  # An incomplete listing cannot establish that the archive holds no silence.
+                shared_now = await self._shared_songs(ident, strict=True)
             except NavidromeError:
                 raise _BeingWritten(ident) from None
             now = await self.silent_among(shared_now)
-            if set(now) - set(silent[MAX_SHARE_TRACKS:]):
+            if now:
                 raise _BeingWritten(ident)
             if await self._unfinished_among([{"id": song} for song in shared_now]):
                 raise _BeingWritten(ident)
@@ -1346,37 +1795,53 @@ class Interceptor:
                 "HEAD", path, scope.get("query_string", b""), headers, None
             )
         except Exception:
-            return False
+            # No verdict is not an invalid link: forwarding a subsequent GET could
+            # succeed with an archive whose silent files were never checked.
+            raise _BeingWritten("share") from None
         await check.aclose()
+        if check.status_code >= 500:
+            raise _BeingWritten("share")
         return check.status_code == 200
 
+    @staticmethod
+    def shared_song(token: str) -> str | None:
+        """The song a share link's stream token (``/share/s/<token>``) names (unverified:
+        Navidrome verifies the link itself)."""
+        song = _jwt_claims(token).get("id")
+        return song if isinstance(song, str) else None
+
+    async def shared_songs(self, share_id: str) -> list[str]:
+        """The songs of a share, completely listed (``NavidromeError`` otherwise)."""
+        return await self._shared_songs(share_id, strict=True)
+
     async def _shared_songs(self, share_id: str, *, strict: bool = False) -> list[str]:
-        """The songs a share holds, as far as Navidrome lists them; ``strict``: raises
-        :class:`NavidromeError` when it cannot list them all."""
+        """At most 5,000 entries, completely listed; strict failures refuse the archive."""
         try:
             share = await self.navidrome.share(share_id)
+            resources = share.get("resourceIds") if share else None
+            if not isinstance(resources, str) or not resources:
+                raise NavidromeError("share: unavailable resources")
+            # Bound both the number of native requests and their aggregate entries.
+            ids = resources.split(",", 5000)
+            if len(ids) > 5000 or any(not ident for ident in ids):
+                raise NavidromeError("share: inspection limit exceeded")
+            kind = share.get("resourceType") if share else None
+            if kind == "media_file":
+                return ids
+            if kind not in ("album", "playlist"):
+                raise NavidromeError("share: unsupported resource")
+            if len(ids) > MAX_SHARE_COLLECTIONS:
+                raise NavidromeError("share: collection inspection limit exceeded")
+            songs: list[str] = []
+            for resource in ids:
+                songs += await self.navidrome.archive_song_ids(
+                    kind, resource, limit=5000 - len(songs)
+                )
+            return songs
         except NavidromeError:
             if strict:
                 raise
             return []
-        if share is None:
-            return []
-        ids = [i for i in str(share.get("resourceIds") or "").split(",") if i]
-        kind = share.get("resourceType")
-        if kind == "media_file":
-            return ids
-        songs: list[str] = []
-        try:
-            for resource in ids:
-                if kind == "album":
-                    songs += [str(s["id"]) for s in await self.navidrome.songs_of_album(resource)]
-                elif kind == "playlist":
-                    songs += await self.navidrome.playlist_song_ids(resource)
-        except (NavidromeError, KeyError) as exc:
-            if strict:
-                raise NavidromeError(f"share: {type(exc).__name__}") from None
-            return songs
-        return songs
 
 
 _NOT_AN_ERROR = ("audio/", "video/", "application/octet-stream")  # content types
@@ -1479,6 +1944,104 @@ def original_quality(call: RestCall) -> bool:
             if not isinstance(limitation, dict) or limitation.get("required"):
                 return False
     return True
+
+
+# Navidrome 0.64.2's names of one container (``core/stream/aliases.go``), as far as the
+# add-ons' audio needs them; and of one codec.
+_CONTAINERS = (
+    frozenset({"aac", "adts", "m4a", "mp4", "m4b", "m4p"}),
+    frozenset({"mpeg", "mp3", "mp2"}),
+    frozenset({"ogg", "oga", "opus"}),
+)
+_CODECS = (frozenset({"aac", "adts"}),)
+# The add-ons' audio by its format (``Opened.kind``): its container, as Navidrome names a
+# file of it, and its codecs - an M4A's is not read: AAC or ALAC.
+_AUDIO = {
+    "flac": ("flac", ("flac",)),
+    "mp3": ("mp3", ("mp3",)),
+    "m4a": ("m4a", ("aac", "alac")),
+    "opus": ("opus", ("opus",)),
+    "ogg": ("ogg", ("vorbis",)),
+}
+
+
+def _named(value: str, names: tuple[str, ...], groups: tuple[frozenset[str], ...]) -> bool:
+    return value in names or any(value in g and not g.isdisjoint(names) for g in groups)
+
+
+@dataclass(frozen=True)
+class DirectPlay:
+    """What a client plays as it is, by the direct-play profiles of its transcode decision
+    (the OpenSubsonic transcoding extension), read as Navidrome 0.64.2 reads them for a
+    file: a profile whose protocols name HTTP (or none), whose containers name the audio's
+    (or none) and whose codecs name its codec (or none; an M4A, whose codec is not read,
+    needs AAC and ALAC both), for two channels. Codec limitations do not matter: a
+    decision at original quality has none that is required."""
+
+    # Each profile: its protocols, containers and codecs (lower case), its channels (0: any).
+    profiles: tuple[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], int], ...]
+
+    @classmethod
+    def of(cls, call: RestCall) -> DirectPlay | None:
+        """The client profile of a ``getTranscodeDecision`` (its JSON body); None when it
+        cannot be read."""
+        try:
+            info = json.loads(call.body or b"")
+        except ValueError:
+            return None
+        profiles = info.get("directPlayProfiles") if isinstance(info, dict) else None
+        if not isinstance(profiles, list):
+            return None
+        read: list[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], int]] = []
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            fields: list[tuple[str, ...]] = []
+            for key in ("protocols", "containers", "audioCodecs"):
+                value = profile.get(key) or []
+                if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                    break
+                fields.append(tuple(v.lower() for v in value))
+            channels = profile.get("maxAudioChannels") or 0
+            if len(fields) == 3 and isinstance(channels, int):
+                read.append((fields[0], fields[1], fields[2], channels))
+        return cls(tuple(read))
+
+    def plays(self, kind: str | None) -> bool:
+        """Whether the client plays the add-ons' audio of this format as it is (not
+        told: no)."""
+        audio = _AUDIO.get(kind or "")
+        if audio is None:
+            return False
+        container, codecs = audio
+        for protocols, containers, names, channels in self.profiles:
+            if protocols and "http" not in protocols:
+                continue
+            if containers and not _named(container, containers, _CONTAINERS):
+                continue
+            if names and not all(_named(codec, names, _CODECS) for codec in codecs):
+                continue
+            if 0 < channels < 2:
+                continue
+            return True
+        return False
+
+
+def _decision_token(body: bytes) -> str:
+    """The token of Navidrome's getTranscodeDecision answer (JSON or XML) when it is direct
+    play; "" otherwise."""
+    if not _direct_play_decision(body):
+        return ""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        tag = re.search(rb"<transcodeDecision\b[^>]*>", body)
+        found = re.search(rb'\btranscodeParams="([^"]+)"', tag.group(0)) if tag else None
+        return found.group(1).decode("ascii", "replace") if found else ""
+    answer = data.get("subsonic-response") if isinstance(data, dict) else None
+    decision = answer.get("transcodeDecision") if isinstance(answer, dict) else None
+    token = decision.get("transcodeParams") if isinstance(decision, dict) else None
+    return token if isinstance(token, str) else ""
 
 
 def _direct_play_decision(body: bytes) -> bool:

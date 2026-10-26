@@ -11,10 +11,13 @@ import copy
 import functools
 import ipaddress
 import os
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
+    AnyHttpUrl,
     BaseModel,
     ConfigDict,
     Field,
@@ -73,6 +76,33 @@ class ServerSettings(BaseModel):
         return value
 
 
+class AgentSettings(BaseModel):
+    # Canonical public origin (scheme/host/port), without a path. Empty disables MCP.
+    public_url: str = ""
+
+    @field_validator("public_url")
+    @classmethod
+    def canonical_url(cls, value: str) -> str:
+        if not value:
+            return ""
+        url = urlsplit(value)
+        if (
+            not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in ("", "/")
+            or url.scheme not in ("https", "http")
+            or (url.scheme == "http" and url.hostname not in ("localhost", "127.0.0.1", "::1"))
+            or any(part in (".", "..") for part in url.path.split("/"))
+        ):
+            raise ValueError(
+                "Agent URL needs an HTTPS origin without a path (loopback may use HTTP)."
+            )
+        return str(AnyHttpUrl(value)).rstrip("/")
+
+
 class NavidromeSettings(BaseModel):
     url: str = "http://127.0.0.1:4533"
     # Service account (Navidrome admin) used for scans and verification.
@@ -81,6 +111,8 @@ class NavidromeSettings(BaseModel):
     password_file: Path | None = None
     # Library that holds the owned files and the placeholder folder.
     library_id: int = 1
+    # Match Navidrome's Subsonic.ArtistParticipations when its default is changed.
+    artist_participations: bool = False
     # The library root as Shijhon sees it on disk.
     library_path: Path | None = None
     # Client name Shijhon uses for its own Subsonic calls.
@@ -112,6 +144,50 @@ class NavidromeSettings(BaseModel):
 class PlaceholderSettings(BaseModel):
     # Folder inside the library root that holds all placeholders.
     folder: str = "_shijhon"
+    # Navidrome accounts (user names) that see only songs whose audio is in the library -
+    # owned and imported files, delivered audio - and whose requests never start a
+    # delivery: for an analyzer that downloads every song (views/real_audio.py).
+    real_audio_accounts: list[str] = Field(default_factory=list)
+
+    @field_validator("real_audio_accounts")
+    @classmethod
+    def _accounts(cls, value: list[str]) -> list[str]:
+        names = [name.strip() for name in value]
+        if any(not name for name in names):
+            raise ValueError("placeholders.real_audio_accounts lists an empty user name")
+        return names
+
+
+class MusicImportSettings(BaseModel):
+    """Retained personal originals use a separately provisioned writable folder."""
+
+    enabled: bool = False
+    folder: str = "_imports"
+    max_file_bytes: int = Field(default=2 * 1024**3, ge=1)
+    max_job_bytes: int = Field(default=512 * 1024**3, ge=1)
+    max_job_files: int = Field(default=100_000, ge=1, le=1_000_000)
+    max_owner_jobs: int = Field(default=4, ge=1, le=100)
+    max_owner_bytes: int = Field(default=512 * 1024**3, ge=1)
+    max_global_bytes: int = Field(default=1024**4, ge=1)
+    min_free_bytes: int = Field(default=5 * 1024**3, ge=0)
+    max_uploads: int = Field(default=2, ge=1, le=32)
+    upload_seconds: int = Field(default=1800, ge=1, le=86400)
+    validation_seconds: int = Field(default=15, ge=1, le=300)
+
+    @field_validator("folder")
+    @classmethod
+    def _folder(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}", value):
+            raise ValueError("music_imports.folder must be a directory name inside the library")
+        return value
+
+    @model_validator(mode="after")
+    def _limits(self) -> MusicImportSettings:
+        if not self.max_file_bytes <= self.max_job_bytes <= self.max_owner_bytes:
+            raise ValueError("Music import file, job and account byte limits must increase")
+        if self.max_owner_bytes > self.max_global_bytes:
+            raise ValueError("The music import account byte limit exceeds the global limit")
+        return self
 
 
 class DeliverySettings(BaseModel):
@@ -171,9 +247,12 @@ class DeliverySettings(BaseModel):
     # after it every add-on is tried again. 0: every retry tries them all.
     retry_skip_seconds: float = Field(default=60.0, ge=0)
     prepare_when_not_ready: bool = False  # ask one source that said "not now" to prepare
-    # Download-first audio in place of placeholders goes back to the silent placeholder
-    # after this many days without use, and the least recently used first past this many
-    # GB in all (0: never by age, no size limit).
+    # A song whose whole audio Shijhon received while streaming it to an app replaces its
+    # silent placeholder, as a download does (nothing more is asked of the add-ons for it).
+    keep_streamed_audio: bool = False
+    # Audio in place of placeholders - downloaded, or kept from streams - goes back to the
+    # silent placeholder after this many days without use, and the least recently used
+    # first past this many GB in all (0: never by age, no size limit).
     delivered_days: float = Field(default=30.0, ge=0)
     delivered_gb: float = Field(default=10.0, ge=0)
     # Per user (0: no limit): songs being looked up at the add-ons at
@@ -182,8 +261,8 @@ class DeliverySettings(BaseModel):
     # in order: a large sync slows down instead of failing). The song being played never
     # waits behind them.
     user_routings: int = Field(default=4, ge=0)
-    user_downloads: int = Field(default=2, ge=0)
-    user_downloads_per_hour: int = Field(default=120, ge=0)
+    user_downloads: int = Field(default=4, ge=0)
+    user_downloads_per_hour: int = Field(default=0, ge=0)
     # ... of which this many may start at once after a quiet while (a first offline
     # sync starts with a few downloads, not with the whole hour's); then one every hour /
     # user_downloads_per_hour. 0: the whole hour's allowance at once.
@@ -199,6 +278,11 @@ class DeliverySettings(BaseModel):
     addon_requests_per_second: float = Field(default=2.0, ge=0, le=1000)
     addon_request_burst: int = Field(default=4, ge=1, le=1000)
     addon_audio_openings: int = Field(default=4, ge=0, le=1000)
+    # Whole-file bulk acquisitions: installation-wide, per independent add-on/backend,
+    # and starts whose audio is not ready yet. 0 turns that cap off.
+    bulk_downloads: int = Field(default=4, ge=0, le=1000)
+    addon_downloads: int = Field(default=2, ge=0, le=1000)
+    addon_preparations: int = Field(default=1, ge=0, le=1000)
     # Warm-ahead: open the next songs when one starts playing - the next ones in the
     # client's saved queue, else in its album.
     warm_ahead_depth: int = Field(default=2, ge=0, le=20)
@@ -224,6 +308,13 @@ class DeliverySettings(BaseModel):
     # lossless above them all (a bitrate within 5 % of a bound counts as at it). A song with
     # no quality in it is not played from that add-on: the next one is asked. "any" to
     # "lossless": the best there is.
+    # The lowest audio quality a person hears from a file, unless they chose their own on
+    # their Audio quality page. A number: compressed audio (MP3, AAC, Opus...) needs at
+    # least this many kbit/s and 44.1 kHz, and lossless audio (FLAC, ALAC...) is always
+    # accepted; "lossless": lossless audio only; "any": every file. A file below it plays
+    # from the add-ons when they have the song in a quality not known to be lower, and
+    # never stands in for a catalog song.
+    quality_default: Literal["any", "128", "160", "192", "256", "320", "lossless"] = "192"
     dash_quality_from: Literal["any", "128", "192", "256", "320", "lossless"] = "any"
     dash_quality_to: Literal["128", "192", "256", "320", "lossless"] = "lossless"
     # "at_once": a DASH song plays from its first segments on, served as one MP4 file of
@@ -239,7 +330,7 @@ class DeliverySettings(BaseModel):
     # past this size (never one being played).
     dash_cache_mb: int = Field(default=1024, ge=0)
 
-    @field_validator("dash_quality_from", "dash_quality_to", mode="before")
+    @field_validator("dash_quality_from", "dash_quality_to", "quality_default", mode="before")
     @classmethod
     def _quality(cls, value: Any) -> Any:
         """(A bitrate may be written as a number: 320.)"""
@@ -469,6 +560,81 @@ class AddonSettings(BaseModel):
     requests_per_second: float | None = Field(default=None, ge=0, le=1000)
     request_burst: int | None = Field(default=None, ge=1, le=1000)
     audio_openings: int | None = Field(default=None, ge=0, le=1000)
+    downloads: int | None = Field(default=None, ge=0, le=1000)
+    preparations: int | None = Field(default=None, ge=0, le=1000)
+    capacity_group: str = Field(default="", max_length=100)
+
+
+class AudioMuseSettings(BaseModel):
+    """The optional AudioMuse-AI connection: sound facts and sound-based suggestions for
+    described playlists. Off while ``url`` is empty."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    # AudioMuse-AI's address (a path in front of it is fine).
+    url: str = ""
+    # Its API token (a bearer token); sent only to ``url``.
+    token: SecretStr | None = None
+    # The name (or ID) AudioMuse-AI gives this Shijhon among its media servers; empty: its
+    # default server. Song IDs between the two are then Navidrome's.
+    server: str = Field(default="", max_length=200)
+    # "loopback" for AudioMuse-AI on this machine, "private" for a LAN host.
+    reach: Literal["public", "loopback", "private"] = "public"
+    # The longest one request to AudioMuse-AI may take.
+    timeout_seconds: float = Field(default=20.0, gt=0, le=300)
+    # How often Shijhon reads the analysis of songs again (once after startup if older).
+    sync_hours: float = Field(default=6.0, gt=0, le=720)
+
+    @field_validator("url")
+    @classmethod
+    def _address(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        url = urlsplit(value)
+        if (
+            url.scheme not in ("http", "https")
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or any(part in (".", "..") for part in url.path.split("/"))
+        ):
+            raise ValueError(
+                "AudioMuse-AI's address needs http:// or https://, a host, and no sign-in,"
+                " query or fragment."
+            )
+        return value.rstrip("/")
+
+    @field_validator("server")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        value = value.strip()
+        if not value.isprintable():
+            raise ValueError("The server name has characters that cannot be shown.")
+        return value
+
+    def api_token(self) -> str:
+        """The token, "" when none is set (AudioMuse-AI may run without one)."""
+        return self.token.get_secret_value() if self.token is not None else ""
+
+
+class PlaylistSettings(BaseModel):
+    # Host-controlled executables only: dashboard users cannot supply commands or flags.
+    codex_command: str = ""
+    claude_command: str = ""
+    # CLI accounts run as this process user. Enable only on a controlled installation.
+    allow_cli: bool = False
+    # API endpoints on this host/network need an explicit installation-level opt-in.
+    allow_private_api: bool = False
+    run_seconds: float = Field(default=900, gt=0, le=3600)
+    ai_seconds: float = Field(default=180, gt=0, le=600)
+    history_days: int = Field(default=90, ge=1, le=3650)
+    history_pages: int = Field(default=100, ge=1, le=1000)
+    candidate_limit: int = Field(default=160, ge=30, le=400)
+    import_max_entries: int = Field(default=50_000, ge=1000, le=1_000_000)
+    import_max_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
 
 
 class Settings(BaseSettings):
@@ -495,13 +661,17 @@ class Settings(BaseSettings):
     # (one line per catalog cover request: sizes, cache, times).
     log_debug: list[str] = Field(default_factory=list)
     server: ServerSettings = Field(default_factory=ServerSettings)
+    agents: AgentSettings = Field(default_factory=AgentSettings)
+    playlists: PlaylistSettings = Field(default_factory=PlaylistSettings)
     navidrome: NavidromeSettings = Field(default_factory=NavidromeSettings)
     placeholders: PlaceholderSettings = Field(default_factory=PlaceholderSettings)
+    music_imports: MusicImportSettings = Field(default_factory=MusicImportSettings)
     delivery: DeliverySettings = Field(default_factory=DeliverySettings)
     catalog: CatalogSettings = Field(default_factory=CatalogSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     fill: FillSettings = Field(default_factory=FillSettings)
     cleanup: CleanupSettings = Field(default_factory=CleanupSettings)
+    audiomuse: AudioMuseSettings = Field(default_factory=AudioMuseSettings)
     # Audio add-ons in the order they are tried. When given (even empty), the configuration
     # owns the list: at startup add-ons are added, updated and ordered to match it, and
     # stored ones it no longer names are disabled. Not given: the stored list is kept.
@@ -519,6 +689,17 @@ class Settings(BaseSettings):
         # As its parts ("./x", "x/" and "x//y" are "x" and "x/y"): what is a placeholder is
         # told by this prefix of its library path.
         self.placeholders.folder = "/".join(folder.parts)
+        imports_folder = PurePosixPath(self.music_imports.folder)
+        if (
+            folder == imports_folder
+            or folder in imports_folder.parents
+            or imports_folder in folder.parents
+        ):
+            raise ValueError("Music imports and disposable catalog files need separate folders")
+        if self.music_imports.enabled and self.navidrome.library_path is None:
+            raise ValueError(
+                "Music imports need navidrome.library_path and a writable imports folder"
+            )
         if self.addons is not None:
             names = [addon.name for addon in self.addons]
             if len(set(names)) != len(names):

@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% from "_macros.html" import chevron %}
+{% macro fields(selection=none) %}
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="profile_id" value="{{ selection if selection is not none else profile.selection_id }}">
+<input type="hidden" name="layout" value="{{ preferred_layout }}">
+{% for key in ['view','scope','search','origin','sort','album_id','artist_id','offset','pool'] %}
+<input type="hidden" name="{{ key }}" value="{{ query|attr(key) }}">
+{% endfor %}
+{% endmacro %}
+{% macro library_options(chosen, mark=false) %}{% for id,name in builtins.items() %}<option value="{{ id }}"{% if chosen == id %} selected{% endif %}>{{ name }}{% if mark and active.selection_id == id %} · in my apps{% endif %}</option>{% endfor %}{% for p in custom_profiles if not p.archived %}<option value="{{ p.id }}"{% if chosen == p.id %} selected{% endif %}>{{ p.name }}{% if mark and active.selection_id == p.id %} · in my apps{% endif %}</option>{% endfor %}{% endmacro %}
+{% block main %}
+{% set listing_ready=listing_ready|default(true) %}
+{% set bulk = listing_ready and listing.total %}
+<link rel="stylesheet" href="{{ prefix }}/static/collection.css?v={{ asset_revision }}">
+<div class="collection" data-collection data-scope="{{ query.scope }}" data-matching-total="{{ listing.total }}" data-selection-key="{{ owner_id }}|{{ profile.selection_id }}|{{ query.pool }}|{{ query.view }}|{{ query.scope }}|{{ query.search }}|{{ query.origin }}|{{ query.sort }}|{{ query.album_id }}|{{ query.artist_id }}">
+<div class="page-head">
+  <div class="page-title">
+    <h1>Your collection</h1>
+    <p class="page-summary">Choose the music your apps show, and bring in your own files.</p>
+  </div>
+  <div class="page-actions">
+    <details class="collection-menu" data-collection-menu>
+      <summary class="btn">More{{ chevron('down') }}</summary>
+      <div class="collection-menu-body">
+        <form method="post" action="{{ prefix }}/collection">{{ fields() }}<button name="action" value="refresh"{% if index_state and index_state.state=='indexing' %} disabled{% endif %}>Refresh music<span>Read new and changed songs now</span></button></form>
+{% if index_state and index_state.generation %}
+        <a href="/app/">Open music<span>Listen in the browser</span></a>
+{% endif %}
+      </div>
+    </details>
+    <a class="btn btn-primary" href="{{ prefix }}/collection/import">Import music</a>
+  </div>
+  <details class="page-about"><summary>How libraries work</summary>
+    <p>A library is the music your apps show. The library you use in your apps applies to your account on every device; other accounts keep their own.</p>
+    <ul>
+      <li><strong>All</strong>: everything you collected - Original imported library and Shijhon library together. Your apps use All unless you choose another library.</li>
+      <li><strong>Original imported library</strong>: the music you imported, the albums of the playlists you imported and your favorites.</li>
+      <li><strong>Shijhon library</strong>: the albums Shijhon added from the catalog for you - what your apps played, favorited, rated, put into a playlist, downloaded, shared or bookmarked, the audio you prepared on the Downloads page and the playlists Shijhon made for you.</li>
+      <li><strong>Custom libraries</strong>: selections of your own; they change only when you change them (an album in them still takes in songs added to it later).</li>
+    </ul>
+    <p>Albums are always whole. Add or remove albums and songs here: a song you add brings its whole album, and what you remove stays out of that library, whatever would bring it in. Another account's music, plays and choices never change your libraries. Choosing what to browse here leaves the library your apps use unchanged.</p>
+    <p><strong>Not in this library</strong> shows the music you collected that the library does not hold.{% if listing.get('legacy_shared') %} Existing shared originals count as everyone's imports until personal ownership is reviewed.{% endif %} <strong>Everything on the server</strong> also shows music other accounts added, to add to your library; it is not a library your apps can use.</p>
+  </details>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if op %}
+{% set verb = 'Add' if op.action=='save' else 'Remove' %}
+<section class="collection-operation" data-operation="{{ op.id }}" data-state="{{ op.state }}" aria-labelledby="change-heading">
+<h2 id="change-heading" tabindex="-1">{% if op.state=='review' %}Review: {{ verb|lower }} music in {{ profile.name }}{% elif op.state=='done' %}{{ 'Undo complete' if op.action=='undo' else (('Songs added' if op.changed else 'No songs added') if op.action=='save' else ('Songs removed' if op.changed else 'No songs removed')) }} · {{ profile.name }}{% elif op.state=='preparing' %}Preparing this change…{% elif op.state in ['queued','applying'] %}Updating {{ profile.name }}…{% elif op.state=='failed' %}Change paused · {{ profile.name }}{% else %}Change discarded{% endif %}</h2>
+{% if operation_target %}<p class="collection-operation-target">{{ operation_target }}</p>{% endif %}
+{% if op.state=='review' %}
+<p><strong>{{ verb }} {{ '{:,}'.format(op.total) }} matching songs</strong> in {{ '{:,}'.format(op.group_count) }} {{ operation_scope }}{{ '' if op.group_count==1 else 's' }}, in <strong>{{ profile.name }}</strong>. {{ '{:,}'.format(op.affected) }} songs will change visibility.</p>
+<ul class="collection-operation-notes">
+  <li>Only the songs matched now are included.</li>
+{% if op.action=='save' %}
+  <li>Catalog songs needing preparation are prepared only after approval; songs that cannot be prepared stay out of apps. Missing original files need reimporting.</li>
+{% endif %}
+  <li>What you remove stays out of {{ profile.name }}, whatever would bring it in.</li>
+  <li>Files, playlists, favorites and history stay intact.</li>
+</ul>
+<form class="form-actions" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-primary" name="action" value="approve">{{ verb }} · {{ '{:,}'.format(op.total) }} songs</button> <button name="action" value="discard">Cancel</button></form>
+{% elif op.state in ['preparing','queued','applying'] %}
+<p role="status" aria-live="polite" data-progress-text>{{ '{:,}'.format(op.processed) }} of {{ '{:,}'.format(op.total) }} {{ 'song' if op.total==1 else 'songs' }} processed. You can leave this page.</p>
+<progress max="{{ op.total or 1 }}" value="{{ op.processed }}" aria-label="Library change progress"></progress>
+{% elif op.state=='done' %}
+<p role="status">{{ '{:,}'.format(op.processed) }} {{ 'song' if op.processed==1 else 'songs' }} processed; {{ '{:,}'.format(op.changed) }} changed{% if op.skipped %}; {{ '{:,}'.format(op.skipped) }} skipped to protect newer choices or unavailable songs{% endif %}.{% if not op.changed %} No choices changed.{% endif %}</p>
+{% if op.action!='undo' %}<form class="form-actions" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button name="action" value="undo">Undo this change</button> <span class="collection-muted">Newer choices are protected.</span></form>{% endif %}
+{% elif op.state=='failed' %}
+<p role="alert">{{ op.error }}</p>
+<form class="form-actions" method="post"><input type="hidden" name="csrf" value="{{ csrf }}"><button name="action" value="retry">Retry safely</button></form>
+{% endif %}
+{% if op.state in ['review','done'] %}<p class="collection-muted">{% if profile.id==active.id %}This library is used in your apps.{% elif active.selection_id=='all' and profile.selection_id in ['original','shijhon'] %}Your apps use All, which holds {{ profile.name }} as you leave it.{% else %}Your apps use {{ active.name }}. Choose Use in my apps to use {{ profile.name }}.{% endif %}</p>{% endif %}
+<a class="collection-back" href="{{ browse_url }}">Back to browsing</a></section>
+{% endif %}
+{% if index_state and index_state.state!='ready' %}
+<div class="notice notice-info collection-source" role="status" aria-live="polite"{% if index_state.state=='indexing' %} data-source-progress data-url="{{ prefix }}/collection/source-progress"{% endif %}>
+  <p>{% if index_state.state=='indexing' %}<span data-source-text>Preparing your library… · {{ '{:,}'.format(index_state.indexed) }} songs read. You can leave this page.</span>{% elif index_state.error %}Couldn’t refresh your music. Try Refresh music again.{% else %}Choose Refresh music to prepare your library.{% endif %}{% if index_state.generation %} Your previous complete library is still available.{% endif %}</p>
+{% if index_state.state!='indexing' %}
+  <form class="actions" method="post" action="{{ prefix }}/collection">{{ fields() }}<button class="btn-small" name="action" value="refresh">Refresh music</button></form>
+{% endif %}
+</div>
+{% endif %}
+
+<section class="collection-library" aria-label="Library">
+  <div class="collection-library-main">
+    <form method="get" action="{{ prefix }}/collection" class="collection-picker">
+      <label for="library-choice">Library</label>
+      <select id="library-choice" name="profile_id">{{ library_options(profile.selection_id, true) }}</select>
+{% for key in ['view','scope','search','origin','sort','pool'] %}<input type="hidden" name="{{ key }}" value="{{ query|attr(key) }}">{% endfor %}<input type="hidden" name="layout" value="{{ preferred_layout }}">
+      <button>Open</button>
+    </form>
+    <div class="collection-library-state">
+{% if profile.selection_id != active.selection_id %}
+      <form method="post" action="{{ prefix }}/collection">{{ fields() }}<button name="action" value="activate">Use in my apps</button></form>
+      <p class="collection-active">Your apps use <strong>{{ active.name }}</strong></p>
+{% else %}
+      <p class="collection-active"><span class="tag tag-set">Used in my apps</span></p>
+{% endif %}
+    </div>
+    <a class="btn collection-create" href="{{ create_url }}">Create custom library</a>
+  </div>
+{% if listing_ready %}
+  <p class="collection-count-context">{{ '{:,}'.format(listing.counts.get('saved_count',0)) }} song{{ '' if listing.counts.get('saved_count',0)==1 else 's' }} in {{ profile.name }}{% if query.pool=='personal' %} · {% if show=='saved' %}<a href="{{ links['unsaved'] }}">{% endif %}{{ '{:,}'.format(listing.counts.get('unsaved_count',0)) }} more you collected{% if show=='saved' %}</a>{% endif %}{% else %} · {{ '{:,}'.format(listing.counts.get('all_count',0)) }} on the server{% endif %}</p>
+{% endif %}
+{% if not profile.builtin or custom_profiles or create %}
+  <details id="collection-custom" class="collection-custom"{% if create %} open{% endif %}><summary>{{ 'Create custom library' if create else 'Manage custom libraries' }}</summary>
+{% if not profile.builtin %}
+    <form method="post" action="{{ prefix }}/collection">{{ fields() }}<label>Library name <input name="name" value="{{ profile.name }}" maxlength="80" required></label><button name="action" value="rename">Rename</button> <button name="action" value="archive"{% if profile.id==active.id %} disabled{% endif %}>Archive</button><p class="collection-muted">You can restore an archived library later.{% if profile.id==active.id %} To archive this library, use a different one in apps first.{% endif %}</p></form>
+{% endif %}
+    <form method="post" action="{{ prefix }}/collection" data-create-profile>{{ fields() }}<label>New library name <input id="new-library-name" name="name" maxlength="80" placeholder="e.g. Workout" required{% if create %} autofocus{% endif %}></label><label>Start with <select name="start"><option value="original">Original imported library</option><option value="empty">An empty selection</option><option value="copy">Copy a library</option></select></label><label data-copy-source>Library to copy <select name="source">{{ library_options(profile.selection_id) }}</select></label><button name="action" value="create_profile">Create library</button><p class="collection-muted">A new library is not used in your apps until you choose Use in my apps.</p></form>
+{% for p in custom_profiles if p.archived %}
+    <form method="post" action="{{ prefix }}/collection">{{ fields(p.id) }}<span>{{ p.name }} · Archived</span> <button name="action" value="restore">Restore</button></form>
+{% endfor %}
+  </details>
+{% endif %}
+</section>
+
+<form class="collection-filters" method="get" action="{{ prefix }}/collection" role="search" aria-label="Find music">
+  <input type="hidden" name="previous_pool" value="{{ query.pool }}">
+  <input type="hidden" name="profile_id" value="{{ profile.selection_id }}"><input type="hidden" name="layout" value="{{ preferred_layout }}"><input type="hidden" name="album_id" value="{{ query.album_id }}"><input type="hidden" name="artist_id" value="{{ query.artist_id }}">
+  <div class="collection-search"><label for="collection-search">Search</label><input id="collection-search" type="search" name="search" value="{{ query.search }}" placeholder="Artist, album or song"></div>
+  <div class="collection-scope"><label for="collection-scope">Browse</label><select id="collection-scope" name="scope">{% for value,label in [('album','Albums'),('artist','Artists'),('song','Songs')] %}<option value="{{ value }}"{% if query.scope==value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  <div class="collection-view"><label for="collection-show">Show</label><select id="collection-show" name="show" data-music-pool>{% for value,label in shows.items() %}<option value="{{ value }}"{% if show==value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  <div class="collection-origin"><label for="collection-origin">Source</label><select id="collection-origin" name="origin">{% for value,label in origins.items() %}<option value="{{ value }}"{% if query.origin==value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  <div class="collection-sort"><label for="collection-sort">Sort</label><select id="collection-sort" name="sort">{% for value,label in [('artist','Artist A–Z'),('title','Title A–Z')] %}<option value="{{ value }}"{% if query.sort==value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  <button class="collection-search-button">Apply</button>
+</form>
+{% if show=='server' %}<p class="notice notice-info">Everything on the server, also music other accounts added. Add music to {{ profile.name }} to collect it; playing it leaves your libraries unchanged.</p>{% endif %}
+{% if filter_summary or query.view=='unsaved' or page_adjusted|default(false) %}
+<div class="collection-notes">
+{% if filter_summary %}<p class="collection-filter-summary"><span class="visually-hidden">Filters: </span>{{ filter_summary }} · <a href="{{ reset_url }}">Reset filters</a></p>{% endif %}
+{% if query.view=='unsaved' %}<p class="collection-muted">Only music you collected that is not in {{ profile.name }} is shown. Albums and artists can be partly included; bulk actions add only the matching songs.</p>{% endif %}
+{% if page_adjusted|default(false) %}<p class="collection-muted" role="status">Showing the last page with matching music.</p>{% endif %}
+</div>
+{% endif %}
+{% if query.album_id or query.artist_id %}{% set group=listing.get('scope_label',{}) %}
+<nav class="collection-drilldown" aria-label="Song scope"><a href="{{ scope_back }}">← Back to {{ 'albums' if query.album_id else 'artists' }}</a><span>Songs in <strong>{{ (group.get('album') or 'Album') ~ ' · ' ~ (group.get('artist') or '') if query.album_id else group.get('artist') or 'Artist' }}</strong></span><a href="{{ all_songs }}">All songs</a></nav>
+{% endif %}
+
+<div class="collection-results">
+  <div class="collection-results-heading"><h2>{% if listing_ready %}{{ '{:,}'.format(listing.total) }} {{ query.scope }}{{ '' if listing.total==1 else 's' }}{% else %}Browse music{% endif %}</h2>
+    <div class="collection-results-tools">
+{% if query.scope!='song' %}
+      <div class="collection-layout" role="group" aria-label="Layout">{% for kind in ['grid','list'] %}<a href="{{ layouts[kind] }}"{% if layout==kind %} aria-current="true"{% endif %}>{{ kind|capitalize }}</a>{% endfor %}</div>
+{% endif %}
+{% if listing_ready %}
+      <span class="collection-range">{% if query.offset>0 %}<a href="{{ previous }}">← Previous</a> · {% endif %}{{ query.offset+1 if listing.rows else 0 }}–{{ [query.offset+query.limit,listing.total]|min if listing.rows else 0 }}{% if query.offset+query.limit<listing.total %} · <a href="{{ following }}">Next →</a>{% endif %}</span>
+{% endif %}
+    </div>
+  </div>
+  <form method="post" action="{{ prefix }}/collection" data-selection-form>{{ fields() }}<input type="hidden" name="request_key" value="{{ request_key }}"><input type="hidden" name="selected" value="" data-selected-input>
+{% if bulk %}
+{% set editable = listing.rows|selectattr('editable')|list|length %}
+    <div class="collection-select-bar" data-selection-tools>
+{% if editable %}
+      <label><input type="checkbox" data-page-select> Select this page ({{ editable }})</label>
+{% endif %}
+      <button type="button" class="btn-quiet btn-small" data-select-matching hidden>Select every match ({{ '{:,}'.format(listing.total) }})</button>
+      <span class="collection-select-status" data-selection-count aria-live="polite"></span>
+    </div>
+{% endif %}
+    <div class="collection-rows collection-{{ layout }}" data-scope="{{ query.scope }}">{% for row in listing.rows %}
+      {% set row_label=row.title ~ (' by ' ~ row.artist if query.scope!='artist' else '') ~ (' from ' ~ row.album if query.scope=='song' and row.album else '') %}
+      <article class="collection-row" aria-labelledby="collection-item-{{ loop.index }}">{% if row.editable %}<label class="collection-check"><input type="checkbox" name="pick_{{ row.item_key }}" value="1" data-row-select="{{ row.item_key }}" aria-label="Select {{ row_label }}"></label>{% endif %}<div class="collection-cover" aria-hidden="true"><span>{{ row.title[:1] }}</span>{% if row.artwork_id %}<img src="{{ prefix }}/collection/artwork/{{ row.artwork_id|urlencode }}"{% if query.scope=='artist' and row.cover_art %} data-cover-fallback="{{ prefix }}/collection/artwork/{{ row.cover_art|urlencode }}"{% endif %} alt="" loading="lazy" decoding="async" data-cover-image>{% endif %}</div><div class="collection-item"><h3 id="collection-item-{{ loop.index }}">{{ row.title }}</h3>{% if query.scope!='artist' %}<p>{{ row.artist }}</p>{% endif %}{% if query.scope=='song' %}<p class="collection-album">{{ row.album }}</p>{% endif %}<p class="collection-muted">{{ row.tracks }} {{ 'matching ' if row.tracks<row.all_tracks else '' }}song{{ '' if row.tracks==1 else 's' }}{% if row.tracks<row.all_tracks %} · {{ row.all_tracks }} in {{ query.scope }}{% endif %} · {% if row.all_imported %}Imported: {{ row.all_imported }}{% endif %}{% if row.all_tracks>row.all_imported %}{{ ' · ' if row.all_imported else '' }}From the catalog: {{ row.all_tracks-row.all_imported }}{% endif %}</p></div><div class="collection-row-state">{% if row.unavailable_tracks %}<span class="collection-badge collection-unavailable">{{ row.unavailable_tracks }} {{ 'song needs' if row.unavailable_tracks==1 else 'songs need' }} preparation</span>{% endif %}{% set whole = row.full_saved==row.all_tracks %}<span class="collection-badge{{ ' is-in' if whole and row.all_tracks else ' is-partly' if row.full_saved else '' }}">{% if whole %}In {{ profile.name }}{% elif row.full_saved==0 %}Not in {{ profile.name }}{% else %}{{ row.full_saved }} of {{ row.all_tracks }} in {{ profile.name }}{% endif %}</span>{% if query.scope!='song' %}<a href="{{ song_links[row.item_key] }}" aria-label="Choose songs in {{ row_label }}">Choose songs</a>{% endif %}</div>
+{% if row.all_tracks %}{% set removing=row.full_saved==row.all_tracks %}{% set row_action='Remove' if removing else 'Prepare and add' if row.full_restorable else 'Add available music' if row.unavailable_tracks else 'Add' %}<div class="collection-row-action"><button class="btn-small{{ ' collection-remove' if removing else '' }}" name="{{ 'single_remove' if removing else 'single_save' }}" value="{{ row.item_key }}" aria-label="{{ row_action }} {{ 'song' if query.scope=='song' else 'whole '+query.scope }} {{ 'from' if removing else 'to' }} {{ profile.name }}: {{ row_label }}"{% if not removing and query.scope=='song' and row.unavailable_tracks and not row.full_restorable %} disabled{% endif %}>{{ row_action }}{% if row_action!='Add available music' %} {{ 'song' if query.scope=='song' else 'whole '+query.scope }}{% endif %}</button>{% if row.unavailable_tracks %}<span class="collection-muted">Songs needing preparation stay out of apps until ready. Reimport missing original files.</span>{% endif %}</div>{% endif %}
+      </article>{% else %}<div class="collection-empty"><h3>{{ 'Library view unavailable' if not listing_ready and error else 'Waiting for your library' if not listing_ready else 'This page has changed' if listing.total else 'Nothing more to add' if query.view=='unsaved' and not query.search and not query.album_id and not query.artist_id and query.origin=='all' else 'Bring your music' if query.view=='saved' and not query.search and query.origin=='all' and not listing.counts.get('all_count',0) else 'Choose music for this library' if query.view=='saved' and not query.search and query.origin=='all' else 'No matching music' }}</h3><p>{% if not listing_ready and error %}Try loading this view again. <a href="{{ browse_url }}" data-retry-library>Try again</a>.{% elif not listing_ready %}Your music will appear once your library is prepared.{% elif listing.total %}Matching music remains on an earlier page. <a href="{{ first }}">Go to the first matching page</a>.{% elif query.view=='unsaved' %}{% if query.search or query.album_id or query.artist_id or query.origin!='all' %}No matching music outside {{ profile.name }}. Try changing or resetting the filters.{% else %}Everything you collected is in {{ profile.name }}.{% endif %}{% elif query.search or query.origin!='all' %}Try a shorter search or Source Any.{% elif query.view=='saved' and listing.counts.get('all_count',0) %}Choose Show Not in this library to add music you collected to {{ profile.name }}.{% elif query.pool=='personal' %}Import your files, or add music from everything on the server.{% else %}Import your files or refresh music to find choices.{% endif %}</p>{% if query.view=='saved' and not query.search and query.origin=='all' and not listing.counts.get('saved_count',0) %}<p class="actions"><a class="btn btn-primary" href="{{ prefix }}/collection/import">Import music</a> <a class="btn" href="{{ server_url }}">Browse everything on the server</a></p>{% endif %}{% if show!='saved' %}<p class="collection-empty-links"><a href="{{ reset_url }}">Show what is in {{ profile.name }}</a></p>{% endif %}</div>{% endfor %}</div>
+{% if bulk %}
+    <div class="collection-bulk" data-bulk-bar>
+      <p class="collection-bulk-count"><span data-selection-summary>Select {{ query.scope }}s above, or every match</span> <button type="button" class="btn-quiet btn-small" data-clear-selection hidden>Clear</button></p>
+      <fieldset class="collection-actions"><legend class="visually-hidden">Apply to</legend>
+        <label><input type="radio" name="selection" value="selected" checked> Selected <span data-selected-label>(0)</span></label>
+        <label><input type="radio" name="selection" value="matching"> Every match ({{ '{:,}'.format(listing.total) }} {{ query.scope }}{{ '' if listing.total==1 else 's' }})</label>
+        <div class="collection-bulk-buttons"><button class="btn-primary" name="action" value="save" data-bulk-action>Add to {{ profile.name }}…</button>{% if query.view!='unsaved' %} <button name="action" value="remove" data-bulk-action>Remove from {{ profile.name }}…</button>{% endif %}</div>
+      </fieldset>
+      <p class="collection-selection-note" data-selection-note role="status">Selections stay across pages; changing the music, library or filters clears them. Every match includes all pages. You review each change before it applies.</p>
+    </div>
+{% endif %}
+  </form>
+{% if listing_ready %}<nav class="collection-pagination" aria-label="Collection pages">{% if query.offset>0 %}<a href="{{ previous }}">← Previous</a>{% endif %}<span>Page {{ [query.offset//query.limit+1,[(listing.total+query.limit-1)//query.limit,1]|max]|min }} of {{ [(listing.total+query.limit-1)//query.limit,1]|max }}</span>{% if query.offset+query.limit<listing.total %}<a href="{{ following }}">Next →</a>{% endif %}</nav>{% endif %}
+</div>
+{% if recent %}<details class="collection-history"><summary>Recent changes <span class="collection-muted">· progress and Undo</span></summary><ul>{% for change in recent %}<li><a href="{{ history_links[change.id] }}">{{ 'Add' if change.action=='save' else 'Remove' if change.action=='remove' else 'Undo' }} · {{ profile.name }} · {{ '{:,}'.format(change.total) }} songs</a><span class="tag">{{ change.state|capitalize }}</span></li>{% endfor %}</ul></details>{% endif %}
+</div><script src="{{ prefix }}/static/collection.js?v={{ asset_revision }}" defer></script>
+{% endblock %}

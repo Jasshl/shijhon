@@ -29,6 +29,7 @@ from shijhon.views.shown import ShownArtists
 from tests.acceptance.test_J_contract import check
 from tests.conftest import NavidromeFactory
 from tests.harness import xsd
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
@@ -95,6 +96,7 @@ def world(
     write_album(nd.music, OWNED)
     nd.scan(full=True)
     with delivery_world(nd, tmp_path_factory.mktemp("top"), catalog=replay.catalog()) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -422,6 +424,7 @@ def mixed(
     nd.scan(full=True)
     folder = tmp_path_factory.mktemp("top-mixed")
     with delivery_world(nd, folder, catalog=replay.catalog()) as w:
+        prepare_collection(nd, w.server)
         yield w, replay
 
 

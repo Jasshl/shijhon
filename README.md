@@ -5,9 +5,9 @@ use. Shijhon sits in front of an unmodified [Navidrome](https://www.navidrome.or
 adds the catalog to what your apps see.
 
 <p>
-  <a href="docs/images/dashboard-addons-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-addons-dark.png"><img width="32%" src="docs/images/dashboard-addons-light.png" alt="The dashboard's Add-ons page: three add-ons in order, two on and one off"></picture></a>
-  <a href="docs/images/dashboard-library-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-library-dark.png"><img width="32%" src="docs/images/dashboard-library-light.png" alt="The Library page: the fill policy and the library pass's counts"></picture></a>
-  <a href="docs/images/dashboard-diagnostics-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-diagnostics-dark.png"><img width="32%" src="docs/images/dashboard-diagnostics-light.png" alt="The Diagnostics page: Navidrome's status and each add-on's health"></picture></a>
+  <a href="docs/images/dashboard-addons-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-addons-dark.png"><img width="32%" src="docs/images/dashboard-addons-light.png" alt="The dashboard's Add-ons page: three add-ons in order, two on and one off, and the form for adding another"></picture></a>
+  <a href="docs/images/dashboard-library-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-library-dark.png"><img width="32%" src="docs/images/dashboard-library-light.png" alt="The Library page: the fill policy, the library pass's counts and an album in the review list"></picture></a>
+  <a href="docs/images/dashboard-diagnostics-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-diagnostics-dark.png"><img width="32%" src="docs/images/dashboard-diagnostics-light.png" alt="The Diagnostics page: Navidrome's status and address, and each add-on's health"></picture></a>
 </p>
 
 ## What it is
@@ -53,22 +53,35 @@ play.
   hand.
 - [How it works](docs/how-it-works.md): placeholders, downloads, matching and the cleanup.
 - [Add-ons](docs/add-ons.md) and [catalogs](docs/catalogs.md).
+- [Your collection](docs/collection.md): choose what your apps show: **All** you
+  collected, your imports and favorites, what Shijhon added for you, or libraries you
+  create.
+- [Import music files](docs/music-imports.md): upload your own files, review them, then approve.
 - [Configuration](docs/configuration.md): the settings, the command line, the dashboard.
+- [Playlists](docs/playlists.md): describe a playlist or make discovery mixes from your
+  listening history; preview, publish and refresh them.
+- [Import a playlist](docs/playlist-imports.md): bring in a playlist from pasted lines or a file.
+- [Sound analysis](docs/sound-analysis.md): optional AudioMuse-AI facts for described playlists.
+- [Agent access](docs/agent-access.md): connect an agent through OAuth and MCP.
 - [Deployment](docs/deployment.md): an existing Navidrome, reverse proxies, backups,
-  upgrades.
+  upgrades. [Nix and NixOS](docs/nixos.md) covers the native package and service.
 - [Privacy and security](docs/privacy-and-security.md) and
   [known issues](docs/known-issues.md).
 - Reference: [the other settings](docs/reference/settings.md),
   [the add-on protocol](docs/reference/add-on-protocol.md),
   [advanced deployment](docs/reference/advanced-deployment.md),
+  [library visibility](docs/reference/library-visibility.md),
+  [personal access](docs/reference/personal-access.md),
   [known gaps](docs/reference/known-gaps.md).
 - [Development](docs/development.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Status
 
-Shijhon is in beta (0.1.0b1), tested with Navidrome 0.64.2. The configuration and the
+Shijhon is in beta (0.2.0), tested with Navidrome 0.64.2. The configuration and the
 database can change between beta versions; the database migrates itself at startup, so
 keep a backup from before an upgrade. What changed is in [CHANGELOG.md](CHANGELOG.md).
+
+AI writes most of Shijhon's code, tests and documentation.
 
 ## License and credit
 

@@ -47,6 +47,8 @@ class Navidrome:
     exception is raised. ``hold`` (made inside the event loop): the first request waits
     for ``release``; ``asked`` is set once it is under way."""
 
+    library_answer = None
+
     def __init__(self, *answers: Any, hold: bool = False) -> None:
         self.answers = list(answers)
         self.paths: list[bytes] = []

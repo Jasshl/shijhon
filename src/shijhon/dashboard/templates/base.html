@@ -9,48 +9,65 @@
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
-<header class="topbar">
-  <div class="topbar-inner">
-    <a class="wordmark" href="{{ prefix }}/addons">Shijhon</a>
-    <nav class="sections" aria-label="Sections">
-      <ul>
-{% for key, label in nav %}
-        <li><a href="{{ prefix }}/{{ key }}"{% if key == current %} aria-current="page"{% endif %}>{{ label }}</a></li>
+{% from "_macros.html" import legal, icon %}
+{# The navigation, the account, Appearance and Audio quality: in the sidebar on wide screens, behind
+   "Menu" on narrow ones. The two copies are never shown together (display: none). #}
+{% macro navigation(where) %}
+<nav class="sections" aria-label="Sections">
+{% for heading, items in nav %}
+  <p class="sections-heading" id="{{ where }}-{{ heading|lower }}">{{ heading }}</p>
+  <ul aria-labelledby="{{ where }}-{{ heading|lower }}">
+{% for key, label in items %}
+    <li><a href="{{ prefix }}/{{ key }}"{% if key == current %} aria-current="page"{% endif %}>{{ icon(key) }}<span>{{ label }}</span></a></li>
 {% endfor %}
-      </ul>
-    </nav>
-    <form class="signout" method="post" action="{{ prefix }}/sign-out">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <span class="signout-user">Signed in as {{ user }}</span>
-      <button class="btn-small">Sign out</button>
-    </form>
+  </ul>
+{% endfor %}
+</nav>
+<div class="account">
+  <a class="account-link" href="{{ prefix }}/appearance"{% if current == "appearance" %} aria-current="page"{% endif %}>{{ icon("appearance") }}<span>Appearance</span></a>
+  <a class="account-link" href="{{ prefix }}/quality"{% if current == "quality" %} aria-current="page"{% endif %}>{{ icon("quality") }}<span>Audio quality</span></a>
+  <form class="signout" method="post" action="{{ prefix }}/sign-out">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <span class="signout-user"><span class="visually-hidden">Signed in as </span>{{ user }}</span>
+    <button class="btn-quiet btn-small">{{ icon("sign-out") }}Sign out</button>
+  </form>
+</div>
+{% endmacro %}
+<div class="shell">
+<header class="sidebar">
+  <a class="wordmark" href="{{ prefix }}/{{ home|default('playlists') }}">Shijhon</a>
+  <div class="sidebar-wide">
+{{ navigation("wide") }}
   </div>
+  <details class="menu">
+    <summary>{{ icon("menu") }}<span>Menu</span></summary>
+    <div class="menu-body">
+{{ navigation("narrow") }}
+    </div>
+  </details>
 </header>
+<div class="content">
 {% if pending %}
 <div class="banner" role="status">
-  <div class="banner-inner">
-    <p><strong>Restart needed.</strong> {{ pending|length }} saved setting{{ "s apply" if pending|length != 1 else " applies" }} after Shijhon restarts: {{ pending|map(attribute="label")|map("lower")|join(", ") }}.</p>
+  <p><strong>Restart needed.</strong> {{ pending|length }} saved setting{{ "s apply" if pending|length != 1 else " applies" }} after Shijhon restarts: {% for item in pending %}{{ item.label|lower }} ({{ item.page }}){{ ", " if not loop.last }}{% endfor %}.</p>
 {% if can_restart %}
-    <form method="post" action="{{ prefix }}/restart">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input type="hidden" name="next" value="{{ prefix }}/{{ current or 'diagnostics' }}">
-      <button class="btn-small" title="Songs that are playing may stop">Restart Shijhon</button>
-    </form>
+  <form method="post" action="{{ prefix }}/restart">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="next" value="{{ prefix }}/{{ current or 'diagnostics' }}">
+    <button class="btn-small" title="Songs that are playing may stop">Restart Shijhon</button>
+  </form>
 {% else %}
-    <a href="{{ prefix }}/diagnostics#restart">How to restart</a>
+  <a href="{{ prefix }}/diagnostics#restart">How to restart</a>
 {% endif %}
-  </div>
 </div>
 {% endif %}
 <main class="page" id="main">
 {% block main %}{% endblock %}
 </main>
-{% from "_macros.html" import legal %}
 <footer class="footer">
-  <div class="footer-inner">
-    {{ legal(version, copyright, license, source_url) }}
-    <a href="{{ prefix }}/appearance"{% if current == "appearance" %} aria-current="page"{% endif %}>Appearance</a>
-  </div>
+  {{ legal(version, copyright, license, source_url) }}
 </footer>
+</div>
+</div>
 </body>
 </html>

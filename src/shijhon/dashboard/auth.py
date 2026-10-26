@@ -1,14 +1,12 @@
-"""Dashboard sign-in: Navidrome's own login, admins only; sessions and CSRF tokens.
+"""Dashboard sign-in: Navidrome's own login; sessions and CSRF tokens.
 
 - Sign-in posts the username and password to Navidrome's ``/auth/login`` (the web UI's
-  login) and keeps nothing of its answer but the username and its admin flag. Only
-  Navidrome admins get a session. The password is never stored or logged.
+  login). Sessions bind the immutable user ID; reusable Subsonic authorization may be
+  refreshed in the existing private owner record. Passwords are never stored or logged.
 - A session is a random cookie; the database keeps its SHA-256 only, with the session's
   CSRF token. Every form carries that token; a POST without it is refused.
-- Admin rights are checked again with Navidrome (as Shijhon's service account) at most once
-  a minute; an account that lost them, or no longer exists, is signed out. While Navidrome
-  cannot be asked, a confirmed answer stands for 10 minutes (so Diagnostics can show that
-  it is down); after that pages are refused until Navidrome answers again.
+- The shared access service checks current identity, role and library grants before
+  personal work. Installation routes additionally require current admin rights.
 - A session ends 7 days after sign-in, or after 12 hours without use.
 - Sign-in attempts are limited per client address, as the proxy names it for Navidrome
   (``proxy/forwarding.py``): the peer's, or, when the peer is one of ``[server]
@@ -33,22 +31,19 @@ import secrets
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-import anyio
 import httpx
+from pydantic import SecretStr
 
-from shijhon.navidrome.client import NavidromeError, NavidromeService
+from shijhon.access import Principal
 from shijhon.proxy.forwarding import Address
 from shijhon.store import Store
 
 SESSION_SECONDS = 7 * 86400
 IDLE_SECONDS = 12 * 3600
 USE_NOTE_SECONDS = 300.0  # how often a session's use is written down
-ADMIN_CHECK_SECONDS = 60.0
-ADMIN_GRACE_SECONDS = 600.0
-ADMIN_ASK_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -57,6 +52,12 @@ class Session:
     username: str
     csrf: str
     expires_at: float
+    user_id: str = ""
+    principal: Principal | None = None
+
+    @property
+    def is_admin(self) -> bool:
+        return self.principal is not None and self.principal.is_admin
 
 
 def _hash(token: str) -> str:
@@ -81,19 +82,21 @@ class Sessions:
         self.idle = idle
         self.clock = clock
 
-    async def create(self, username: str) -> tuple[str, Session]:
+    async def create(self, username: str, user_id: str = "") -> tuple[str, Session]:
         token = secrets.token_urlsafe(32)
         now = self.clock()
-        session = Session(_hash(token), username, secrets.token_urlsafe(32), now + self.lifetime)
+        session = Session(
+            _hash(token), username, secrets.token_urlsafe(32), now + self.lifetime, user_id
+        )
         await self.store.execute(
             "DELETE FROM dashboard_sessions WHERE expires_at <= ? OR used_at <= ?",
             [now, now - self.idle],
         )
         await self.store.execute(
             "INSERT INTO dashboard_sessions"
-            " (token_hash, username, csrf, created_at, expires_at, used_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            [session.token_hash, username, session.csrf, now, session.expires_at, now],
+            " (token_hash, username, csrf, created_at, expires_at, used_at, user_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [session.token_hash, username, session.csrf, now, session.expires_at, now, user_id],
         )
         return token, session
 
@@ -101,7 +104,8 @@ class Sessions:
         if not token:
             return None
         row = await self.store.fetchone(
-            "SELECT token_hash, username, csrf, expires_at, used_at FROM dashboard_sessions"
+            "SELECT token_hash, username, csrf, expires_at, used_at, user_id"
+            " FROM dashboard_sessions"
             " WHERE token_hash = ?",
             [_hash(token)],
         )
@@ -116,7 +120,13 @@ class Sessions:
                 "UPDATE dashboard_sessions SET used_at = ? WHERE token_hash = ?",
                 [now, row["token_hash"]],
             )
-        return Session(row["token_hash"], row["username"], row["csrf"], float(row["expires_at"]))
+        return Session(
+            row["token_hash"],
+            row["username"],
+            row["csrf"],
+            float(row["expires_at"]),
+            row["user_id"],
+        )
 
     async def end(self, token: str) -> None:
         await self.store.execute(
@@ -126,12 +136,19 @@ class Sessions:
     async def end_user(self, username: str) -> None:
         await self.store.execute("DELETE FROM dashboard_sessions WHERE username = ?", [username])
 
+    async def end_owner(self, user_id: str) -> None:
+        await self.store.execute("DELETE FROM dashboard_sessions WHERE user_id = ?", [user_id])
+
 
 @dataclass(frozen=True)
 class Login:
     outcome: str  # ok | wrong | limited | unreachable
     username: str = ""
     admin: bool = False
+    user_id: str = ""
+    token: SecretStr = field(default_factory=lambda: SecretStr(""))
+    salt: SecretStr = field(default_factory=lambda: SecretStr(""))
+    native_token: SecretStr = field(default_factory=lambda: SecretStr(""), repr=False)
 
 
 async def navidrome_login(
@@ -165,8 +182,21 @@ async def navidrome_login(
     if not isinstance(body, dict):
         return Login("unreachable")
     name = body.get("username")
+    identity = body.get("id")
+    if not isinstance(name, str) or not name or not isinstance(identity, str) or not identity:
+        return Login("unreachable")
     return Login(
-        "ok", name if isinstance(name, str) and name else user, body.get("isAdmin") is True
+        "ok",
+        name,
+        body.get("isAdmin") is True,
+        identity,
+        SecretStr(body.get("subsonicToken", "")),
+        SecretStr(body.get("subsonicSalt", "")),
+        SecretStr(
+            body["token"]
+            if isinstance(body.get("token"), str) and len(body["token"]) <= 16_384
+            else ""
+        ),
     )
 
 
@@ -211,60 +241,3 @@ class Attempts:
             return False
         times.append(now)
         return True
-
-
-class AdminCheck:
-    """Whether a user is (still) a Navidrome admin, asked as the service account.
-
-    ``admin`` answers True (an admin), False (not an admin or no such user: the session
-    ends) or None (Navidrome cannot say now: the request is refused, the session kept). A
-    confirmed answer is reused for ``every`` seconds, and while Navidrome cannot be asked
-    for at most ``grace`` seconds after it was given; after that access waits for
-    Navidrome."""
-
-    def __init__(
-        self,
-        every: float = ADMIN_CHECK_SECONDS,
-        grace: float = ADMIN_GRACE_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self.every, self.grace, self.clock = every, grace, clock
-        self._known: dict[str, tuple[float, bool]] = {}
-
-    def signed_in(self, username: str) -> None:
-        self._known[username.lower()] = (self.clock(), True)
-
-    def forget(self, username: str) -> None:
-        self._known.pop(username.lower(), None)
-
-    async def admin(self, navidrome: NavidromeService | None, username: str) -> bool | None:
-        key = username.lower()
-        known = self._known.get(key)
-        age = None if known is None else self.clock() - known[0]
-        if known is not None and age is not None and age < self.every:
-            return known[1]
-        verdict = await self._ask(navidrome, key)
-        if verdict is None:
-            if known is not None and age is not None and age < self.grace:
-                return known[1]
-            return None
-        self._known[key] = (self.clock(), verdict)
-        return verdict
-
-    @staticmethod
-    async def _ask(navidrome: NavidromeService | None, key: str) -> bool | None:
-        """Navidrome's answer, or None when it gives none within 5 s (the request is then
-        refused: an unanswered check never lets anyone in)."""
-        if navidrome is None:
-            return None
-        try:
-            with anyio.fail_after(ADMIN_ASK_SECONDS):
-                users = await navidrome.native_json("GET", "user")
-        except (NavidromeError, TimeoutError, KeyError, ValueError, TypeError):
-            return None
-        if not isinstance(users, list):
-            return None
-        for user in users:
-            if isinstance(user, dict) and str(user.get("userName", "")).lower() == key:
-                return user.get("isAdmin") is True
-        return False  # no such user any more

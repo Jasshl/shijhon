@@ -22,6 +22,10 @@
   not the add-on's failure.
 - **Primary misses** are remembered (per recording, and per release for a while): later
   requests skip the primary's lookup and go to the other sources at once.
+- **A request's own test** of the audio (``Deliverer.open``'s ``accept``: a listener's
+  minimum quality, say): audio it refuses is passed over like another recording - the
+  routing goes on to the next source, in the same order and budget - but the link stays,
+  and the add-on is not held to have failed.
 - **Diagnostics**: a play that ends without audio is logged with the reason and the time
   of each step at each source (a routing trace); so is a play served by a fallback.
 """
@@ -36,7 +40,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anyio
 import httpx
@@ -50,14 +54,30 @@ from shijhon.delivery.addon import (
     of_catalog,
     own_track,
 )
-from shijhon.delivery.dash import Dash, DashError, Link, Stream, link_key
+from shijhon.delivery.dash import CapacityLease, Dash, DashError, Link, Stream, link_key
 from shijhon.delivery.length import PEEK_BYTES, audio_kind, audio_length, complete, peek
 from shijhon.delivery.netpolicy import denied
 from shijhon.delivery.sources import MEASURED_SECONDS, Attempt, Source, SourceRegistry
 from shijhon.locks import KeyedLocks
 
+if TYPE_CHECKING:
+    from shijhon.delivery.bulk import BulkAcquisition
+    from shijhon.delivery.retain import Capture, Retention
+
+_BULK_LEASE: ContextVar[CapacityLease | None] = ContextVar("bulk_upstream_lease", default=None)
+_BULK_REUSE: ContextVar[bool] = ContextVar("bulk_existing_dash_job", default=False)
+_LIBRARY_ACQUISITION: ContextVar[bool] = ContextVar("library_acquisition", default=False)
+# A request's own test of the audio it opens, by its format and bitrate (``Deliverer.open``'s
+# ``accept``): None when it will do, else why not.
+Accept = Callable[[str | None, int | None], str | None]
+_ACCEPT: ContextVar[Accept | None] = ContextVar("shijhon_accept", default=None)
+# Whether the audio opened may go to a client (not a probe, warm-ahead or a fetch for the
+# library): its bytes are captured for ``Deliverer.retention`` until it is known.
+_KEEPS: ContextVar[bool] = ContextVar("shijhon_keeps", default=False)
+
 log = logging.getLogger(__name__)
 
+DASH_KEPT = "shijhon.dash_kept"  # a DASH answer's extension: the kept file it is read from
 CAP_GRACE = 0.25  # seconds past a client's wait cap before its request is abandoned
 _GONE = ("unavailable", "expired")  # a track ID the add-on had before is no longer there
 _RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
@@ -85,6 +105,14 @@ class NoSource(Exception):
 
 class PinBroken(Exception):
     """The pinned representation is gone and the request is not at byte zero."""
+
+
+class _Reacquire(Exception):
+    """A continuing DASH request now needs its own upstream admission."""
+
+    def __init__(self, reason: str, *, resolve: bool = False) -> None:
+        super().__init__(reason)
+        self.resolve = resolve
 
 
 class _Changed(Exception):
@@ -132,6 +160,12 @@ class _Cooling(_Failed):
     used - the routing goes on to the next source."""
 
 
+class _Limited(_Failed):
+    """The source answered "too many requests" (its lookup, its link, its audio): a failed
+    attempt as any other for the routing, and it is left alone for its ``Retry-After`` -
+    but nothing about the song: a background preparation asks it again after that time."""
+
+
 class _Error(_Failed):
     """The source answered with an error (an HTTP 5xx), a malformed answer, or not at all
     (no connection, an unexpected failure): counted toward its cooldown, unlike a
@@ -152,6 +186,13 @@ class _Unusable(_Failed):
     manifest of a kind Shijhon does not play (live, protected, another codec, too large),
     or a preview. Like another recording it uses no attempt and counts toward no cooldown;
     unlike one it is not remembered: the add-on is asked again after the retry window."""
+
+
+class _Refused(_Failed):
+    """The request refused the audio (``Deliverer.open``'s ``accept``: below the listener's
+    minimum quality, say), and nothing went wrong at the add-on: like another recording it
+    uses no attempt and counts toward no cooldown - but the link stays (it may do for
+    another request), nothing is remembered, and a client's retry asks the add-on again."""
 
 
 class _Missing(Exception):
@@ -457,6 +498,7 @@ class Pin:
     # length as its index tells it (an MP4 of fragments tells none in its first bytes).
     remux: str | None = None
     told: float | None = None
+    cached: bool = False  # a ready-only variant: choose from the audio actually cached
 
 
 @dataclass
@@ -475,6 +517,9 @@ class Opened:
     # A DASH link's file served at once (an MP4 of its segments): its audio is copied out
     # as this ("flac", "aac", "alac", "mp3") for the library (``Dash.copied_out``).
     remux: str | None = None
+    # Its bytes as they come from the add-on, kept once it goes to a client
+    # (``delivery/retain.py``: ``accept``); None: not kept.
+    capture: Capture | None = None
 
 
 @dataclass(frozen=True)
@@ -613,6 +658,9 @@ class Deliverer:
     # Joins DASH links into files (None: DASH is off, for ``dash_off``'s reason).
     dash: Dash | None = None
     dash_off: str = "it is not set up"
+    bulk: BulkAcquisition | None = None
+    # Audio streamed in full replaces the song's placeholder (``delivery/retain.py``).
+    retention: Retention | None = None
 
     def _names(self, song_id: str) -> tuple[str, ...]:
         """The names the song's link is kept under: ``song_id``, and its other one."""
@@ -753,7 +801,7 @@ class Deliverer:
                 self._pins.pop(next(iter(self._pins)))
 
     def _learned(self, song_id: str, known: Known) -> None:
-        if _left_out():
+        if _left_out() or _LIBRARY_ACQUISITION.get():
             # (A download that left sources out: what a play of the song knows of its file
             # - perhaps at one of them - stays as it is.)
             return
@@ -775,6 +823,7 @@ class Deliverer:
         resume: bool = False,
         heard: bool = True,
         download: bool = False,
+        accept: Accept | None = None,
     ) -> Opened:
         """``purpose``: "play", "warm", "ahead" (a client's fetch ahead) or "alone"
         (a fetch ahead that waited out its turn: the primary alone, no fallbacks).
@@ -786,7 +835,9 @@ class Deliverer:
         ``heard``: the audio goes to a client (False: it is fetched for the library - a
         download-first fetch, which is no play of the song). ``download``: a download-first
         fetch, which does not use the sources that ask not to be used for downloads
-        (``not_for_downloads``)."""
+        (``not_for_downloads``). ``accept``: the request's own test of the audio at byte
+        zero, by the format and bitrate its first bytes tell (None: it will do; else why
+        not) - audio it refuses is passed over for the next source (``_Refused``)."""
         started = self.clock()
         trace = Trace(started - waited)
         if waited >= 0.5:
@@ -797,6 +848,11 @@ class Deliverer:
             trace.add(note)
         token = _TRACE.set(trace)
         unused = _NOT_FOR_DOWNLOAD.set(notes)
+        tested = _ACCEPT.set(accept)
+        keeps = _KEEPS.set(
+            heard and not head and not download and purpose != "warm"
+            and not _LIBRARY_ACQUISITION.get()
+        )  # fmt: skip
         requested = ByteRange.parse(range_header)
         starts = not head and (requested is None or requested.at_zero)
         try:
@@ -836,6 +892,8 @@ class Deliverer:
             if requested is None or requested.at_zero:
                 self._failed_at.pop(track.key, None)  # it plays: a later routing tries all
         finally:
+            _KEEPS.reset(keeps)
+            _ACCEPT.reset(tested)
             _NOT_FOR_DOWNLOAD.reset(unused)
             _TRACE.reset(token)
             trace.ended_at = self.clock()
@@ -1054,8 +1112,10 @@ class Deliverer:
         """A play's full routing (not one its own wait cap cut short) ended without audio:
         requests for the song that waited meanwhile get this answer at once. Recorded before
         anything else can run (the song's lock is free already)."""
-        if isinstance(exc, _Shared) or _left_out():
-            return  # (a download's routing that left sources out is no answer for a play)
+        if isinstance(exc, _Shared) or _left_out() or _ACCEPT.get() is not None:
+            # (A download's routing that left sources out is no answer for a play, nor one
+            # that tested the audio by its own terms.)
+            return
         trace = _TRACE.get()
         capped = trace is not None and trace.ended.startswith("the wait cap")
         if (requested is None or requested.at_zero) and purpose == "play" and not capped:
@@ -1420,12 +1480,16 @@ class Deliverer:
             try:
                 if pin.wrong is not None:  # rejected by a request at once: not asked again
                     raise _Wrong(pin.wrong)
+                if at_zero and pin.checked:  # what its first bytes tell is known already
+                    _refuse(pin.kind, pin.kbps)
                 ask = self._probed(pin, requested, head)
                 # A continuing play: only the file it started with will do - checked on
                 # the link's answer, for this request alone (the link may be a new play's,
                 # to another file; what is known of it may change while this one waits).
                 opened = await self._request(pin, ask, head, limit, known, mine=fresh)
                 opened = await self._verify(pin, opened, track, ask, limit, cap)
+                if at_zero:
+                    opened = await _tested(pin, opened)
                 opened = _narrowed(opened, ask, requested, pin.size)
                 self._delivered(pin, opened, asked)
                 if pin.song_id != track.song_id and opened.status in (200, 206):
@@ -1491,24 +1555,25 @@ class Deliverer:
                 pin = None  # the same source may give a fresh URL; it is not excluded
             except _Failed as exc:
                 # A timeout is this request's own (its share of the budget), not the link's:
-                # it routes on as before; another recording or an error is the link's.
-                link = not isinstance(exc, _TimedOut)
+                # it routes on as before; another recording or an error is the link's. So is
+                # audio this request refused (``accept``): the link stays for others.
+                link = not isinstance(exc, (_TimedOut, _Refused))
                 if at_zero and link and (by := self._routing_on(pin, since)) is not None:
                     owner, failed_link = self._borrowed(pin, exc, failures, asked, by), pin
                     pin = None
                     continue
-                if not _kept(exc):  # (not asked for in time, or still joining: it stays)
+                if not _kept(exc):  # (not asked for in time, still joining, refused: it stays)
                     self.forget(track.song_id, pin)
                 if new:  # a link found for this request: its error counts, once a link
                     self._failure(pin.source, exc, pin)
-                elif not isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling)):  # its old link
-                    self.registry.failed(pin.source, str(exc))  # (not the add-on's failure)
+                elif not isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused)):
+                    self.registry.failed(pin.source, str(exc))  # its old link (not the add-on's)
                 if fresh and at_zero and not _spared(exc):  # the attempt's record
                     took = pin.looked_before + pin.lookup_seconds + pin.link_seconds
                     took += self.clock() - asked - exc.waited
                     self._record(pin.source, pin.answer, False, took)
                 failures.append(f"{pin.source.name}: {exc}")
-                _failed_step(
+                (_step if isinstance(exc, _Refused) else _failed_step)(
                     f"{pin.source.name}: {exc} (lookup {pin.lookup_seconds:.1f}s, link"
                     f" {pin.link_seconds:.1f}s, then {self.clock() - asked:.1f}s)"
                 )
@@ -1522,11 +1587,13 @@ class Deliverer:
                         continue
                 _done(pin.source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc))
                 tried.add(pin.source.id)
-                if new and isinstance(exc, (_Error, _Wrong, _Unusable, _Cooling)):
-                    # An add-on error (its audio's) uses no attempt, nor another
-                    # recording (the routing goes on to the next source within the
-                    # budget): this link's own is given back (another routing's link took
-                    # none of this one's).
+                if isinstance(exc, _Refused) or (
+                    new and isinstance(exc, (_Error, _Wrong, _Unusable, _Cooling))
+                ):
+                    # An add-on error (its audio's) uses no attempt, nor another recording
+                    # or audio this request refused (the routing goes on to the next source
+                    # within the budget): this link's own is given back (another routing's
+                    # link, or one pinned before, took none of this one's).
                     attempts -= pin.charge if fresh else 0
                 else:
                     attempts = max(attempts, 1)
@@ -1880,6 +1947,13 @@ class Deliverer:
         set once its lookup has answered. ``before``: the seconds its lookup meanwhile took
         (its own budget counts from then). What the attempt waited at the add-on's request
         limit is noted with its outcome (``Pin.waited``, the exception's ``waited``)."""
+        capacity = _BULK_LEASE.get()
+        if _BULK_REUSE.get() or (
+            capacity is not None and (not capacity.active or capacity.owner is not None)
+        ):
+            # Existing DASH admission covers joining its job, never a new preparation
+            # or a replacement link which might open an independent transfer.
+            raise _Reacquire("a replacement link needs its own upstream admission", resolve=True)
         with pacing.watched() as waits:
             try:
                 pin = await self._resolved_at(
@@ -1939,6 +2013,8 @@ class Deliverer:
                 raise _Missing(exc.reason) from None
             if exc.kind == "cooling":  # not asked (a rate limit's time has not passed)
                 raise _Cooling(exc.reason) from None
+            if exc.kind == "rate_limited":
+                raise _Limited(exc.reason) from None
             raise (_Error if exc.kind in _ERRORS else _Failed)(exc.reason) from None
         except TimeoutError:
             # Its time ran out in the queue, or what the queue left of it: not the add-on's
@@ -2424,6 +2500,8 @@ class Deliverer:
             ask = self._probed(pin, requested, head)
             opened = await self._request(pin, ask, head, deadline)
             opened = await self._verify(pin, opened, track, ask, deadline, cap)
+            if requested is None or requested.at_zero:
+                opened = await _tested(pin, opened)
             opened = _narrowed(opened, ask, requested, pin.size)
             self._delivered(pin, opened, asked)
         except _Changed as exc:
@@ -2440,7 +2518,9 @@ class Deliverer:
             if not _spared(exc):
                 self._record(primary, "-", False, self.clock() - started - exc.waited)
             self._primary_failed(primary, exc, failures)
-            _failed_step(f"{primary.name}: {exc} {self.clock() - started:.1f}s")
+            (_step if isinstance(exc, _Refused) else _failed_step)(
+                f"{primary.name}: {exc} {self.clock() - started:.1f}s"
+            )
             return None
         primary.stats.timeouts_since_delivery = 0
         primary.stats.switches_since_delivery = 0
@@ -2632,7 +2712,11 @@ class Deliverer:
         if found is not None:
             pin.kind, pin.kbps = opened.kind, opened.kbps = found
             known = self._known.get(pin.song_id)
-            if known is not None and (known.source_id, known.size) == (pin.source.id, pin.size):
+            if (
+                not _LIBRARY_ACQUISITION.get()
+                and known is not None
+                and (known.source_id, known.size) == (pin.source.id, pin.size)
+            ):
                 self._known[pin.song_id] = replace(known, kind=pin.kind, kbps=pin.kbps)
         settings = self.settings
         wanted = track.duration_ms / 1000
@@ -2645,7 +2729,7 @@ class Deliverer:
             return opened
         pin.wrong = f"another recording ({pin.length:.1f}s, the catalog's {wanted:.1f}s)"
         await _closed(opened)
-        if not _left_out():  # (a download that left sources out knows nothing of a play's)
+        if not _left_out() and not _LIBRARY_ACQUISITION.get():
             self._known.pop(pin.song_id, None)  # not the song's representation
         self.registry.failed(pin.source, pin.wrong)  # once for the link
         key = _wrong_key(pin.source, track)
@@ -2688,8 +2772,10 @@ class Deliverer:
     def _failure(self, source: Source, exc: _Failed, pin: Pin | None = None) -> None:
         """A failed attempt at ``source`` (its link or its audio), in its diagnostics; an
         error counts toward its cooldown - once for a link (``pin``)."""
-        if isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling)):
-            return  # counted once, where it was found; a wait at its limits is not its failure
+        if isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused)):
+            # Counted once, where it was found; a wait at its limits is not its failure, nor
+            # audio a request refused by its own terms.
+            return
         self.registry.failed(source, str(exc))
         if isinstance(exc, _Error) and not (pin is not None and pin.errored):
             if pin is not None:
@@ -2785,6 +2871,12 @@ class Deliverer:
         mine: bool,
         waits: pacing.Waits,
     ) -> Opened:
+        capacity = _BULK_LEASE.get()
+        if (
+            _BULK_REUSE.get()
+            or (capacity is not None and (not capacity.active or capacity.owner is not None))
+        ) and pin.info.transport != "dash":
+            raise _Reacquire("a direct transfer needs its own upstream admission", resolve=True)
         headers = dict(pin.info.headers)
         headers["accept-encoding"] = "identity"
         if requested is not None:
@@ -2847,6 +2939,10 @@ class Deliverer:
                     raise _Other("another file (HTTP 412)")
                 opened = self._answer(pin, requested, head, response, expect, mine)
                 opened.remux = pin.remux if pin.info.transport == "dash" else None
+                file = response.extensions.get(DASH_KEPT)
+                if file is not None and opened.body is not None and self._keeps():
+                    assert self.retention is not None
+                    opened.capture = self.retention.dash(file, self.dash)
             except BaseException:
                 await response.aclose()
                 raise
@@ -2858,6 +2954,17 @@ class Deliverer:
                 opened.body = _begun(opened.body, ended)
                 opened.close = _closing(opened.close, ended)
                 kept = True
+            urgency = pacing.current()
+            if (
+                self.bulk is not None
+                and _BULK_LEASE.get() is None
+                and (urgency is None or urgency.level <= pacing.PLAY)
+                and opened.body is not None
+                and pin.info.transport != "dash"
+            ):
+                finished = self.bulk.observe_playback(pin.source)
+                opened.body = _finishing(opened.body, finished)
+                opened.close = _closing(opened.close, finished)
             return opened
         finally:
             if ended is not None and not kept:
@@ -2878,10 +2985,48 @@ class Deliverer:
     def _dash_key(self, pin: Pin) -> str:
         """The key of the pin's add-on track in the quality range chosen (``link_key``)."""
         addon = pin.source.addon
-        quality = (self.settings.dash_quality_from, self.settings.dash_quality_to)
+        quality = self._dash_quality(pin)
         return link_key(str(addon.base), addon.settings, pin.track_id, quality)
 
+    def _dash_quality(self, pin: Pin) -> tuple[str, str]:
+        return (
+            ("any", "lossless")
+            if pin.cached
+            else (self.settings.dash_quality_from, self.settings.dash_quality_to)
+        )
+
+    def _continuing_dash(self, pin: Pin, capacity: CapacityLease) -> bool:
+        dash = self.dash
+        if dash is None:
+            return False
+        key = self._dash_key(pin)
+        start = (dash.holding(key, pin.etag) if pin.etag else None) or self.settings.dash_start
+        return dash.continuing(key, start, capacity)
+
     async def _joined(
+        self,
+        pin: Pin,
+        requested: ByteRange | None,
+        head: bool,
+        deadline: float,
+        matching: str | None,
+    ) -> httpx.Response:
+        if self.bulk is None or _BULK_LEASE.get() is not None:
+            return await self._joined_from(pin, requested, head, deadline, matching)
+        while True:
+            lease = self.bulk.playback_lease(pin.source)
+            token = _BULK_LEASE.set(lease)
+            try:
+                return await self._joined_from(pin, requested, head, deadline, matching)
+            except _Reacquire:
+                # Playback admission is immediate. A whole-file fallback or a live
+                # selection change gets a new lease rather than recycling a job's.
+                pass
+            finally:
+                _BULK_LEASE.reset(token)
+                lease.close()
+
+    async def _joined_from(
         self,
         pin: Pin,
         requested: ByteRange | None,
@@ -2899,7 +3044,8 @@ class Deliverer:
         if dash is None:  # (a plain link that answered with a manifest)
             raise _Failed(f"DASH is off ({self.dash_off})")
         settings = self.settings
-        quality = (settings.dash_quality_from, settings.dash_quality_to)
+        quality = self._dash_quality(pin)
+        capacity = _BULK_LEASE.get()
         link = Link(
             self._dash_key(pin),
             pin.info.url,
@@ -2907,6 +3053,9 @@ class Deliverer:
             pin.source.http,
             pin.source.pace,
             pin.source.name,
+            capacity,
+            _BULK_REUSE.get()
+            or (capacity is not None and (not capacity.active or capacity.owner is not None)),
         )
         wanted = pin.seconds
         tolerance = max(
@@ -2961,7 +3110,12 @@ class Deliverer:
             (first, last), status = span, 206
             headers["content-range"] = f"bytes {first}-{last}/{joined.size}"
         headers["content-length"] = str(last - first + 1)
-        return httpx.Response(status, headers=headers, stream=dash.body(joined, first, last))
+        return httpx.Response(
+            status,
+            headers=headers,
+            stream=dash.body(joined, first, last),
+            extensions={DASH_KEPT: joined},
+        )
 
     async def _streamed(
         self,
@@ -3001,13 +3155,15 @@ class Deliverer:
             except BaseException:
                 await body.aclose()
                 raise
-        return httpx.Response(status, headers=headers, stream=body)
+        return httpx.Response(status, headers=headers, stream=body, extensions={DASH_KEPT: file})
 
     def _dash_failed(self, pin: Pin, exc: DashError) -> Exception:
         """A join's failure as the routing's: a manifest Shijhon does not play, or a
         preview, is unusable audio (the add-on's failure in its diagnostics, once a join),
         and so is one without a quality in the range chosen (no failure of the add-on's);
         an expired link is re-resolved; the others are as a direct link's would be."""
+        if exc.kind == "capacity":
+            return _Reacquire(str(exc))
         if exc.kind == "range":
             return _Unusable(str(exc))
         if exc.kind in ("unsupported", "short"):
@@ -3032,7 +3188,9 @@ class Deliverer:
             return _TimedOut(str(exc))
         if exc.kind == "paced":
             return _Paced(str(exc))
-        return _Failed(str(exc))  # rate limited ("rate limited"), another answer
+        if exc.kind == "rate_limited":
+            return _Limited(str(exc))
+        return _Failed(str(exc))  # another answer
 
     def _delivered(self, pin: Pin, opened: Opened, asked: float) -> None:
         """Its audio answered: the source's success (once per link) - for the primary also
@@ -3061,7 +3219,7 @@ class Deliverer:
         if status == 429:
             named = pacing.retry_after(response.headers.get("retry-after"))
             self._rate_limited(pin.source, named, audio=True)
-            raise _Failed("rate limited")
+            raise _Limited("rate limited")
         if status == 416:
             size = pin.size or _total(response)
             out = [(b"content-range", f"bytes */{size}".encode())] if size else []
@@ -3130,6 +3288,16 @@ class Deliverer:
                 206, common + _range_headers(*span, total), None, _nothing, pin.source.name
             )
 
+        capture = None
+        if (
+            self.retention is not None
+            and self._keeps()
+            and pin.info.transport != "dash"
+            and (not encoding or encoding == "identity")
+        ):
+            capture = self.retention.capture(pin, response, total, etag)
+        raw = response.aiter_raw() if capture is None else capture.tap(response.aiter_raw())
+
         if status == 206:
             out = [
                 *common,
@@ -3137,7 +3305,7 @@ class Deliverer:
                 (b"content-length", response.headers.get("content-length", "").encode()),
             ]
             out = [(k, v) for k, v in out if v]
-            return Opened(206, out, response.aiter_raw(), response.aclose, pin.source.name)
+            return Opened(206, out, raw, response.aclose, pin.source.name, capture=capture)
 
         # 200: the whole representation.
         if requested is not None and total is not None:
@@ -3147,16 +3315,22 @@ class Deliverer:
                     416, [(b"content-range", f"bytes */{total}".encode())], None, _nothing
                 )
             first, last = span
-            body = _slice(response.aiter_raw(), first, last)
+            body = _slice(raw, first, last)
             return Opened(
                 206,
                 common + _range_headers(first, last, total),
                 body,
                 response.aclose,
                 pin.source.name,
+                capture=capture,
             )
         length = [(b"content-length", str(total).encode())] if total is not None else []
-        return Opened(200, common + length, response.aiter_raw(), response.aclose, pin.source.name)
+        return Opened(200, common + length, raw, response.aclose, pin.source.name, capture=capture)
+
+    def _keeps(self) -> bool:
+        """Whether the audio being opened may go to a client and be kept once it has
+        (``retention``)."""
+        return self.retention is not None and self.retention.enabled and _KEEPS.get()
 
 
 def seconds_a_song(source: Source, answer: str, now: float, preferred: str) -> tuple[float, bool]:
@@ -3236,16 +3410,25 @@ def _closing(close: Callable[[], Awaitable[None]], ended: Callable[[], None]) ->
     return closed
 
 
+async def _finishing(body: AsyncIterator[bytes], ended: Callable[[], None]) -> AsyncIterator[bytes]:
+    try:
+        async for chunk in body:
+            yield chunk
+    finally:
+        ended()
+
+
 def _paced(exc: BaseException) -> bool:
     """The request's time ran out at the add-on's limits, not at the add-on."""
     return isinstance(exc, _Paced)
 
 
 def _spared(exc: BaseException) -> bool:
-    """Nothing the add-on did: it never had the request's time (``_Paced``), or was not
-    asked (``_Cooling``) - no attempt of its own to measure, and no failure for the
-    song that a client's retry would skip it for."""
-    return isinstance(exc, (_Paced, _Cooling))
+    """Nothing the add-on did: it never had the request's time (``_Paced``), was not
+    asked (``_Cooling``), or the request refused its audio by its own terms (``_Refused``)
+    - no attempt of its own to measure, and no failure for the song that a client's retry
+    would skip it for."""
+    return isinstance(exc, (_Paced, _Cooling, _Refused))
 
 
 def _unfinished(exc: BaseException) -> bool:
@@ -3255,9 +3438,35 @@ def _unfinished(exc: BaseException) -> bool:
 
 
 def _kept(exc: BaseException) -> bool:
-    """The link stays: its audio was not asked for in time (``_Paced``), or its DASH join
-    goes on (``_Joining``)."""
-    return isinstance(exc, (_Paced, _Joining))
+    """The link stays: its audio was not asked for in time (``_Paced``), its DASH join
+    goes on (``_Joining``), or the request refused its audio by its own terms
+    (``_Refused``: it may do for another)."""
+    return isinstance(exc, (_Paced, _Joining, _Refused))
+
+
+def _refuse(kind: str | None, kbps: int | None) -> None:
+    """Raise :class:`_Refused` when the request's own test (``Deliverer.open``'s
+    ``accept``) does not take audio of this format and bitrate."""
+    accept = _ACCEPT.get()
+    why = None if accept is None else accept(kind, kbps)
+    if why is not None:
+        raise _Refused(why)
+
+
+async def _tested(pin: Pin, opened: Opened) -> Opened:
+    """Audio opened at byte zero, as the request's own test takes it, by what its first
+    bytes told (``_verify``) - refused and closed when it does not do. A probe whose link
+    is not read yet (a HEAD) has nothing to tell by: it passes."""
+    if _ACCEPT.get() is None or opened.status not in (200, 206):
+        return opened
+    if opened.body is None and not pin.checked:
+        return opened
+    try:
+        _refuse(opened.kind, opened.kbps)
+    except _Refused:
+        await _closed(opened)
+        raise
+    return opened
 
 
 def _wrong_key(source: Source, track: Track) -> tuple[int, str]:

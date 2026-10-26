@@ -591,13 +591,21 @@ def test_album_zip_with_placeholders_is_refused(world: DeliveryWorld, addon: Fak
     assert state(world, song) == "placeholder"
 
 
-def test_plain_requests_are_forwarded_without_a_credential_check(world: DeliveryWorld) -> None:
-    owned = world.client().ok("search3", {"query": "Owned Record"})["searchResult3"]["song"][0][
+def test_plain_requests_ask_navidrome_about_credentials_at_most_once(
+    world: DeliveryWorld,
+) -> None:
+    owned = world.nd.client().ok("search3", {"query": "Owned Record"})["searchResult3"]["song"][0][
         "id"
     ]
     pings = world.app.checker.pings
+    # An owned song's stream depends on its listener's minimum audio quality: its
+    # credentials are checked first - once (a salted token differs on each request, so
+    # each stream asks once; a password's verdict is remembered).
     assert world.client().request("stream", {"id": owned}).content[:4] == b"fLaC"
-    world.client().ok("getAlbumList2", {"type": "newest"})
+    assert world.app.checker.pings <= pings + 1
+    pings = world.app.checker.pings
+    # Library enumeration is selected-library work; ordinary playlists stay native.
+    world.client().ok("getPlaylists")
     assert world.app.checker.pings == pings
     # A download of an unknown ID may be an archive (album, artist, playlist); inspecting it
     # is work, so it is checked first - and still served.

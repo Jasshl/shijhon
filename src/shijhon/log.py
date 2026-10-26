@@ -102,5 +102,5 @@ def configure_logging(level: str = "INFO", debug: Iterable[str] = ()) -> None:
 def quiet_libraries() -> None:
     """Libraries whose logging would print secrets: httpx logs full request URLs at INFO,
     aiosqlite every statement with its parameters (add-on URLs, saved tokens) at DEBUG."""
-    for name in ("httpx", "httpcore", "aiosqlite"):
+    for name in ("httpx", "httpcore", "httpx2", "httpcore2", "aiosqlite"):
         logging.getLogger(name).setLevel(logging.WARNING)

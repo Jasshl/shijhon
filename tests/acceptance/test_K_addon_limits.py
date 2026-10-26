@@ -44,6 +44,11 @@ def world(
         warm_ahead_depth=0,
         user_routings=0,
         user_downloads=0,
+        # This suite isolates API/audio-opening pacing. Full-body and cold-start
+        # admission are covered separately in the bulk acquisition suite.
+        bulk_downloads=0,
+        addon_downloads=0,
+        addon_preparations=0,
         budget_seconds=12.0,
         max_wait_seconds=20.0,
         # (The harness has them off; each test sets what it shows.)

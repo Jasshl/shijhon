@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -21,6 +22,9 @@ from shijhon.proxy.params import RestCall, header
 from shijhon.proxy.upstream import HOP_BY_HOP, Receive, Send, Upstream, request_headers, send_bytes
 
 log = logging.getLogger(__name__)
+# A selected view's check of library items: (kind - "song" or "album" -, IDs) -> those of
+# them the caller's selection shows.
+Shown = Callable[[str, Sequence[str]], Awaitable[frozenset[str]]]
 # Headers that no longer describe a body Shijhon changed.
 _CHANGED_BODY = {b"content-length", b"content-encoding", b"etag", b"last-modified"}
 MIN_COMPRESSED = 1024  # smaller answers are sent as they are
@@ -52,12 +56,29 @@ def _dumps(document: dict[str, Any], xml: bool) -> bytes:
 
 
 @dataclass
+class _Reply:
+    send_response: Reply
+    selected_view: bool
+    original_songs: Mapping[str, frozenset[str]] | None = None
+
+    async def __call__(self, receive: Receive, send: Send) -> None:
+        await self.send_response(receive, send)
+
+
+@dataclass
 class LibraryAnswer:
-    """Navidrome's own answer to the client's request, read in full."""
+    """Navidrome's own answer to the client's request, read in full. ``selected_view``: the
+    selected library's answer instead (``collection/visibility.py``); ``original_songs``:
+    its album list's albums listed with all of their original songs, and those songs;
+    ``shown``: for a selected search, which songs or albums the caller's selection shows
+    (None: the answer is no selection's - nothing is hidden from it)."""
 
     status: int
     headers: list[tuple[bytes, bytes]]
     body: bytes
+    selected_view: bool = False
+    original_songs: Mapping[str, frozenset[str]] | None = None
+    shown: Shown | None = field(default=None, repr=False, compare=False)
     _document: Any = field(default=None, init=False, repr=False, compare=False)
     _read: bool = field(default=False, init=False, repr=False, compare=False)
 
@@ -78,6 +99,19 @@ class LibraryAnswer:
         calls get the same document, with any changes made to it."""
         if self.status != 200:
             return None
+        return _found(await self._loaded(), key)
+
+    async def document(self) -> dict[str, Any] | None:
+        """The whole document of a successful answer, read as ``parsed`` reads it (for an
+        answer whose content is no single element: a list at its top)."""
+        if self.status != 200:
+            return None
+        document = await self._loaded()
+        response = document.get("subsonic-response") if isinstance(document, dict) else None
+        ok = isinstance(response, dict) and response.get("status") == "ok"
+        return document if ok else None
+
+    async def _loaded(self) -> Any:
         if not self._read:
             try:
                 if self._in_thread:
@@ -87,7 +121,7 @@ class LibraryAnswer:
             except ValueError:
                 self._document = None
             self._read = True
-        return _found(self._document, key)
+        return self._document
 
     def reply(
         self, *, head: bool = False, document: dict[str, Any] | None = None, compress: bool = False
@@ -112,7 +146,7 @@ class LibraryAnswer:
                 sent += [(b"content-encoding", b"gzip"), (b"vary", b"Accept-Encoding")]
             await send_bytes(send, self.status, out, sent, head=head)
 
-        return reply
+        return _Reply(reply, self.selected_view, self.original_songs)
 
 
 def _found(document: Any, key: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -147,10 +181,26 @@ async def captured(reply: Reply) -> LibraryAnswer:
         body = await anyio.to_thread.run_sync(gzip.decompress, body)
         drop = (b"content-encoding", b"content-length")
         headers = [(k, v) for k, v in headers if k.lower() not in drop]
-    return LibraryAnswer(status, headers, body)
+    return LibraryAnswer(
+        status,
+        headers,
+        body,
+        selected_view=bool(getattr(reply, "selected_view", False)),
+        original_songs=getattr(reply, "original_songs", None),
+    )
 
 
 async def library_answer(upstream: Upstream, call: RestCall) -> LibraryAnswer | None:
+    if upstream.library_answer is not None:
+        selected = await upstream.library_answer(call)
+        if selected is not None:
+            return selected
+    return await raw_library_answer(upstream, call)
+
+
+async def raw_library_answer(
+    upstream: Upstream, call: RestCall, *, max_bytes: int | None = None
+) -> LibraryAnswer | None:
     """The client's request as Navidrome answers it, uncompressed and read in full; None
     when Navidrome cannot be reached."""
     headers = [(k, v) for k, v in request_headers(call.headers) if k.lower() != b"accept-encoding"]
@@ -159,7 +209,16 @@ async def library_answer(upstream: Upstream, call: RestCall) -> LibraryAnswer | 
             call.http_method, call.raw_path, call.query, headers, call.body
         )
         try:
-            body = await response.aread()
+            if max_bytes is None:
+                body = await response.aread()
+            else:
+                chunks, size = [], 0
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > max_bytes:
+                        raise ValueError("The library response exceeds its index budget.")
+                    chunks.append(chunk)
+                body = b"".join(chunks)
         finally:
             await response.aclose()
     except httpx.HTTPError as exc:

@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% from "_macros.html" import learned_edits, playlist_tabs, chevron %}
+{% set title = "Playlists" %}
+{% macro rules(spec, refresh_enabled=false) %}
+<input type="hidden" name="publication_mode" value="direct">
+<div class="mix-fields">
+  <label>Playlist name<input name="name" value="{{ spec.name }}" required maxlength="100"></label>
+  <label>Tracks<input name="count" type="number" min="1" max="100" value="{{ spec.count }}" required></label>
+  <label>Refresh schedule<select name="cadence">{% for key, label in [('manual','Manual only'),('daily','Every day'),('weekly','Every week')] %}<option value="{{ key }}"{% if spec.cadence == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+  <div class="mix-wide mix-options">
+    <div><label class="mix-check"><input name="enable" type="checkbox" value="true"{% if refresh_enabled %} checked{% endif %}> Enable regular refreshes after publishing</label><p class="field-help">Needs Every day or Every week. Leave it off to refresh by hand.</p></div>
+    <div><label class="mix-check"><input name="ai" type="checkbox" value="true"{% if spec.ai %} checked{% endif %}> Use AI curation</label><p class="field-help">The AI chooses the songs from the candidates, following your brief.</p></div>
+  </div>
+  <label class="mix-wide" data-show-for="ai" data-values="true">Music brief<textarea name="brief" rows="3" maxlength="2000" placeholder="For example: melodic, adventurous music for an evening walk">{{ spec.brief }}</textarea></label>
+</div>
+<details class="form-more"><summary>Advanced settings</summary>
+  <div class="mix-fields">
+    <label>At least this much unfamiliar music (%)<input name="unfamiliar_percent" type="number" min="0" max="100" value="{{ spec.unfamiliar_percent }}" required></label>
+    <label>Maximum tracks per artist<input name="max_per_artist" type="number" min="1" max="10" value="{{ spec.max_per_artist }}" required></label>
+    <label>Leave out music heard in the last (days)<input name="exclude_days" type="number" min="0" max="365" value="{{ spec.exclude_days }}" required></label>
+    <label>Leave out this mix's earlier tracks for (days)<input name="repeat_days" type="number" min="0" max="365" value="{{ spec.repeat_days }}" required></label>
+    <div class="mix-wide"><label class="mix-check"><input name="review_before_publishing" type="checkbox" value="true"{% if spec.review_before_publishing %} checked{% endif %}> Review before publishing</label><p class="field-help">New selections, scheduled refreshes too, wait on this page for you to publish them.</p></div>
+  </div>
+</details>
+<p class="field-help">Publishing can add whole releases as placeholders or missing tracks to a matched album. It does not download audio.</p>
+{% endmacro %}
+
+{# Your connection, AI preferences and, for administrators, the shared AI service. #}
+{% macro settings() %}
+<div class="playlist-settings-body">
+<section class="group" aria-labelledby="connection-title">
+  <div class="group-head"><h2 id="connection-title">Your connection</h2><p class="group-help">{% if connected %}Connected as {{ user }}.{% else %}Connect {{ user }} so Shijhon can write playlists for you, also while you are away.{% endif %} Credentials stay in Shijhon's private state.</p></div>
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/connection">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="mix-fields">
+      <label>Your Navidrome password<input type="password" name="password" autocomplete="current-password"{% if not connected %} required{% endif %}><span class="field-help">{% if connected %}Leave blank to keep the current authorization.{% else %}Used once to get a reusable authorization.{% endif %}</span></label>
+      <label>Last.fm username (optional)<input name="history_user" value="{{ history_user }}" maxlength="100"><span class="field-help">Only for discovery mixes and listening history. The first read covers {{ history_days }} days; later refreshes add new listens.</span></label>
+      <label>Last.fm API key source<select name="history_source">{% for key, label in [('navidrome', "Use Navidrome's key"),('manual','Enter an API key')] %}<option value="{{ key }}"{% if history_source == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <p class="field-help" data-show-for="history_source" data-values="navidrome">{% if saved_history_source == 'navidrome' %}A blank password keeps the saved Navidrome key. Enter your password to read it again.{% else %}Enter your Navidrome password to read its configured Last.fm key.{% endif %} Your Last.fm username is entered separately.</p>
+      <label data-show-for="history_source" data-values="manual">Last.fm API key<input type="password" name="history_key" autocomplete="off"><span class="field-help">{% if saved_history_source == 'manual' %}Leave blank to keep your saved key.{% else %}Enter a key if Navidrome's is unavailable.{% endif %}</span></label>
+    </div>
+    <p class="field-help">When you use AI, it receives the brief and resolved candidate music, including familiarity and similarity evidence.</p>
+    <div class="form-actions"><button{% if not connected %} class="btn-primary"{% endif %}>Save connection</button></div>
+  </form>
+{% if connected %}
+  <details class="confirm playlist-disconnect">
+    <summary class="btn btn-danger btn-small"><span class="if-closed">Disconnect…</span><span class="if-open">Stay connected</span></summary>
+    <div class="confirm-body">
+      <p>Disconnect and forget your mix settings and listening history? Native playlists and library files stay in place.</p>
+      <form method="post" action="{{ prefix }}/playlists/disconnect"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-danger-fill">Disconnect and forget mix settings/history</button></form>
+    </div>
+  </details>
+{% endif %}
+</section>
+{% if connected %}
+<section class="group" aria-labelledby="ai-title">
+  <div class="group-head"><h2 id="ai-title">Your AI preferences</h2><p class="group-help">Only for your account, on all your devices. The administrator runs the shared service: its connection, credentials and spending limits.</p></div>
+{% if ai_mode == 'keep' %}<p class="notice notice-info">A previously saved private host connection is retained. It can run only while you are an administrator. Select the shared service to use personal model choices.</p>{% endif %}
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/ai-preferences">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="mix-fields">
+      <label>AI service<select name="ai_mode"><option value="shared"{% if ai_mode != 'none' %} selected{% endif %}>Shared service (default)</option><option value="none"{% if ai_mode == 'none' %} selected{% endif %}>No AI</option></select></label>
+      <label data-show-for="ai_mode" data-values="shared">Your model<select name="preferred_model"><option value=""{% if not ai_choices.model %} selected{% endif %}>Administrator's default{% if ai_choices.default_model %} ({{ ai_choices.default_model }}){% endif %}</option>{% for name in ai_choices.allowed_models %}<option value="{{ name }}"{% if ai_choices.model == name %} selected{% endif %}>{{ name }}</option>{% endfor %}{% if ai_choices.model and ai_choices.model not in ai_choices.allowed_models %}<option value="{{ ai_choices.model }}" selected>{{ ai_choices.model }} (no longer approved)</option>{% endif %}</select></label>
+    </div>
+    <p class="field-help">{% if shared_ai_available %}Your model must still be approved when a playlist runs.{% else %}An administrator must set up the shared service before you can use it.{% endif %} Your history and mix instructions stay your own. Separate personal AI connections are planned for later.</p>
+    <div class="form-actions"><button>Save your AI preferences</button></div>
+  </form>
+</section>
+{% endif %}
+{% if is_admin %}
+<section class="group playlist-admin" aria-labelledby="shared-ai-title">
+  <div class="group-head"><h2 id="shared-ai-title">Shared AI service</h2><p class="group-meta"><span class="tag tag-restart">Administrator · affects everyone</span></p><p class="group-help">Saving changes the service every account can use. No AI turns the shared service off. Your own preferences and private administrator connection are saved separately.</p></div>
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/host-ai">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="mix-fields">
+      <label>Shared host AI connection<select name="backend">{% for key, label in [('none','No AI'),('api','API compatible with Chat Completions'),('codex','Codex CLI on this host'),('claude','Claude Code on this host')] %}<option value="{{ key }}"{% if backend == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label data-show-for="backend" data-values="api">API base URL<input type="url" name="endpoint" value="{{ endpoint }}" placeholder="https://your-endpoint.example/v1" data-required-for="backend" data-required-values="api"></label>
+      <label data-show-for="backend" data-values="api codex claude">Default AI model<input name="model" value="{{ model }}" maxlength="100" data-required-for="backend" data-required-values="api"><span class="field-help" data-show-for="backend" data-values="api">Required for API.</span><span class="field-help" data-show-for="backend" data-values="codex claude">Optional. Blank uses the runner's default model.</span></label>
+      <label data-show-for="backend" data-values="api">API key (optional)<input type="password" name="api_key" autocomplete="off"><span class="field-help">Blank keeps a key at the same API URL. Changing the URL clears it. Choosing another connection removes it.</span></label>
+      <label class="mix-wide" data-show-for="backend" data-values="api codex claude">Additional approved models<textarea name="allowed_models" rows="3" maxlength="5050" placeholder="One model name per line">{{ allowed_models }}</textarea><span class="field-help">The default model is always approved; people can choose only these others. Approve models whose cost and access you accept.</span></label>
+    </div>
+    <p class="field-help" data-show-for="backend" data-values="codex claude">{% if not cli_enabled %}Local runners are disabled in this installation. Enable them after setup.{% endif %} The selected runner must be installed and signed in where Shijhon runs. No API URL or key is needed.</p>
+    <div class="form-actions"><button>Save shared AI service</button></div>
+  </form>
+</section>
+{% if private_ai %}
+<details class="more-settings more-nested"><summary><span class="more-title">Existing private administrator AI connection</span></summary>
+  <p class="group-help">This retained connection serves only your account. Editing it leaves the shared service and approved models unchanged.</p>
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/private-ai">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="mix-fields">
+      <label>Connection<select name="backend">{% for key, label in [('none','No AI'),('api','API compatible with Chat Completions'),('codex','Codex CLI on this host'),('claude','Claude Code on this host')] %}<option value="{{ key }}"{% if private_ai.backend == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label data-show-for="backend" data-values="api">API base URL<input type="url" name="endpoint" value="{{ private_ai.endpoint }}" data-required-for="backend" data-required-values="api"></label>
+      <label data-show-for="backend" data-values="api codex claude">Model<input name="model" value="{{ private_ai.model }}" maxlength="100" data-required-for="backend" data-required-values="api"></label>
+      <label data-show-for="backend" data-values="api">API key<input type="password" name="api_key" autocomplete="off"><span class="field-help">Blank keeps the key at the same API URL.</span></label>
+    </div>
+    <div class="form-actions"><button>Save private administrator connection</button></div>
+  </form>
+</details>
+{% endif %}
+{% endif %}
+</div>
+{% endmacro %}
+
+{% block main %}
+{{ playlist_tabs(prefix, "overview", detail=mix is not none) }}
+{% if mix %}
+<div class="page-head">
+  <div class="page-title">
+    <p class="page-back"><a href="{{ prefix }}/playlists">← Playlists</a></p>
+    <h1>{{ definition.name }}</h1>
+    <p class="page-summary">Discovery mix · {{ definition.count }} tracks · {% if mix.enabled %}refreshes {{ {'daily':'every day','weekly':'every week'}.get(definition.cadence, definition.cadence) }}{% elif pending_refresh %}refreshes start after publishing{% elif definition.cadence == 'manual' %}refreshed by hand{% else %}refreshes paused{% endif %}</p>
+  </div>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+<section class="group" aria-labelledby="refresh-title">
+  <div class="group-head"><h2 id="refresh-title">Refresh</h2><p class="group-help">{% if mix.enabled %}Regular refreshes are on. The next refresh is due {{ mix.due|when }}.{% elif pending_refresh %}Regular refreshes will start after publication.{% else %}Regular refreshes are paused.{% endif %} Refreshes replace this mix's tracks and keep its playlist ID.</p></div>
+  <form class="form-actions" method="post" action="{{ prefix }}/playlists/{{ mix.id }}/action">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button{% if not runs|selectattr('state', 'equalto', 'preview')|list %} class="btn-primary"{% endif %} name="action" value="{{ 'preview' if definition.review_before_publishing else 'generate' }}">{{ 'Generate preview' if definition.review_before_publishing else 'Generate and publish' }}</button>
+{% if mix.enabled or pending_refresh %}<button name="action" value="pause">Pause refreshes</button>{% elif mix.playlist_id and definition.cadence != 'manual' %}<button name="action" value="enable">Enable refreshes</button>{% endif %}
+    <a class="btn btn-quiet" href="{{ prefix }}/playlists/{{ mix.id }}">Reload progress</a>
+  </form>
+</section>
+{% if learning %}
+<section class="group">{{ learned_edits(learning, prefix ~ '/playlists/' ~ mix.id ~ '/action', csrf) }}</section>
+{% endif %}
+{% for run in runs %}
+<section class="group playlist-run" aria-labelledby="run-{{ run.id }}">
+  <div class="group-head"><h2 id="run-{{ run.id }}">{{ {'queued':'Waiting to generate','generating':'Choosing tracks','publishing':'Publishing playlist','published':'Ready in your music app','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped'}.get(run.state, run.state|capitalize) }} · {{ run.created|when }}</h2></div>
+  <div class="rows music-card">
+{% if run.error %}<div class="notice notice-error" role="alert"><p>{{ run.error }}</p></div>{% endif %}
+{% if run.state in ['queued','generating','publishing'] %}<p role="status">Working in the background. Reload this page to check progress.</p>{% endif %}
+{% if run.data.selected is defined %}
+  <p>{{ run.data.selected|length }} tracks.{% if run.state == 'published' %} Open this playlist in your music app to listen.{% elif run.state == 'preview' %} Publish when you are ready to listen in your music app.{% endif %}</p>
+  <details><summary>Track and release details</summary>
+  <p>Imported listens: {{ run.data.history_count }}, since {{ run.data.history_from|day }}. {{ run.data.skipped }} candidates were skipped because a recording could not be resolved confidently.</p>
+  <p>“Unfamiliar” means absent from the imported history. It does not establish that you have never heard the track.</p>
+  <p>Publishing catalog tracks can add their <strong>whole releases as placeholders</strong> or add missing tracks to a matched album. It does not download audio. A failed preparation can leave some releases added.</p>
+{% if run.data.releases is defined and run.data.releases %}
+  <ul>{% for release in run.data.releases %}<li>{{ release.title }} · {{ release.artist }} · {{ release.tracks }} tracks in the catalog release</li>{% endfor %}</ul>
+{% endif %}
+  <ol class="mix-tracks">
+{% for track in run.data.selected %}
+    <li><div><strong>{{ track.title }}</strong> · {{ track.artist }}</div><div class="field-help">{{ track.album }}{% if track.unfamiliar %} · Unfamiliar{% endif %}{% if track.release %} · Catalog release may be added{% else %} · Already in library{% endif %}</div><p class="field-help">{{ track.reason }}</p></li>
+{% endfor %}
+  </ol>
+  </details>
+  <form class="form-actions" method="post" action="{{ prefix }}/playlists/{{ mix.id }}/action">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="run" value="{{ run.id }}">
+{% if run.state == 'preview' %}
+    <button class="btn-primary" name="action" value="publish">Publish playlist</button>
+{% if definition.cadence != 'manual' %}
+    <label class="mix-check"><input type="checkbox" name="enable" value="true"{% if mix.enabled or run.data.enable_after %} checked{% endif %}> Enable refreshes after publishing</label>
+{% endif %}
+    <button name="action" value="discard">Discard preview</button>
+{% elif run.state in ['uncertain','failed'] %}<button name="action" value="recheck">Retry publication</button>{% endif %}
+  </form>
+{% endif %}
+  </div>
+</section>
+{% endfor %}
+<details class="more-settings"><summary><span class="more-title">Edit mix rules</span></summary>
+  <p class="group-help">Saving makes a new selection and publishes it, unless Review before publishing is on under Advanced settings.</p>
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/{{ mix.id }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ mix_version }}">
+    {{ rules(definition, mix.enabled) }}
+    <div class="form-actions"><button class="btn-primary" data-direct-label="Save rules and publish" data-review-label="Save rules and preview">{{ 'Save rules and preview' if definition.review_before_publishing else 'Save rules and publish' }}</button></div>
+  </form>
+</details>
+{% else %}
+<div class="page-head">
+  <div class="page-title">
+    <h1>Playlists</h1>
+    <p class="page-summary">Make playlists for your music app: describe one, import one, or build a discovery mix from your Last.fm history.</p>
+  </div>
+  <details class="page-about"><summary>How playlists work</summary>
+    <p>Each playlist is published to your Navidrome account, so it shows up in your music app. Songs it needs that are not in your library yet can be added from the catalog as placeholders or as missing tracks of an album you have; publishing does not download audio. Audio is fetched when you play or download a song, through your add-ons.</p>
+    <p>Describing a playlist uses the AI service. Discovery mixes use your Last.fm listening history and can use AI too. Imports match a list you already have.</p>
+  </details>
+</div>
+{% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{% if not connected %}
+<div class="notice notice-info"><p class="notice-title">Connect your account first</p><p>Enter your Navidrome password below so Shijhon can write playlists for you. Last.fm is optional.</p></div>
+<section class="playlist-settings is-first" id="settings" aria-label="Connection and AI">
+{{ settings() }}
+</section>
+{% endif %}
+<section aria-labelledby="make-title">
+  <div class="group-head"><h2 id="make-title">Make a playlist</h2></div>
+  <ul class="playlist-ways">
+    <li><a href="{{ prefix }}/playlists/describe"><span class="playlist-way-title">Describe a playlist</span><span>Write what you want to hear. The AI picks the songs; you can refresh it later.</span></a></li>
+    <li><a href="{{ prefix }}/playlists/import"><span class="playlist-way-title">Import a playlist</span><span>Upload a playlist file or paste a track list, then review the matches.</span></a></li>
+    <li><a href="{% if connected %}#new-mix{% else %}#settings{% endif %}"><span class="playlist-way-title">New discovery mix</span><span>Unfamiliar music picked from your Last.fm listening history, refreshed on a schedule if you like.</span></a></li>
+  </ul>
+</section>
+{% if connected %}
+<section class="group" aria-labelledby="mixes-title"><div class="group-head"><h2 id="mixes-title">Your discovery mixes</h2>{% if mixes %}<p class="group-meta">{{ mixes|length }}</p>{% endif %}</div>
+{% if mixes %}<ul class="rows playlist-list">{% for item in mixes %}<li><a href="{{ prefix }}/playlists/{{ item.id }}">{{ item.definition.name }}</a><span>{{ item.definition.count }} tracks</span><span class="tag{{ ' tag-set' if item.enabled }}">{{ 'Refreshing' if item.enabled else 'Paused' }}</span></li>{% endfor %}</ul>{% else %}<p class="empty">No discovery mixes yet. Make one below.</p>{% endif %}
+</section>
+<section class="group" id="new-mix" aria-labelledby="new-mix-title"><div class="group-head"><h2 id="new-mix-title">New discovery mix</h2><p class="group-help">Publishes a playlist you can listen to in your music app. Refreshing it on a schedule is optional.{% if not history_user %} It needs your Last.fm username: add it under <a href="#settings">Connection and AI settings</a>.{% endif %}</p></div>
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists"><input type="hidden" name="csrf" value="{{ csrf }}">{{ rules(definition) }}<div class="form-actions"><button class="btn-primary" data-direct-label="Create and publish" data-review-label="Create preview">Create and publish</button></div></form>
+</section>
+<details class="more-settings playlist-settings" id="settings"><summary><span class="more-title">Connection and AI settings</span><span class="more-changed">Connected as {{ user }}{% if history_user %} · Last.fm {{ history_user }}{% endif %} · {{ 'No AI' if ai_mode == 'none' else 'Shared AI' if ai_mode == 'shared' else 'Private AI' }}</span></summary>
+{{ settings() }}
+</details>
+{% endif %}
+{% endif %}
+<script src="{{ prefix }}/static/playlists.js" defer></script>
+{% endblock %}

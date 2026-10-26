@@ -1,0 +1,13 @@
+  <section class="music-import-panel music-import-removal" data-import-removal{% if not job %} hidden{% endif %} aria-labelledby="import-removal">
+    <h2 id="import-removal">Remove this import from the library</h2>
+    <p>Removal makes the listed files unavailable to everyone with access to this music. You review the files first, and Restore brings them back.</p>
+    <details class="music-import-more"><summary>What removal keeps</summary>
+      <p>Stop only ends unfinished importing; removal is a separate reviewed action. Copies already downloaded to a device stay there.</p>
+      <p>Removed originals are retained privately on this server. Restore puts the same bytes and tags back at the same paths, keeping native IDs and saved references. Removal does not free disk space. Personal history, library choices, favorites and playlists are kept; removed songs are unavailable until restored.</p>
+    </details>
+    {% if is_admin|default(false) %}<label class="music-import-used"><input type="checkbox" data-removal-used> Include music in use (administrator approval; affects other people’s saved music)</label>{% endif %}
+    <div class="music-import-buttons"><button data-removal-review>Review removal</button><button class="btn-danger-fill" data-removal-approve hidden>Confirm reviewed removal</button><button data-removal-restore hidden>Restore this import</button><button data-removal-retry hidden>Retry interrupted operation</button><button class="btn-quiet" data-removal-stop hidden>Stop unfinished import</button></div>
+    <p class="music-import-summary" data-removal-summary role="status" aria-live="polite"></p><p data-removal-error class="notice notice-error" role="alert" hidden></p>
+    <ul class="music-import-files" data-removal-files></ul>
+    <div class="music-import-pagination"><button class="btn-small" data-removal-prev disabled>← Previous</button><span data-removal-page></span><button class="btn-small" data-removal-next disabled>Next →</button></div>
+  </section>

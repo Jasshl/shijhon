@@ -21,6 +21,10 @@ from typing import Literal
 from shijhon.catalog.model import CatalogRef
 
 Kind = Literal["al", "tr", "ar"]
+# An ID Navidrome never has (no dot in its own) and that names no catalog item: a request
+# carrying it in place of an item an account is not to know of gets Navidrome's own answer
+# for an item it does not have (``views/real_audio.py``).
+ABSENT = "sh.absent"
 _ID = re.compile(r"sh\.(al|tr|ar)\.([a-z][a-z0-9]*)\.([A-Za-z0-9.-]{1,200})")
 _ART = re.compile(r"(?:al|ar|mf|pl)-(.+?)(?:_[0-9a-f]+)?")
 

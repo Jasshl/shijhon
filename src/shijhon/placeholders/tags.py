@@ -15,17 +15,25 @@ the scan (the album did not split) remains the final authority.
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import mutagen
+from mutagen.aiff import AIFF
+from mutagen.dsf import DSF
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3, TXXX, Frames
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
+from mutagen.oggflac import OggFLAC
 from mutagen.oggopus import OggOpus
+from mutagen.oggspeex import OggSpeex
 from mutagen.oggvorbis import OggVorbis
+from mutagen.trueaudio import TrueAudio
+from mutagen.wave import WAVE
 
 from shijhon.catalog.model import CatalogRelease, CatalogTrack, ReleaseKind
 
@@ -116,11 +124,15 @@ class UnsupportedFormat(ValueError):
 
 def raw_tags(path: Path) -> Tags:
     """The file's tags as lower-case keys, roughly as TagLib hands them to Navidrome."""
-    audio = mutagen.File(path)
+    return raw_tags_of(mutagen.File(path), path.suffix)
+
+
+def raw_tags_of(audio: Any, suffix: str = "") -> Tags:
+    """``raw_tags`` of an already parsed file (music imports parse in a subprocess)."""
     if audio is None or audio.tags is None:
         if isinstance(audio, (FLAC, OggVorbis, OggOpus, MP3, MP4)):
             return {}
-        raise UnsupportedFormat(path.suffix)
+        raise UnsupportedFormat(suffix)
     if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
         out: Tags = {}
         for key, value in audio.tags:
@@ -130,7 +142,7 @@ def raw_tags(path: Path) -> Tags:
         return _id3_raw(audio.tags)
     if isinstance(audio, MP4):
         return _mp4_raw(audio.tags)
-    raise UnsupportedFormat(path.suffix)
+    raise UnsupportedFormat(suffix)
 
 
 def _id3_raw(tags: ID3) -> Tags:
@@ -302,10 +314,25 @@ class Marker:
 
 def marker_of(path: Path) -> Marker | None:
     """Shijhon's markers in a placeholder or delivered file, if any."""
-    try:
-        raw = raw_tags(path)
-    except (UnsupportedFormat, mutagen.MutagenError):
-        return None
+    if path.suffix.lower() == ".mka":  # (as delivered audio is written: ``write_delivered``)
+        from shijhon.music_imports import tagmap  # (it reads this module)
+
+        try:
+            raw = tagmap.matroska_tags_at(str(path))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+    else:
+        try:
+            raw = raw_tags(path)
+        except UnsupportedFormat:
+            try:  # delivered audio of another family (``write_delivered``)
+                from shijhon.music_imports import tagmap  # (it reads this module)
+
+                raw = tagmap.raw(mutagen.File(path))
+            except (UnsupportedFormat, mutagen.MutagenError):
+                return None
+        except mutagen.MutagenError:
+            return None
     track = raw.get(MARKER_TRACK)
     release = raw.get(MARKER_RELEASE)
     if not track or not release:
@@ -362,15 +389,34 @@ _MP4_FREEFORM = {
 _MP4_SKIP = {"tracknumber", "tracktotal", "discnumber", "disctotal", "compilation", "date"}
 
 
+# Delivered audio's containers, by family: Vorbis comments, ID3, MPEG-4 here; APEv2 (Monkey's
+# Audio, WavPack, Musepack), ASF (WMA) and Matroska (an ffmpeg stream copy) as music imports
+# write them (``tagmap``) - every one whose tags Navidrome 0.64.2 reads as Shijhon writes them.
+_VORBIS = (FLAC, OggVorbis, OggOpus, OggFLAC, OggSpeex)
+_ID3_FILES = (MP3, WAVE, AIFF, DSF, TrueAudio)
+DELIVERED_SUFFIXES = frozenset(
+    {".flac", ".m4a", ".mp4", ".mp3", ".ogg", ".opus", ".oga", ".spx", ".wav", ".aiff",
+     ".dsf", ".tta", ".ape", ".wv", ".mpc", ".wma", ".mka"}
+)  # fmt: skip
+
+
 def write_delivered(
-    path: Path, comments: Mapping[str, list[str]], *, not_size: int | None = None
+    path: Path,
+    comments: Mapping[str, list[str]],
+    *,
+    not_size: int | None = None,
+    fileobj: Any = None,
 ) -> None:
     """Replace a delivered file's own tags with the placeholder's (same logical values).
     ``not_size``: as for :func:`write_flac` (a FLAC file that replaces the placeholder at
-    its path)."""
+    its path). ``fileobj``: the file, open for reading and writing, instead of ``path``
+    (a music import's file, never opened by name)."""
     comments = {k: v for k, v in comments.items() if k != MARKER_SILENCE}
-    audio = mutagen.File(path)
-    if isinstance(audio, (FLAC, OggVorbis, OggOpus)):
+    if fileobj is None and path.suffix.lower() == ".mka":
+        _write_matroska(path, comments)
+        return
+    audio = mutagen.File(fileobj if fileobj is not None else path)
+    if isinstance(audio, _VORBIS):
         if isinstance(audio, FLAC):
             audio.clear_pictures()
         if audio.tags is None:
@@ -379,20 +425,55 @@ def write_delivered(
         audio.tags.clear()
         for key, values in comments.items():
             audio[key] = list(values)
-        audio.save()
-        if isinstance(audio, FLAC):
+        _save(audio, fileobj)
+        if isinstance(audio, FLAC) and fileobj is None:
             _another_size(path, not_size)
         return
     if isinstance(audio, MP4):
-        _write_mp4(audio, comments)
+        _write_mp4(audio, comments, fileobj)
         return
-    if isinstance(audio, MP3):
-        _write_id3(audio, comments)
+    if isinstance(audio, _ID3_FILES):
+        _write_id3(audio, comments, fileobj)
+        return
+    from shijhon.music_imports import tagmap  # (it reads this module)
+
+    kind = tagmap.family(audio)
+    if kind in ("ape", "asf"):
+        tags = tagmap.ensure_tags(audio)
+        tagmap.write(audio, tags, kind, comments)
+        _save(audio, fileobj)
         return
     raise UnsupportedFormat(path.suffix)
 
 
-def _write_mp4(audio: MP4, comments: Mapping[str, list[str]]) -> None:
+def _write_matroska(path: Path, comments: Mapping[str, list[str]]) -> None:
+    """Matroska, which Mutagen does not write: a stream copy with the placeholder's tags
+    (``tagmap.matroska_tagged``) takes the file's place."""
+    import os
+    import subprocess
+    import uuid
+
+    from shijhon.music_imports import tagmap  # (it reads this module)
+
+    copy = path.with_name(f".{uuid.uuid4().hex}.mka")
+    try:
+        tagmap.matroska_tagged(str(path), str(copy), comments)
+        os.replace(copy, path)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise UnsupportedFormat(f"{path.suffix} ({type(exc).__name__})") from None
+    finally:
+        copy.unlink(missing_ok=True)
+
+
+def _save(audio: Any, fileobj: Any, **options: Any) -> None:
+    if fileobj is None:
+        audio.save(**options)
+    else:
+        fileobj.seek(0)
+        audio.save(fileobj, **options)
+
+
+def _write_mp4(audio: MP4, comments: Mapping[str, list[str]], fileobj: Any = None) -> None:
     if audio.tags is None:
         audio.add_tags()
     tags = audio.tags
@@ -418,7 +499,7 @@ def _write_mp4(audio: MP4, comments: Mapping[str, list[str]]) -> None:
     tags["disk"] = [(disc, discs)]
     if comments.get("compilation", ["0"])[0] not in ("", "0"):
         tags["cpil"] = True
-    audio.save()
+    _save(audio, fileobj)
 
 
 _ID3_FRAMES = {
@@ -448,7 +529,7 @@ _ID3_TXXX = {
 }
 
 
-def _write_id3(audio: MP3, comments: Mapping[str, list[str]]) -> None:
+def _write_id3(audio: Any, comments: Mapping[str, list[str]], fileobj: Any = None) -> None:
     if audio.tags is None:
         audio.add_tags()
     tags = audio.tags
@@ -472,4 +553,4 @@ def _write_id3(audio: MP3, comments: Mapping[str, list[str]]) -> None:
                 f"/{comments[total_key][0]}" if comments.get(total_key) else ""
             )
             tags.add(Frames[frame_id](encoding=3, text=[text]))
-    audio.save(v2_version=4)
+    _save(audio, fileobj, v2_version=4)

@@ -21,6 +21,10 @@ port = 8765
 # reverse_proxy_user_header = "Remote-User"
 # reverse_proxy_auth = false
 
+# Optional remote MCP access, after configuring an HTTPS reverse proxy.
+# [agents]
+# public_url = "https://music.example.invalid"  # origin only; no path
+
 [navidrome]
 url = "http://navidrome:4533"
 # A Navidrome admin account for Shijhon alone, not a person's.
@@ -38,6 +42,8 @@ usage_export_path = "/usage/usage.sqlite3"
 
 [placeholders]
 folder = "_shijhon"          # inside the library
+# real_audio_accounts = ["audiomuse"]  # accounts of sound analyzers: they see only
+                             # songs whose audio is in the library (docs/how-it-works.md)
 
 # Add-ons (docs/add-ons.md): add them on the dashboard's Add-ons page, or here. A list
 # here is applied at every start, until you change the add-ons on the dashboard.
@@ -78,3 +84,12 @@ folder = "_shijhon"          # inside the library
 # unused_days = 30
 # catalog_albums = true      # catalog albums added to the library
 # fills = true               # songs added to partly owned albums
+
+# Sound analysis (docs/sound-analysis.md): facts about how songs sound, from AudioMuse-AI,
+# for described playlists. Off while url is empty.
+# [audiomuse]
+# url = "http://audiomuse:8000"
+# token = "…"               # or SHIJHON_AUDIOMUSE__TOKEN in the environment
+# reach = "private"          # where it runs: "loopback", "private" or "public"
+# server = ""                # AudioMuse-AI's name for this Shijhon; empty: its default
+# sync_hours = 6             # how often the analysis is read again

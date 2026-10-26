@@ -16,10 +16,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
 from shijhon import __version__
+from shijhon.access import AccessService, AccessUnavailable
 from shijhon.config import AddonSettings
 from shijhon.dashboard.status import scan_time
 from shijhon.delivery.netpolicy import PROJECT_URL, USER_AGENT
@@ -179,19 +181,39 @@ def test_pages_need_a_signed_in_admin(browser: Browser, world: DeliveryWorld) ->
     assert browser.get("static/fonts/OFL.txt").status_code == 200
     page = browser.get("sign-in")
     assert page.status_code == 200 and 'data-accent="' in page.text
-    assert "Use a Navidrome account with admin rights." in page.text
+    assert "Use your Navidrome account" in page.text
 
 
-def test_non_admins_and_wrong_passwords_are_refused(browser: Browser) -> None:
-    refused = browser.sign_in(LISTENER, LISTENER_PASSWORD)
-    assert refused.status_code == 403
-    assert "no admin rights in Navidrome" in refused.text
-    assert "shijhon_session" not in refused.headers.get("set-cookie", "")
-    assert browser.get("addons").status_code == 303
+def test_personal_users_sign_in_and_wrong_passwords_are_refused(browser: Browser) -> None:
+    accepted = browser.sign_in(LISTENER, LISTENER_PASSWORD)
+    assert accepted.status_code == 303
+    assert accepted.headers["location"] == f"{PATH}/collection"
+    assert browser.get("addons").status_code == 403
+    assert browser.get("playlists").status_code == 200
+    assert browser.post("sign-out", {"csrf": browser.csrf()}).status_code == 303
     wrong = browser.sign_in(ADMIN_USER, "not-the-password")
     assert wrong.status_code == 400 and "Wrong username or password" in wrong.text
-    assert 'value="admin"' in wrong.text  # the username is kept, the password is not
+    assert 'value="admin"' in wrong.text
     assert browser.get("addons").status_code == 303
+
+
+def test_refresh_reauthentication_explains_preserved_library_choices(browser: Browser) -> None:
+    notice = "Sign in again to refresh your music. Your library choices are kept."
+    ordinary = browser.get("sign-in")
+    assert ordinary.status_code == 200 and notice not in ordinary.text
+    changed_access = browser.get("sign-in?reason=access")
+    assert changed_access.status_code == 200 and notice not in changed_access.text
+    assert "Signed out: your account or library access changed in Navidrome." in changed_access.text
+    assert 'class="notice notice-error" role="alert"' in changed_access.text
+
+    assert browser.sign_in(ADMIN_USER, ADMIN_PASSWORD).status_code == 303
+    assert browser.get("sign-in").status_code == 303
+    refresh = browser.get(f"sign-in?reauth=1&next={PATH}/collection")
+    assert refresh.status_code == 200
+    assert f'<div class="notice" role="status"><p>{notice}</p></div>' in refresh.text
+    assert 'class="notice notice-error"' not in refresh.text
+    assert forms(refresh.text)[f"{PATH}/sign-in"]["next"] == f"{PATH}/collection"
+    assert browser.get("addons").status_code == 200
 
 
 def test_sign_in_needs_its_own_form(browser: Browser) -> None:
@@ -203,22 +225,17 @@ def test_sign_in_needs_its_own_form(browser: Browser) -> None:
     assert browser.get("addons").status_code == 303
 
 
-def test_an_admin_who_loses_admin_rights_is_signed_out(
-    world: DeliveryWorld, browser: Browser
-) -> None:
+def test_demoted_admin_keeps_personal_access_only(world: DeliveryWorld, browser: Browser) -> None:
     assert browser.sign_in(HELPER, HELPER_PASSWORD).status_code == 303
     assert browser.get("addons").status_code == 200
     users = {u["userName"]: u for u in world.nd.native("GET", "user").json()}
     helper = users[HELPER]
     world.nd.native("PUT", f"user/{helper['id']}", json={**helper, "isAdmin": False})
     try:
-        world.app.dashboard.admins.forget(HELPER)  # instead of waiting a minute
         response = browser.get("addons")
-        assert response.status_code == 303
-        assert response.headers["location"] == f"{PATH}/sign-in?reason=admin"
-        again = browser.get("sign-in?reason=admin")
-        assert "no longer has admin rights" in again.text
-        assert browser.get("addons").status_code == 303  # the session is gone
+        assert response.status_code == 403
+        assert browser.get("playlists").status_code == 200
+        assert browser.get("addons").status_code == 403
     finally:
         world.nd.native("PUT", f"user/{helper['id']}", json={**helper, "isAdmin": True})
 
@@ -257,14 +274,14 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.1.0b1"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.2.0"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 
-    async def unknown(navidrome: object, username: str) -> None:
-        return None
+    async def unknown(self: AccessService, username: str, *, expected_user_id: str) -> None:
+        raise AccessUnavailable
 
-    monkeypatch.setattr(world.app.dashboard.admins, "admin", unknown)
+    monkeypatch.setattr(AccessService, "personal", unknown)
     unverified = admin.get("addons")
     assert unverified.status_code == 503 and unverified.text.count(legal) == 1
     monkeypatch.undo()
@@ -289,9 +306,9 @@ def test_every_page_renders(admin: Browser) -> None:
         if page != "appearance":
             assert f'<a href="{PATH}/{page}" aria-current="page">' in html
         else:
-            assert f'<a href="{PATH}/appearance" aria-current="page">Appearance</a>' in html
+            assert f'href="{PATH}/appearance" aria-current="page">' in html
         assert f'href="{PATH}/static/shijhon.css"' in html
-        assert "Signed in as admin" in html
+        assert '<span class="visually-hidden">Signed in as </span>admin</span>' in html
         assert response.headers["cache-control"] == "no-store"
         assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
         assert "<script" not in html
@@ -311,7 +328,7 @@ def test_the_playback_page_is_generated_from_the_settings(admin: Browser) -> Non
 
     cleanup = admin.get("cleanup").text
     for key in DeliverySettings.model_fields:
-        if key in ("delivered_days", "delivered_gb"):  # downloaded audio: on Cleanup
+        if key in ("keep_streamed_audio", "delivered_days", "delivered_gb"):  # on Cleanup
             assert f'name="{key}"' not in html and f'name="{key}"' in cleanup, key
         else:
             assert f'name="{key}"' in html, key
@@ -537,13 +554,13 @@ def test_a_rate_limited_manifest_check_leaves_the_addon_alone(
 def test_the_download_burst_and_the_jobs_at_once_take_effect_at_once(
     world: DeliveryWorld, admin: Browser
 ) -> None:
-    """How many downloads a user may start in a row, and how many warm-ahead jobs and DASH
-    joins run at once for everyone."""
+    """With an hourly quota, the burst applies live; warm-ahead jobs and DASH joins do too."""
     limits = world.services.download_first.limits
     warm = world.services.interceptor.warm
     dash = world.services.deliverer.dash
     assert limits is not None and warm is not None and dash is not None
     before = (limits.burst, warm.jobs, dash.joins_at_once)
+    before_hour = limits.per_hour
     assert (warm.jobs, dash.joins_at_once) == (2, 3)  # the built-in defaults
     page = admin.get("playback").text
     assert "tag-restart" not in row_of(page, "delivery-user-download-burst")
@@ -552,21 +569,30 @@ def test_the_download_burst_and_the_jobs_at_once_take_effect_at_once(
     try:
         saved = admin.submit(
             "playback",
-            {"user_download_burst": "6", "warm_ahead_jobs": "1", "dash_joins_at_once": "1"},
+            {
+                "user_downloads_per_hour": "120",
+                "user_download_burst": "6",
+                "warm_ahead_jobs": "1",
+                "dash_joins_at_once": "1",
+            },
         )
         assert saved.status_code == 303
         assert (limits.burst, warm.jobs, dash.joins_at_once) == (6, 1, 1) and limits.most == 6
         assert admin.submit("playback", {"warm_ahead_jobs": "0"}).status_code == 400
         assert admin.submit("playback", {"dash_joins_at_once": "0"}).status_code == 400
         assert (warm.jobs, dash.joins_at_once) == (1, 1)
+        assert admin.submit("playback", {"user_downloads_per_hour": "0"}).status_code == 303
+        assert limits.per_hour == 0 and limits.burst == 6 and limits.most == 0
     finally:
         back = {
+            "user_downloads_per_hour": str(before_hour),
             "user_download_burst": str(before[0]),
             "warm_ahead_jobs": str(before[1]),
             "dash_joins_at_once": str(before[2]),
         }
         assert admin.submit("playback", back).status_code == 303
     assert (limits.burst, warm.jobs, dash.joins_at_once) == before
+    assert limits.per_hour == before_hour
 
 
 def test_restart_only_settings_say_so(world: DeliveryWorld, admin: Browser) -> None:
@@ -578,7 +604,7 @@ def test_restart_only_settings_say_so(world: DeliveryWorld, admin: Browser) -> N
         assert saved_rows(world, "catalog")["region"] == '"gb"'
         page = admin.get("addons").text
         assert "<strong>Restart needed.</strong> 1 saved setting applies after Shijhon" in page
-        assert "restarts: region." in page
+        assert "restarts: region (Catalog)." in page
         assert "Region, saved" in admin.get("diagnostics").text
         assert admin.submit("catalog", {"artwork_size": "600"}).status_code == 303
         assert world.services.commits is not None
@@ -627,7 +653,7 @@ def test_choosing_another_catalog_shows_its_settings_and_what_it_says(
         assert 'name="shown-kind" value="demo"' in page
         assert 'id="catalog-token"' not in page and 'id="catalog-region"' not in page
         assert "its artists, albums and songs are invented" in page
-        assert "restarts: catalog." in admin.get("addons").text
+        assert "restarts: catalog (Catalog)." in admin.get("addons").text
         # The sample catalog's token typed into the demo's page is not saved as anything.
         admin.submit("catalog", {"token": SECRET_TOKEN})
         assert saved_rows(world, "catalog") == {"kind": '"demo"'}
@@ -700,7 +726,7 @@ def test_the_wait_for_the_catalog_is_set_on_the_catalog_page(
     page = admin.get("catalog").text
     row = row_of(page, "search-budget-seconds")
     assert "Wait for the catalog" in row and 'value="8"' in row and "Default 8 s" in row
-    assert "goes out as soon as it has replied" in row and "Applies after restart" not in row
+    assert "goes out as soon as the catalog replies" in row and "Applies after restart" not in row
     try:
         for bad in ("0", "-1", "soon", "500"):
             refused = admin.submit("catalog", {"budget_seconds": bad}, "catalog/wait")
@@ -764,9 +790,12 @@ def test_restart_is_one_press_for_a_signed_in_admin_only(
     assert where.startswith(f"{PATH}/restarting?boot=") and where.endswith("diagnostics")
     waiting = browser.get(where)
     assert waiting.status_code == 200 and "Shijhon is restarting" in waiting.text
+    assert waiting.text.count('<p class="legal">') == 1  # the notices are on this page too
     assert "script-src 'self'" in waiting.headers["content-security-policy"]
     assert f'src="{PATH}/static/restart.js"' in waiting.text
-    assert browser.get("static/restart.js").status_code == 200
+    script = browser.get("static/restart.js")
+    # Checked again on every page: never a file kept from before an upgrade.
+    assert script.status_code == 200 and script.headers["cache-control"] == "no-cache"
     # Which run answers: asked by the waiting page, open like the sign-in page.
     run = Browser(world.server.base_url)
     try:
@@ -810,6 +839,7 @@ def test_restart_is_offered_where_a_restart_is_asked_for(
         assert refused.status_code == 409
         assert "Nothing here starts Shijhon again after it stops" in refused.text
         assert "Shijhon was not restarted" in refused.text and "restart.js" not in refused.text
+        assert refused.text.count('<p class="legal">') == 1
     finally:
         assert admin.submit("catalog", {"kind": "sample"}).status_code == 303
     assert restarts == []
@@ -827,7 +857,7 @@ def test_a_restart_that_would_not_come_back_is_refused_with_the_reason(
         refused = admin.post("restart", {"csrf": admin.csrf(), "next": f"{PATH}/catalog"})
         assert refused.status_code == 409 and "Shijhon was not restarted" in refused.text
         assert f"Nothing was stopped: {reason}. Correct it, then restart Shijhon." in refused.text
-        assert f'<a href="{PATH}/catalog">Back</a>' in refused.text
+        assert f'<a class="btn" href="{PATH}/catalog">Back</a>' in refused.text
         assert "restart.js" not in refused.text
         time.sleep(0.7)
         assert restarts == [] and not world.app.restarting
@@ -945,7 +975,7 @@ def test_addons_are_added_ordered_switched_and_set(world: DeliveryWorld, admin: 
         assert [fields[name] for name in own] == ["", "", ""]
         addons_page = admin.get("addons").text
         limits_row = row_of(addons_page, f"addon-{dashy.id}-requests-per-second")
-        assert "Default: as every add-on" in limits_row and "is-modified" not in limits_row
+        assert "/s, from Playback" in limits_row and "is-modified" not in limits_row
         assert ">Requests a second</label>" in limits_row
         assert not units_said_twice(addons_page)
         saved = admin.submit(
@@ -988,6 +1018,56 @@ def test_addons_are_added_ordered_switched_and_set(world: DeliveryWorld, admin: 
         assert removed.status_code == 303
         assert [s.name for s in world.server.call(sources.enabled)] == ["Keeper"]
         assert "Dashy removed." in admin.get("addons").text
+    finally:
+        world.clear_sources()
+
+
+def test_addons_are_pulled_into_place_and_switched_together(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    world.clear_sources()
+    ids = [world.add_source(world.addon(name)) for name in ("One", "Two", "Three", "Four")]
+    sources = world.services.sources
+    scripted = {"accept": "application/json"}  # addons.js: saves without leaving the page
+
+    def on() -> list[str]:
+        return [s.name for s in world.server.call(sources.enabled)]
+
+    def post(path: str, fields: dict[str, str], **kwargs: Any) -> httpx.Response:
+        return admin.post(path, {**fields, "csrf": admin.csrf()}, **kwargs)
+
+    places = {f"position-{source}": str(n) for n, source in enumerate(ids, start=1)}
+    try:
+        page = admin.get("addons").text
+        assert f'src="{PATH}/static/addons.js" defer>' in page
+        assert f'<ol class="chain" data-reorder="{PATH}/addons/order">' in page
+        # Pulled to the top: the page sends every place, and gets an answer, no notice.
+        moved = post("addons/order", {**places, f"position-{ids[3]}": "0"}, headers=scripted)
+        assert moved.status_code == 200 and moved.json() == {"saved": True}
+        assert on() == ["Four", "One", "Two", "Three"]
+        # The arrows answer the page's script the same way, and a form with the page.
+        stepped = post(f"addons/{ids[3]}/move", {"direction": "down"}, headers=scripted)
+        assert stepped.status_code == 200 and stepped.json() == {"saved": True}
+        assert on() == ["One", "Four", "Two", "Three"]
+        assert post(f"addons/{ids[3]}/move", {"direction": "up"}).status_code == 303
+        assert on() == ["Four", "One", "Two", "Three"]
+        # A place missing, one for an add-on not in the list, or not a number: nothing
+        # moves, and the page, loaded again, says why.
+        for sent in (
+            {f"position-{ids[0]}": "4"},
+            {**places, "position-99999": "1"},
+            {**places, f"position-{ids[1]}": "two"},
+        ):
+            refused = post("addons/order", sent, headers=scripted)
+            assert refused.status_code == 409 and refused.json() == {"saved": False}
+        assert "Order not saved" in admin.get("addons").text
+        assert on() == ["Four", "One", "Two", "Three"]
+        # All off, all on.
+        assert post("addons/enabled", {"enabled": "false"}).status_code == 303
+        assert on() == [] and "Every add-on is off." in admin.get("addons").text
+        assert post("addons/enabled", {"enabled": "true"}).status_code == 303
+        assert on() == ["Four", "One", "Two", "Three"]
+        assert "Every add-on is on." in admin.get("addons").text
     finally:
         world.clear_sources()
 
@@ -1056,7 +1136,7 @@ def test_a_new_host_gets_none_of_the_old_ones_secrets(world: DeliveryWorld, admi
             "level": 192,
         }
         page = admin.get("addons").text
-        assert "2 setting(s) its manifest does not declare plain were removed" in page
+        assert "2 setting(s) that may be secret were removed" in page
         assert "9911" not in page and 'value="192"' not in page
         assert 'type="password"' in row_of(page, f"addon-{source}-s-badge")
         # ... also when its manifest then offers it as one of its choices.
@@ -1248,8 +1328,8 @@ def test_a_form_save_keeps_what_was_not_changed(world: DeliveryWorld, admin: Bro
 
 
 def test_a_file_list_that_is_not_applied_says_so(world: DeliveryWorld, admin: Browser) -> None:
-    """Once the dashboard keeps the add-on list, the page says the file's is not
-    applied - as a warning, naming what differs, when the file's is another."""
+    """Once the dashboard keeps the add-on list, a small note at the end of the page says
+    the file's is not applied, whether or not it differs, and offers it back."""
     world.clear_sources()
     addon = world.addon("Filed")
     source = world.add_source(addon)
@@ -1263,12 +1343,14 @@ def test_a_file_list_that_is_not_applied_says_so(world: DeliveryWorld, admin: Br
         app.configured = configured.model_copy(update={"addons": [listed]})
         world.server.call(lambda: saved.take_addons("tester"))
         page = admin.get("addons").text
-        assert "so the file's list is not applied" in page
-        assert "are not applied</p>" not in page  # the same list: no warning
+        # A small note at the end of the page, with the way back to the file's list.
+        note = page[page.index('<p class="page-note') :]
+        assert "The configuration file also lists add-ons; this list" in note
+        assert ">Use the file's list after a restart</button>" in note
+        assert "notice-warn" not in page
         world.server.call(lambda: world.services.sources.update(source, budget_seconds=7))
         page = admin.get("addons").text
-        assert "The configuration file's add-ons are not applied" in page
-        assert "differs from this one (Filed)" in page
+        assert "notice-warn" not in page and "also lists add-ons; this list" in page
     finally:
         app.configured = configured
         world.server.call(lambda: saved.hand_back_addons("tester"))
@@ -1394,13 +1476,26 @@ def test_the_addon_chain_shows_health(world: DeliveryWorld, admin: Browser) -> N
         assert "6 add-ons, 5 on" in page
         # The list is not a strict order: as Playback says it.
         assert "top down" not in page
-        assert "primary first starts with the primary, then tries the others fastest first" in page
+        assert (
+            "<strong>Primary first</strong> starts with the primary, then tries the others"
+            " fastest first" in page
+        )
         failing = page[page.index("<h3>Failing</h3>") - 400 : page.index("<h3>Failing</h3>") + 900]
         assert "led-error" in failing and "Error: <code>timeout</code>" in failing
         limited = page[page.index("<h3>Limited</h3>") - 400 : page.index("<h3>Limited</h3>") + 900]
         assert "led-error" not in limited
         diagnostics = admin.get("diagnostics").text
         assert "chain chain-readonly" in diagnostics and "Manifest unreachable:" in diagnostics
+        # The summary above it: a tile for each part, its light with words that say the same.
+        start = diagnostics.index('class="health"')
+        summary = diagnostics[start : diagnostics.index("</section>", start)]
+        assert summary.count('class="health-tile"') == 4
+        assert re.search(
+            r'status-error"><span class="led led-error" aria-hidden="true"></span>'
+            r"<span>2 need attention</span>.*?Gone, Failing",
+            summary,
+            re.S,
+        )
         assert re.search(r"Last audio delivered \d\d:\d\d", diagnostics)
         assert "3 failures in a row, the last at" in diagnostics
     finally:
@@ -1420,16 +1515,22 @@ def test_diagnostics_shows_the_last_scan_as_a_time(world: DeliveryWorld, admin: 
 # --- appearance ---------------------------------------------------------------------------
 
 
-def test_the_accent_is_saved_for_everyone(world: DeliveryWorld, admin: Browser) -> None:
+def test_the_accent_is_personal(world: DeliveryWorld, admin: Browser) -> None:
     try:
         assert admin.submit("appearance", {"accent": "teal"}).status_code == 303
         page = admin.get("appearance").text
         assert '<html lang="en" data-accent="teal">' in page
         assert "Accent color saved." in page
         assert 'value="teal" checked' in page
+        # Each option is its name and a sample drawn in shapes: no words but the name.
+        picker = page[page.index('class="accent-picker"') : page.index("</fieldset>")]
+        assert picker.count('class="accent-sample"') == picker.count('name="accent"') == 5
+        assert "Library" not in picker and "Save" not in picker
+        assert '<span>Deep green</span><span class="visually-hidden"> (default)</span>' in picker
+        assert "Deep green is the default." in page
         assert 'data-accent="teal"' in admin.get("diagnostics").text
         other = Browser(world.server.base_url)
-        assert 'data-accent="teal"' in other.get("sign-in").text
+        assert 'data-accent="green"' in other.get("sign-in").text
         other.close()
         assert admin.submit("appearance", {"accent": "vermilion"}).status_code == 303
         assert 'data-accent="teal"' in admin.get("appearance").text
@@ -1705,12 +1806,12 @@ def test_sign_in_while_navidrome_is_down(world: DeliveryWorld, browser: Browser)
 def test_rights_that_cannot_be_checked_refuse_the_page(
     world: DeliveryWorld, admin: Browser, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def unknown(navidrome: object, username: str) -> None:
-        return None
+    async def unknown(self: AccessService, username: str, *, expected_user_id: str) -> None:
+        raise AccessUnavailable
 
-    monkeypatch.setattr(world.app.dashboard.admins, "admin", unknown)
+    monkeypatch.setattr(AccessService, "personal", unknown)
     page = admin.get("addons")
-    assert page.status_code == 503 and "Admin rights can" in page.text
+    assert page.status_code == 503 and "Account access can" in page.text
     assert "Signed in as" not in page.text
     monkeypatch.undo()
     assert admin.get("addons").status_code == 200  # the session was kept
@@ -1846,6 +1947,12 @@ def test_an_addon_list_from_the_environment_is_read_only(
         assert refused.status_code == 409 and "SHIJHON_ADDONS" in refused.text
         added = admin.post("addons", {"manifest": "https://x.invalid/m", "csrf": admin.csrf()})
         assert added.status_code == 409
+        for path, fields in (
+            ("addons/enabled", {"enabled": "false"}),
+            ("addons/order", {f"position-{one}": "1"}),
+        ):
+            assert admin.post(path, {**fields, "csrf": admin.csrf()}).status_code == 409, path
+        assert "addons.js" not in page and "All off" not in page
         assert [s.name for s in world.server.call(world.services.sources.enabled)] == ["EnvOne"]
     finally:
         monkeypatch.undo()

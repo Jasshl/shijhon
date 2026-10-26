@@ -26,15 +26,31 @@ from typing import Any
 import anyio
 import httpx
 
+from shijhon.dashboard.fields import Invalid, parse_number
 from shijhon.delivery import pacing
 from shijhon.delivery.addon import addon_base, allows_downloads, sendable
 from shijhon.delivery.netpolicy import Reach, Resolver, denied, policy_client, system_resolver
 from shijhon.delivery.pacing import AddonPace
-from shijhon.delivery.sources import StoredSource
+from shijhon.delivery.sources import MAX_LIMIT, StoredSource
 
 MAX_MANIFEST_BYTES = 256 * 1024
 CHECK_SECONDS = 60.0
 CHECK_TIMEOUT = 4.0
+
+
+def transfer_limit(text: str) -> int | None:
+    """An add-on transfer override: blank inherits, zero removes its cap."""
+    if not text.strip():
+        return None
+    try:
+        value = int(parse_number(text, whole=True))
+        if 0 <= value <= MAX_LIMIT:
+            return value
+    except Invalid:
+        pass
+    raise Invalid(f"Enter a whole number from 0 to {MAX_LIMIT}.")
+
+
 # How long a check waits for its turn at an add-on's request limit when the dashboard
 # already has a manifest of it to show (a page is not held up for a newer one).
 KNOWN_WAIT = 0.5

@@ -1,10 +1,10 @@
 """Suite I (and suite H's end-to-end part) - filling partially owned albums
 against a real Navidrome, with the demo catalog's records replayed.
 
-An owned album a client views is shown complete at once - Navidrome's answer with the
-release's missing tracks as catalog songs of the album - and nothing is written by the
-view; these albums meet the fill policy (every album does here), so they are then filled in
-the background. An owned album a search result shows is filled in the background without
+Album details show the complete release with missing catalog songs through both native
+and catalog album IDs. These albums meet the fill policy
+(every album does here), so they are then filled in the background. An owned album a search
+result shows is filled in the background without
 slowing the search. The owned tracks, the album's ID, name and cover stay as they were; the
 placeholders join the album. Each album is matched once; a client viewing many never-matched
 albums in a short time (a sync) gets them matched in the background; a view does not wait
@@ -25,6 +25,7 @@ import pytest
 from shijhon.views.bursts import Bursts
 from tests.conftest import NavidromeFactory
 from tests.harness import xsd
+from tests.harness.collection import prepare_collection, select_catalog
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
@@ -121,6 +122,7 @@ def world(
     with delivery_world(
         nd, tmp_path_factory.mktemp("fill"), catalog=replay.catalog(), fill=fill
     ) as w:
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -176,6 +178,17 @@ def test_a_viewed_album_is_complete_at_once_and_filled_in_the_background(
     assert filled == {"outcome": "filled", "release_ref": "demo:900000021", "reason": ""}
     native = world.nd.client().ok("getAlbum", {"id": ident})["album"]
     assert native["songCount"] == 17
+    assert viewer.ok("getAlbum", {"id": ident})["album"]["songCount"] == 17
+    assert viewer.ok("getAlbum", {"id": "sh.al.demo.900000021"})["album"]["songCount"] == 17
+    select_catalog(
+        world.nd,
+        world.server,
+        [
+            f"demo:{s['id'].rsplit('.', 1)[1]}"
+            for s in album["song"]
+            if s["id"].startswith("sh.tr.")
+        ],
+    )
     requests = replay.api_requests
     again = viewer.ok("getAlbum", {"id": ident})["album"]
     assert replay.api_requests == requests  # matched once
@@ -258,7 +271,8 @@ def test_the_owned_files_isrcs_find_an_album_the_search_misses(world: DeliveryWo
     """The ISRC is on two albums; only the one with the owned album's title fills it."""
     ident = album_id(world, BY_ISRC.title)
     album = world.client(client="isrc-viewer").ok("getAlbum", {"id": ident})["album"]
-    assert album["songCount"] == 14  # complete at once
+    assert album["songCount"] == 14
+    assert world.client().ok("getAlbum", {"id": "sh.al.demo.900000101"})["album"]["songCount"] == 14
     assert wait_matched(world, ident, "filled") == {
         "outcome": "filled", "release_ref": "demo:900000101", "reason": ""
     }  # fmt: skip
@@ -300,7 +314,17 @@ def test_an_xml_view_is_complete_at_once_like_a_json_view(world: DeliveryWorld) 
     ident = album_id(world, IN_XML.title)
     direct = world.nd.client().request("getAlbum", {"id": ident}, fmt="xml").content
     viewer = world.client(client="xml-viewer")
-    answer = viewer.request("getAlbum", {"id": ident}, fmt="xml")
+    fills = world.services.fills
+    assert fills is not None
+    previous = fills.auto_fill
+    fills.auto_fill = False
+    try:
+        answer = viewer.request("getAlbum", {"id": ident}, fmt="xml")
+        assert b'songCount="13"' in answer.content and xsd.valid(answer.content)
+    finally:
+        fills.auto_fill = previous
+    discovery = viewer.request("getAlbum", {"id": "sh.al.demo.900000203"}, fmt="xml")
+    assert b'songCount="13"' in discovery.content and xsd.valid(discovery.content)
     assert answer.status_code == 200 and xsd.valid(answer.content)
     album = ET.fromstring(answer.content).find(f"{NS}album")  # noqa: S314 - test data
     assert album is not None and album.get("songCount") == "13"

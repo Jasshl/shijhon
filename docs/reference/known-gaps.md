@@ -4,9 +4,31 @@
 
 - The Add-ons and Diagnostics pages check each add-on at most once a minute; the first load
   after that waits for the answers, several seconds while an add-on is slow or failing.
-- A song saved to the library while it plays keeps the add-on's file for the play's seeks
-  only while Shijhon keeps the song's link (`pin_ttl_seconds`, or less when the link
-  expires sooner); a seek after that reads the library's file and can fail.
+- A song saved to the library while it plays (downloaded, or kept from its stream) keeps
+  the add-on's file for the play's seeks only while Shijhon keeps the song's link
+  (`pin_ttl_seconds`, or less when the link expires sooner); a seek after that reads the
+  library's file and can fail.
+- A saved song Navidrome read as 0:00 (fragmented MP4 or Ogg FLAC audio saved before) is
+  put in one piece in the background at least two hours after its last use - also when
+  saved audio never expires. A play of it paused longer than that may fail to seek or go
+  on afterwards, since the new file's bytes lie elsewhere; playing it again works (an
+  answer being sent keeps reading the old file).
+- Kept streams (`keep_streamed_audio`): the requests of a play are joined into one file
+  only when the add-on gives the same file a strong ETag, or within one link; an answer
+  whose size the add-on does not tell is kept only when it is the whole song alone, its
+  end told by its framing (chunked, or HTTP/2). A kept song stays in the add-on's container
+  (FLAC, M4A, MP3, Opus, Ogg Vorbis,
+  Speex, WAVE, AIFF, DSF, TrueAudio, Monkey's Audio, WavPack, Musepack, WMA, Matroska);
+  audio in a container whose length Navidrome does not read goes in as the same audio in
+  one that tells it: raw ADTS AAC in an M4A, Ogg FLAC as a FLAC, and a fragmented MP4
+  (kept or downloaded) as a DASH song's is - FLAC as a FLAC, MP3 as an MP3, anything else
+  in an ordinary M4A. A Matroska song with several artists goes in as the same audio in its
+  codec's own container because ffmpeg cannot write the separate tag values. If local
+  tagging, stream copying or Navidrome's verification fails, the placeholder remains.
+  TrueAudio keeps streaming from the add-ons where Navidrome does not
+  index it (the pinned macOS build). Downloads still put only FLAC, M4A, MP3, Opus and
+  Ogg Vorbis in place. A catalog song streamed before it is in the library is kept
+  only when it is added within half an hour.
 - With `primary_first`, a song an app fetches ahead is served only by the primary: while
   the primary is down that fetch fails, and the song starts cold when played.
 - A stream keeps the add-on connections it started with until the next change of the
@@ -16,7 +38,8 @@
 - Archive downloads that Navidrome does not start answering within 20 seconds fail with
   HTTP 502.
 - Shares: only the first 20 placeholders of a share get their audio when its link is
-  opened, so a larger share's archive can contain silent tracks.
+  opened. An archive still containing silent placeholders is refused with HTTP 503;
+  a later request can prepare the next batch.
 
 ## Library writes and the cleanup
 
@@ -60,7 +83,6 @@
   added, and adding many at once can stop part of the way. An artist opened from a song or
   an album is found by name. Under the same name, a service that keeps the manifest `id`
   of the one before is asked for the old track IDs.
-- No test uses an account with restricted library access.
 
 ## API parity and security
 
@@ -68,8 +90,6 @@
   JSONP gets Navidrome's "not found".
 - "Audio unavailable" errors carry `type: "shijhon"` and no `serverVersion`. Extended
   answers lose `ETag` and `Last-Modified`.
-- `/rest/x/../stream` matches none of Shijhon's handlers but is normalized on its way to
-  Navidrome: a crafted request by a signed-in user can reach a placeholder's silent file.
 - An add-on's JSON answer is decompressed before its size is checked: the 1 MiB limit
   applies to the decompressed data as it arrives.
 - The marks of saved values (which host a value belongs to, which may be shown) are

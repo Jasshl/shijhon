@@ -27,6 +27,17 @@ def test_password_file(tmp_path: Path) -> None:
     assert settings.navidrome.service_password() == "s3cret"
 
 
+def test_artist_participations_matches_the_navidrome_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert load_settings(None).navidrome.artist_participations is False
+    config = tmp_path / "participations.toml"
+    config.write_text("[navidrome]\nartist_participations = true\n")
+    assert load_settings(config).navidrome.artist_participations is True
+    monkeypatch.setenv("SHIJHON_NAVIDROME__ARTIST_PARTICIPATIONS", "false")
+    assert load_settings(config).navidrome.artist_participations is False
+
+
 @pytest.mark.parametrize(
     ("given", "folder"),
     [("_shijhon", "_shijhon"), ("./x", "x"), ("x/", "x"), ("a//b/./c", "a/b/c"), ("./a/b", "a/b")],

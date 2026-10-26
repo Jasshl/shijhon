@@ -8,7 +8,10 @@ least recently used goes first when all of it together passes a size limit. The
 placeholder - and everything users did with it - stays; its next play streams from the
 add-ons again. Audio used in the last couple of hours is never reverted: a paused play may
 still seek in it. Delivered audio whose file is gone (a restore from a backup that leaves
-delivered audio out) gets its placeholder back at once, used or not.
+delivered audio out) gets its placeholder back at once, used or not. A music import's own
+audio put in place of a catalog song (``placeholders.import_item``) is no cache: it is
+never reverted for its age or the size limit, only when its file is gone (the import puts
+it back, ``music_imports/catalog_audio.py``).
 """
 
 from __future__ import annotations
@@ -154,8 +157,8 @@ class DeliveredAudio:
         expired, then the least recently used past the size limit."""
         async with self._lock:
             rows = await self.store.fetchall(
-                "SELECT song_id, path, delivered_at, last_used_at FROM placeholders"
-                " WHERE state = 'delivered'"
+                "SELECT song_id, path, delivered_at, last_used_at, import_item"
+                " FROM placeholders WHERE state = 'delivered'"
             )
             paths = [str(r["path"]) for r in rows]
             sizes, gone = await anyio.to_thread.run_sync(self._sizes, paths)
@@ -189,7 +192,8 @@ class DeliveredAudio:
                     sizes.get(str(r["path"]), 0),
                 )
                 for r in rows
-                if str(r["path"]) not in gone
+                # (A music import's own audio in place of its catalog song is no cache.)
+                if str(r["path"]) not in gone and not r["import_item"]
             )
             swept.kept_bytes = sum(size for _, _, size in files)
             for last, song_id, size in files:  # the least recently used first

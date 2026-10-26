@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import select_catalog
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import cover_image
 from tests.harness.replay import Replay, fixture
@@ -109,6 +110,9 @@ def test_the_virtual_album_is_what_the_library_shows_after_a_commit(
     album_vid = vid("al", name)
     virtual = client.ok("getAlbum", {"id": album_vid})["album"]
     client.ok("star", {"albumId": album_vid})
+    # Adding audio/metadata does not select it for this user's library. Explicitly
+    # select this fixture release before comparing its native and virtual views.
+    select_catalog(world.nd, world.server, [f"demo:{t['ref']['id']}" for t in fixture_tracks(name)])
     native = client.ok("getAlbum", {"id": album_vid})["album"]  # now forwarded
     assert native["id"] != album_vid and "starred" in native
     same = ("name", "artist", "songCount", "duration", "year", "isCompilation", "releaseTypes")

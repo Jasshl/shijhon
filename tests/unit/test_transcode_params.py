@@ -10,6 +10,8 @@ import time
 from typing import Any
 
 from shijhon.delivery.intercept import (
+    DirectPlay,
+    _decision_token,
     _direct_play_decision,
     converted,
     direct_play,
@@ -72,6 +74,55 @@ def test_navidrome_s_answer_is_read_as_direct_play() -> None:
     xml = b'<subsonic-response status="ok"><transcodeDecision canDirectPlay="true"'
     assert _direct_play_decision(xml + b"></transcodeDecision></subsonic-response>")
     assert not _direct_play_decision(xml.replace(b'"true"', b'"false"') + b"/>")
+
+
+def plays(*profiles: Any) -> DirectPlay:
+    found = DirectPlay.of(decision({"name": "x", "directPlayProfiles": list(profiles)}))
+    assert found is not None
+    return found
+
+
+def test_the_formats_a_client_plays_as_they_are() -> None:
+    """Read as Navidrome reads a profile for a file of the add-ons' format."""
+    both = plays(
+        {"containers": ["mp3"], "audioCodecs": ["mp3"], "protocols": ["http"]},
+        {"containers": ["FLAC"], "audioCodecs": ["flac"]},
+    )
+    assert both.plays("mp3") and both.plays("flac")
+    assert not both.plays("m4a") and not both.plays("opus") and not both.plays(None)
+    # Navidrome's aliases (an MP4 container is an M4A's); an M4A's codec is not read: a
+    # profile that names codecs names AAC and ALAC both.
+    assert not plays({"containers": ["mp4"], "audioCodecs": ["aac"]}).plays("m4a")
+    assert plays({"containers": ["mp4"], "audioCodecs": ["aac", "alac"]}).plays("m4a")
+    assert plays({"containers": ["m4a"]}).plays("m4a")
+    opus = plays({"containers": ["ogg"], "audioCodecs": ["opus"]})
+    assert opus.plays("opus") and not opus.plays("ogg")  # (an Ogg Vorbis)
+    # Naming nothing is anything; HTTP not among its protocols, or one channel: not.
+    assert all(plays({}).plays(kind) for kind in ("flac", "mp3", "m4a", "opus", "ogg"))
+    assert not plays({"protocols": ["hls"]}).plays("flac")
+    assert not plays({"maxAudioChannels": 1}).plays("flac")
+    assert plays({"maxAudioChannels": 2}).plays("flac")
+    # Unreadable profiles are passed over; an unreadable body is none.
+    assert not plays({"containers": "flac"}, 3).plays("flac")
+    assert DirectPlay.of(decision(b"not json")) is None
+    assert DirectPlay.of(decision({"directPlayProfiles": "flac"})) is None
+
+
+def test_a_direct_play_answer_s_token() -> None:
+    def answer(direct: bool) -> bytes:
+        found = {"canDirectPlay": direct, "transcodeParams": "a.b.c"}
+        body = {"subsonic-response": {"status": "ok", "transcodeDecision": found}}
+        return json.dumps(body).encode()
+
+    assert _decision_token(answer(True)) == "a.b.c"
+    assert _decision_token(answer(False)) == ""
+    xml = (
+        b'<subsonic-response status="ok"><transcodeDecision canDirectPlay="true"'
+        b' transcodeParams="a.b.c"></transcodeDecision></subsonic-response>'
+    )
+    assert _decision_token(xml) == "a.b.c"
+    assert _decision_token(xml.replace(b'"true"', b'"false"')) == ""
+    assert _decision_token(b'{"subsonic-response": {"status": "failed"}}') == ""
 
 
 def token(claims: dict[str, Any]) -> str:

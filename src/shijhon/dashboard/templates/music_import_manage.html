@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ prefix }}/static/music_imports.css?v={{ asset_revision }}">
+<div class="page-head">
+  <div class="page-title">
+    <p class="page-back"><a href="{{ prefix }}/collection/import">← Import music</a></p>
+    <h1>Manage music imports</h1>
+    <p class="page-summary">Review, remove and restore any import on this server. These changes affect everyone.</p>
+  </div>
+  <details class="page-about"><summary>About removal and restore</summary>
+    <p>Administrator actions apply to the shared library. Review the exact affected files before removing an import. Used music stays available unless you explicitly include it.</p>
+    <p>Restore remains available even if the original importer lost access; it uses your current administrator account and keeps the original provenance.</p>
+  </details>
+</div>
+{% if error %}<p class="notice notice-error" role="alert">{{ error }}</p>{% endif %}
+<section class="music-import-history" aria-labelledby="import-batches"><h2 id="import-batches">Import batches</h2><ul>
+{% for batch in batches %}<li{% if job and job.id == batch.id %} aria-current="true"{% endif %}><a href="{{ prefix }}/collection/import/manage?job={{ batch.id|urlencode }}&amp;offset={{ offset }}">{{ batch.created|when }} · {{ batch.files }} files · {{ batch.state }}</a><span>{{ batch.removal_state or 'No removal' }}</span></li>{% else %}<li>No import batches on this page.</li>{% endfor %}
+</ul>{% if offset or batches|length==20 %}<nav class="music-import-pagination" aria-label="Import batch pages">{% if offset %}<a href="?offset={{ [0, offset-20]|max }}">← Previous</a>{% else %}<span></span>{% endif %}{% if batches|length==20 %}<a href="?offset={{ offset+20 }}">Next →</a>{% endif %}</nav>{% endif %}</section>
+{% if job %}<div class="music-imports" data-music-imports data-api="{{ prefix }}/collection/import/api" data-job="{{ job.id }}" data-csrf="{{ csrf }}">
+{% include 'music_import_removal.html' %}
+</div><script src="{{ prefix }}/static/music_import_removals.js?v={{ asset_revision }}" defer></script>{% elif batches %}<p class="empty">Choose an import batch to review its removal or restore it.</p>{% endif %}
+{% endblock %}

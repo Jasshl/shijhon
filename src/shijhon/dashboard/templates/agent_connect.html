@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Connect an agent – Shijhon</title>
+<link rel="stylesheet" href="{{ prefix }}/static/shijhon.css">
+</head>
+<body>
+<main id="main" class="signin agent-signin">
+  <p class="wordmark">Shijhon</p>
+  <div class="signin-panel">
+    <h1>Connect {{ client_name }}</h1>
+    <p>Sign in with your Navidrome account. The agent gets only your account's access and the permissions you choose.</p>
+    <form method="post" action="{{ action }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="200">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" type="password" name="password" autocomplete="current-password" required maxlength="1000">
+      </div>
+      <fieldset class="agent-permissions">
+        <legend>Permissions</legend>
+{% for scope,label in scopes.items() %}
+        <div class="agent-scope">
+          <label class="mix-check"><input type="checkbox" name="scope_{{ scope }}" value="true"{% if scope in ['create','status'] %} checked{% endif %}{% if scope in ['settings','downloads'] %} aria-describedby="{{ scope }}-help"{% endif %}><span>{{ label }}</span></label>
+{% if scope == 'settings' %}
+          <p id="settings-help" class="field-help">Administrators only. Changes the AI model Shijhon uses for playlists. Your agent's own model stays the same.</p>
+{% endif %}
+{% if scope == 'downloads' %}
+          <p id="downloads-help" class="field-help">Saves audio in the server library. Copies on your devices come from your music app.</p>
+{% endif %}
+        </div>
+{% endfor %}
+      </fieldset>
+      <p class="agent-return">After you connect, this page returns to <strong>{{ callback_host }}</strong>.</p>
+      <div class="form-actions">
+        <button class="btn-primary" name="action" value="allow">Connect</button>
+        <button name="action" value="deny" formnovalidate>Cancel</button>
+      </div>
+    </form>
+  </div>
+</main>
+</body>
+</html>

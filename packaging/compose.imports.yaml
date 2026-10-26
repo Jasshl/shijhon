@@ -1,0 +1,22 @@
+# Optional retained-original uploads. Provision MUSIC_IMPORTS_DIR first, with write
+# permission for PUID:PGID, and include it in backups. Both services see identical files.
+# Use with: docker compose -f compose.yaml -f compose.imports.yaml up -d
+services:
+  navidrome:
+    volumes:
+      - type: bind
+        source: ${MUSIC_IMPORTS_DIR:?set MUSIC_IMPORTS_DIR to an existing dedicated directory}
+        target: /music/_imports
+        read_only: true
+        bind:
+          create_host_path: false
+  shijhon:
+    environment:
+      SHIJHON_MUSIC_IMPORTS__ENABLED: "true"
+      SHIJHON_MUSIC_IMPORTS__FOLDER: _imports
+    volumes:
+      - type: bind
+        source: ${MUSIC_IMPORTS_DIR:?set MUSIC_IMPORTS_DIR to an existing dedicated directory}
+        target: /music/_imports
+        bind:
+          create_host_path: false

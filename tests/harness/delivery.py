@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import shutil
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import anyio
+
 from shijhon.app import Services, ShijhonApp
 from shijhon.catalog.base import Catalog
 from shijhon.catalog.model import CatalogRelease
+from shijhon.collection.origins import Origins
 from shijhon.config import load_settings
 from shijhon.delivery.netpolicy import Reach
 from shijhon.placeholders.engine import MaterializeResult
+from shijhon.store import Store
 from tests.harness.engine import PLACEHOLDER_FOLDER, catalog_release
 from tests.harness.fake_addon import FakeAddon, FakeTrack, fake_resolver
 from tests.harness.library import Format, frequency_for, tone
@@ -32,6 +36,9 @@ TEST_DELIVERY = {
     "download_timeout_seconds": 30.0,
     # Tests play songs one after another: fetches ahead have tests of their own.
     "ahead_window_seconds": 0.0,
+    # Owned test files are low-bitrate MP3s and M4As: they play as files, as before. The
+    # minimum quality has tests of its own (test_K_quality.py).
+    "quality_default": "any",
     # Test tones are a few seconds long, whatever the catalog says: the length check
     # has tests of its own.
     "length_tolerance_seconds": 0.0,
@@ -159,6 +166,10 @@ def delivery_world(
     navidrome_database: Path | None = None,
     usage_export: Path | None = None,
     cleanup: dict[str, Any] | None = None,
+    agents: bool = False,
+    real_audio_accounts: Sequence[str] = (),
+    audiomuse: dict[str, Any] | None = None,
+    music_imports: dict[str, Any] | None = None,
     **delivery: Any,
 ) -> Iterator[DeliveryWorld]:
     """``fill``: match and fill partially owned albums (off by default: its background
@@ -168,7 +179,11 @@ def delivery_world(
     and the adapter's settings; the catalog itself is the one given).
     ``usage_export`` (the usage export) or ``navidrome_database`` (Navidrome's database
     itself, read only), and ``cleanup``: the cleanup of unused releases (none without one
-    of the two)."""
+    of the two). ``real_audio_accounts``: ``[placeholders] real_audio_accounts``.
+    ``audiomuse``: the ``[audiomuse]`` settings, so that the app connects to a sound
+    analyzer (a fake one) as it does in an installation. ``music_imports``: the
+    ``[music_imports]`` settings; enabled, the library's personal import policy is set up
+    first, as a new installation's is."""
     dns = {"private.fake.test": "10.20.30.40", "metadata.fake.test": "169.254.169.254"}
     settings = load_settings(
         None,
@@ -181,16 +196,36 @@ def delivery_world(
             "database_path": navidrome_database,
             "usage_export_path": usage_export,
         },
-        placeholders={"folder": PLACEHOLDER_FOLDER},
+        placeholders={
+            "folder": PLACEHOLDER_FOLDER,
+            "real_audio_accounts": list(real_audio_accounts),
+        },
         cleanup=cleanup or {},
         delivery={**TEST_DELIVERY, **delivery},
         fill=fill if isinstance(fill, dict) else {"enabled": fill},
         catalog={"prefetch_covers": 0, **(covers or {}), **(catalog_settings or {})},
+        audiomuse=audiomuse or {},
+        music_imports=music_imports or {},
     )
+    if settings.music_imports.enabled:
+
+        async def personal() -> None:
+            store = await Store.open(settings.database_path)
+            try:
+                await Origins(store).initialize_personal(str(settings.navidrome.library_id))
+            finally:
+                await store.close()
+
+        anyio.run(personal)
     resolver = {} if real_dns else {"resolver": fake_resolver(dns)}
     app = ShijhonApp(settings, catalog=catalog, **resolver)
     server = RunningServer(app)
+    if agents:
+        settings.agents.public_url = server.base_url
     server.start()
+    if agents:
+        assert app.agents
+        app.agents.login_attempts.limit = 1000
     world = DeliveryWorld(nd, app, server, tmp, dns)
     try:
         yield world

@@ -30,6 +30,7 @@ from tests.acceptance.test_J_contract import problems
 from tests.acceptance.test_J_xml import both
 from tests.conftest import NavidromeFactory
 from tests.harness.addon_catalog import FakeCatalog
+from tests.harness.collection import prepare_collection, select_catalog
 from tests.harness.dashboard import Browser
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_addon import FakeAddon, FakeTrack
@@ -79,6 +80,7 @@ def world(
         held.images = f"{main.base_url}/img"
         w.add_source(main)
         w.add_source(w.addon("Other"))
+        prepare_collection(nd, w.server)
         yield w
 
 
@@ -252,6 +254,11 @@ def test_a_song_of_a_search_is_added_with_its_album(
     ]
     assert asked(main) == ["search Paper Lanterns Ines Calder", "album lib:al5"]
     assert world.placeholder_rows() == rows + 3
+    select_catalog(
+        world.nd,
+        world.server,
+        [f"{KEY}:{tagged(SERVICE, 'lib:' + own)}" for own in ("t501", "t502", "t503")],
+    )
     # From here on the song is the library's, by either ID.
     again = client.ok("search3", {"query": "kite season"})["searchResult3"]["song"]
     assert [s["id"] for s in again] == [mine[0]["id"]]
@@ -369,6 +376,7 @@ def test_the_lookup_meanwhile_knows_the_add_on_s_own_id(
         primary_source="Slow",
         reliable_lookup_after_seconds=0.2,
     ) as second:
+        prepare_collection(world.nd, second.server)
         slow = second.addon("Slow")
         fake = second.addon(NAME, catalog=held)
         second.add_source(slow)
@@ -536,6 +544,7 @@ def test_an_add_on_without_a_catalog_is_refused_with_the_reason(
         tmp_path_factory.mktemp("no-catalog"),
         catalog_settings={"kind": "addon", "addon": "Audio only"},
     ) as second:
+        prepare_collection(world.nd, second.server)
         plain = second.addon("Audio only")
         second.add_source(plain)
         client = second.client(headers=HOST)

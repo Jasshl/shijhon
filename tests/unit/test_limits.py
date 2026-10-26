@@ -89,6 +89,33 @@ async def test_the_song_being_played_takes_from_the_allowance_without_waiting() 
 
 
 @pytest.mark.anyio
+async def test_a_turn_now_or_none_takes_nothing_it_cannot_have() -> None:
+    """A background fetch holding a scarce slot: a turn and the allowance at once, or
+    ``Limited`` with nothing taken - it never waits for either."""
+    clock = Clock()
+    limits = UserLimits(downloads=1, downloads_per_hour=2, clock=clock, sleep=clock.sleep)
+    async with limits.download("ann", now=True):
+        with pytest.raises(Limited):  # the user's only turn is taken
+            async with limits.download("ann", now=True):
+                pass
+    async with limits.download("ann", now=True):
+        pass
+    with pytest.raises(Limited):  # the hour's two downloads are used
+        async with limits.download("ann", now=True):
+            pass
+    assert clock.slept == []
+    clock.now += 1800  # one back, which a queued fetch takes
+    async with limits.download("ann"):
+        pass
+    with pytest.raises(Limited):
+        async with limits.download("ann", now=True):
+            pass
+    clock.now += 1800
+    async with limits.download("ann", now=True):
+        pass
+
+
+@pytest.mark.anyio
 async def test_a_download_that_needed_no_add_on_gives_its_allowance_back() -> None:
     clock = Clock()
     limits = UserLimits(downloads=1, downloads_per_hour=1, clock=clock, sleep=clock.sleep)

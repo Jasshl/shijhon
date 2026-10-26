@@ -301,3 +301,32 @@ def test_look_alikes_that_are_not_twins_stay() -> None:
         song("e2", "Open Door", "Mara Vance", 200_000, explicit=True),  # another release
     ]
     assert [t.ref.id for t in merge_twins(tracks, Twins.EXPLICIT)] == ["e", "k", "e2"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("twins", [Twins.EXPLICIT, Twins.BOTH])
+async def test_hidden_library_songs_stand_once_per_song_and_per_recording(twins: Twins) -> None:
+    """Review finding 7: catalog songs linked to library songs the caller's selection hides
+    stand for them once - one entry per library song and per recording (ISRC) -, and
+    clean/explicit twins among them follow the twins setting, as other catalog songs do."""
+    door = CatalogTrack(CatalogRef("demo", "a"), "Open Door", "Mara Vance", 200_000, isrc="ZZ01")
+    again = dataclasses.replace(door, ref=CatalogRef("demo", "b"))  # another release's copy
+    isrc = dataclasses.replace(door, ref=CatalogRef("demo", "c"))  # the recording elsewhere
+    clean = CatalogTrack(CatalogRef("demo", "d"), "Night Song", "Mara Vance", 180_000,
+                         isrc="ZZ02", clean=True)  # fmt: skip
+    explicit = dataclasses.replace(clean, ref=CatalogRef("demo", "e"), isrc="ZZ03", clean=False,
+                                   explicit=True)  # fmt: skip
+    linked = {"demo:a": ("n1",), "demo:b": ("n1",), "demo:c": ("n2",), "demo:d": ("n3",),
+              "demo:e": ("n4",)}  # fmt: skip
+    views = additions(Stub(), twins=twins)
+
+    async def links(refs: list[str]) -> dict[str, tuple[str, ...]]:
+        return {ref: linked[ref] for ref in refs if ref in linked}
+
+    async def shown(kind: str, idents: Any) -> frozenset[str]:
+        return frozenset()  # the selection shows none of them
+
+    views._linked = links  # type: ignore[method-assign]
+    found = await views._missing_songs([door, again, isrc, clean, explicit], [], shown)
+    expected = ["a", "d", "e"] if twins is Twins.BOTH else ["a", "e"]
+    assert sorted(t.ref.id for t in found) == expected

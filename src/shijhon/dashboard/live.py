@@ -119,6 +119,14 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
         )
     },
     # Read on every download-first fetch (unlike the per-user semaphores' sizes).
+    **{
+        ("delivery", key): (Target(f"download_first.bulk.{attribute}", _same(key), optional=True),)
+        for key, attribute in (
+            ("bulk_downloads", "downloads"),
+            ("addon_downloads", "source_downloads"),
+            ("addon_preparations", "preparations"),
+        )
+    },
     ("delivery", "user_downloads_per_hour"): (
         Target("download_first.limits.per_hour", _same("user_downloads_per_hour"), optional=True),
     ),
@@ -136,6 +144,10 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
     ),
     ("delivery", "warm_ahead_jobs"): (
         Target("interceptor.warm.jobs", _same("warm_ahead_jobs"), optional=True),
+    ),
+    # Each person's minimum quality without a choice of their own (delivery/quality_gate.py).
+    ("delivery", "quality_default"): (
+        Target("quality.default", _same("quality_default"), optional=True),
     ),
     # (None while DASH is off.)
     ("delivery", "dash_joins_at_once"): (
@@ -155,6 +167,10 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
     ),
     ("delivery", "request_timeout_seconds"): (
         Target("sources.request_timeout", _same("request_timeout_seconds")),
+    ),
+    # Read for every answer opened, and as each one goes to an app.
+    ("delivery", "keep_streamed_audio"): (
+        Target("deliverer.retention.enabled", _same("keep_streamed_audio"), optional=True),
     ),
     ("delivery", "download_timeout_seconds"): (
         Target("download_first.timeout", _same("download_timeout_seconds")),

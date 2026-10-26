@@ -106,6 +106,7 @@ class Listed:
     name: str
     addon: Addon
     pace: AddonPace | None = None
+    budget: float | None = None
 
 
 @dataclass
@@ -527,11 +528,26 @@ async def test_a_hostile_answer_is_read_within_bounds_or_refused() -> None:
     box = await w.catalog.album(T + "al1")
     assert len(box.tracks) == 500 and box.incomplete
     nested: Any = "x"
-    for _ in range(3000):
+    for _ in range(100):
         nested = [nested]
     held.answers["artist/ar1"] = {"name": "Deep", "albums": nested, "topTracks": {"a": nested}}
     page = await w.catalog.artist(I + "ar1")
     assert page.name == "Deep" and await w.catalog.artist_releases(I + "ar1") == ()
+    # Construct hostile wire bytes directly: some Python builds cannot encode a
+    # Python object this deep in the mock transport. A runtime may parse it safely
+    # or refuse it; either way the catalog exposes only bounded, readable fields.
+    deep = b"[" * 3000 + b'"x"' + b"]" * 3000
+    held.answers["artist/ar2"] = b'{"name":"Too deep","albums":' + deep + b"}"
+    started = time.monotonic()
+    try:
+        page = await w.catalog.artist(I + "ar2")
+    except CatalogError as exc:
+        assert exc.kind == "invalid"
+    else:
+        assert page.name == "Too deep"
+        assert await w.catalog.artist_releases(I + "ar2") == ()
+        assert await w.catalog.top_songs(I + "ar2") == ()
+    assert time.monotonic() - started < 2.0
 
 
 # --- artists are names --------------------------------------------------------------------------

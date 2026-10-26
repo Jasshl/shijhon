@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block main %}
+<link rel="stylesheet" href="{{ prefix }}/static/music_imports.css?v={{ asset_revision }}">
+<div class="music-imports" data-music-imports data-api="{{ prefix }}/collection/import/api" data-page="{{ prefix }}/collection/import" data-csrf="{{ csrf }}" data-capabilities="{{ capabilities|tojson|forceescape }}" data-job="{{ job.id if job else '' }}">
+  <div class="page-head">
+    <div class="page-title">
+      <p class="page-back"><a href="{{ prefix }}/collection" class="music-import-back">← Your collection</a></p>
+      <h1>Import music</h1>
+      <p class="page-summary">Upload your music files. They join Original imported library and All.</p>
+    </div>
+{% if is_admin|default(false) %}
+    <div class="page-actions"><a class="btn" href="{{ prefix }}/collection/import/manage">Manage all imports</a></div>
+{% endif %}
+    <details class="page-about"><summary>How importing works</summary>
+      <p>You choose files or a folder, they upload and are checked, and you approve which songs to import. Nothing is imported before you approve.</p>
+      <p>Imported songs are added to Original imported library and All. Your apps keep using <strong>{{ active.name }}</strong> on every device.</p>
+      <p>To take an import back out of the library, open it from Your imports below and choose Review removal. Removal can be undone with Restore.</p>
+    </details>
+  </div>
+  {% if error %}<p class="notice notice-error" role="alert">{{ error }}</p>{% endif %}
+  <p class="notice notice-error" role="alert" data-import-error hidden></p>
+  <noscript><p class="notice notice-warn">Enable JavaScript to choose and upload music files. Your saved imports remain available below.</p></noscript>
+  {% if not capabilities.get('ready') %}<section class="music-import-panel music-import-off"><h2>Music imports are not set up</h2><p>Ask your administrator to enable music imports and prepare storage for your files.</p><p class="actions">{% if setup_required|default(false) and is_admin|default(false) %}<a class="btn btn-primary" href="{{ prefix }}/collection/setup">Finish personal library setup</a> {% endif %}<a class="btn" href="{{ prefix }}/collection?profile_id=all&amp;show=server&amp;origin=imported">Browse imported music</a></p></section>{% endif %}
+  <section class="music-import-panel" data-picker{% if not capabilities.get('ready') or job %} hidden{% endif %}>
+    <h2 data-picker-heading>Choose your music</h2>
+    <p class="music-import-shared">Imported music is shared: other people with access to this server’s music can find and play these files. Your personal library choices stay separate.</p>
+    <div class="music-import-drop">
+      <div class="music-import-buttons"><label class="btn" for="import-files">Choose files</label><input id="import-files" data-file-picker type="file" multiple accept="{% for format in capabilities.get('formats',[]) %}{{ ',' if not loop.first else '' }}.{{ format }}{% endfor %}"{% if not capabilities.get('ready') %} disabled{% endif %}><label class="btn" for="import-folder">Choose a folder</label><input id="import-folder" data-folder-picker type="file" multiple webkitdirectory{% if not capabilities.get('ready') %} disabled{% endif %}></div>
+      <p class="music-import-muted">Supported files: {{ capabilities.get('formats',[])|join(', ')|upper }}. Other files are skipped. Your audio and tags are kept as supplied.</p>
+{% if 'tta' in capabilities.get('formats',[]) or capabilities.get('native_rejected_formats') %}
+      <details class="music-import-more"><summary>Format notes</summary>
+{% if 'tta' in capabilities.get('formats',[]) %}
+        <p>TrueAudio (TTA) is verified with stock Navidrome on Linux. The tested macOS scanner does not index it; publication there pauses for indexing and grants no import credit.</p>
+{% endif %}
+{% for extension, reason in capabilities.get('native_rejected_formats',{}).items() %}
+        <p>{{ extension|upper }}: {{ reason }}</p>
+{% endfor %}
+      </details>
+{% endif %}
+    </div>
+    <p class="music-import-selection" data-selection-summary role="status" aria-live="polite">No files selected.</p>
+    <div class="music-import-buttons"><button class="btn-primary" data-upload disabled>Upload for review</button></div>
+    <p class="music-import-muted">Keep this tab open while files upload.</p>
+    <details class="music-import-more"><summary>If the upload stops</summary><p>If this tab closes, return here and choose the same files or folder to continue. Changed source files need a new import; completed uploads keep the bytes already received.</p></details>
+  </section>
+  <section class="music-import-panel" data-job-panel{% if not job %} hidden{% endif %} aria-labelledby="import-stage">
+    <div class="music-import-stage-heading"><h2 id="import-stage" tabindex="-1" data-stage>{{ 'Import progress' if job else '' }}</h2><span data-stage-count></span></div>
+    <p class="music-import-summary" data-import-summary role="status" aria-live="polite">{% if job %}{{ job.complete_files }} songs imported · {{ job.received_files }} files received{% endif %}</p>
+    <progress data-import-progress max="1" value="0" aria-label="Music import progress" hidden></progress>
+    <p data-import-helper class="music-import-muted"></p>
+    <p data-import-destination class="music-import-muted">Adds music to <strong>Original imported library</strong> and <strong>All</strong>. Your account-wide library, on every device, stays <strong>{{ active.name }}</strong>.</p>
+    <div class="music-import-buttons">
+      <button class="btn-primary" data-approve hidden>Import ready songs</button>
+      <button data-resume hidden>Resume import</button>
+      <button data-reselect hidden>Choose the same files or folder</button>
+      <button data-review hidden>Check uploaded files</button>
+      <a class="btn" data-open-original href="{{ prefix }}/collection?profile_id=original&amp;view=saved" hidden>Open Original imported library</a>
+      <a class="btn" data-open-all href="{{ prefix }}/collection?profile_id=all&amp;view=saved" hidden>Open All</a>
+      <a class="btn btn-quiet" href="{{ prefix }}/collection/import" data-import-more hidden>Import more music</a>
+      <button class="btn-danger" data-stop hidden>Discard upload</button>
+    </div>
+    <div class="music-import-review" data-review-panel>
+      <div class="music-import-review-heading"><h3>Files</h3><label>Show <select class="select-small" data-file-filter><option value="all">All files</option><option value="problems">Needs attention</option><option value="overlap">Music the library already had</option></select></label></div>
+      <p data-file-range class="music-import-muted"></p>
+      <ul class="music-import-files" data-file-rows>{% if job %}{% for item in job.get('items',[]) %}<li><span>{{ item.path }}</span><span>{{ item.state }}</span></li>{% endfor %}{% endif %}</ul>
+      <div class="music-import-pagination"><button class="btn-small" data-files-previous disabled>← Previous</button><span data-file-page></span><button class="btn-small" data-files-next disabled>Next →</button></div>
+    </div>
+  </section>
+  {% include 'music_import_removal.html' %}
+  {% if history %}<section class="music-import-history" aria-labelledby="import-history"><h2 id="import-history">Your imports</h2><ul>{% for item in history %}<li><a href="{{ prefix }}/collection/import/{{ item.id|urlencode }}">Music import{% if item.get('total_files') %} · {{ '{:,}'.format(item.total_files) }} files{% endif %}</a><span>{{ item.state|capitalize }}{% if 'complete_files' in item %} · {{ '{:,}'.format(item.complete_files) }} imported{% endif %}</span></li>{% endfor %}</ul></section>{% endif %}
+</div>
+<script src="{{ prefix }}/static/music_imports.js?v={{ asset_revision }}" defer></script>
+<script src="{{ prefix }}/static/music_import_removals.js?v={{ asset_revision }}" defer></script>
+{% endblock %}

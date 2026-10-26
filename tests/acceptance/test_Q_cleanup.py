@@ -129,6 +129,7 @@ def test_the_page_shows_what_was_added_without_reading_navidromes_database(
     assert "Nothing listed yet" in html or "Would be taken out" in html
     assert 'name="mode"' in html and 'name="unused_days"' in html
     assert 'name="delivered_days"' in html and 'name="delivered_gb"' in html
+    assert 'name="keep_streamed_audio"' in html and "Keep streamed songs" in html
     assert no_reads == []  # a cheap view: Shijhon's own records only
 
 
@@ -280,13 +281,31 @@ def test_the_downloaded_audio_limits_are_set_here(world: DeliveryWorld, admin: B
         assert saved.status_code == 303
         assert saved_rows(world, "delivery") == {"delivered_days": "14.0"}
         page = admin.get("cleanup").text
-        assert "after Shijhon restarts: kept for." in page  # the expiry is built at startup
+        # The expiry is built at startup.
+        assert "after Shijhon restarts: kept unused for (Cleanup)." in page
         assert 'name="delivered_days"' not in admin.get("playback").text
         bad = admin.submit("cleanup", {"delivered_gb": "-1"}, "cleanup/downloads")
         assert bad.status_code == 400 and "Not saved" in bad.text
     finally:
         admin.submit("cleanup", {"delivered_days": "30"}, "cleanup/downloads")
     assert saved_rows(world, "delivery") == {}
+
+
+def test_keeping_streamed_songs_is_switched_on_here_at_once(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    retention = world.services.deliverer.retention
+    assert retention is not None and retention.enabled is False  # the default
+    try:
+        saved = admin.submit("cleanup", {"keep_streamed_audio": "true"}, "cleanup/downloads")
+        assert saved.status_code == 303
+        assert saved_rows(world, "delivery") == {"keep_streamed_audio": "true"}
+        assert retention.enabled is True  # no restart
+        assert "after Shijhon restarts" not in admin.get("cleanup").text
+        assert 'name="keep_streamed_audio"' not in admin.get("playback").text
+    finally:
+        admin.submit("cleanup", {"keep_streamed_audio": "false"}, "cleanup/downloads")
+    assert retention.enabled is False and saved_rows(world, "delivery") == {}
 
 
 def test_the_daily_checks_result_is_shown(world: DeliveryWorld, admin: Browser) -> None:
