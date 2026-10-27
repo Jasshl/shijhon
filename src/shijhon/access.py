@@ -124,14 +124,18 @@ class AccessService:
         except (ValueError, KeyError, TypeError, UnicodeError):
             raise AccessDenied from None
         try:
-            # A cookie-free client with no ambient service auth: an invalid bearer must
-            # never be rescued by a service cookie or default authorization header.
+            # Reuse the transport, but build the request without the client's cookies,
+            # headers or query defaults. Only the caller's bearer may authenticate it.
             with anyio.fail_after(5):
-                async with httpx.AsyncClient(timeout=5, trust_env=False) as http:
-                    response = await http.get(
+                response = await self.navidrome.http.send(
+                    httpx.Request(
+                        "GET",
                         self.navidrome.base_url + "/api/user/" + quote(user_id, safe=""),
                         headers={"x-nd-authorization": "Bearer " + token},
-                    )
+                    ),
+                    auth=None,
+                    follow_redirects=False,
+                )
             if response.status_code in (401, 403, 404):
                 raise AccessDenied
             if response.status_code != 200:

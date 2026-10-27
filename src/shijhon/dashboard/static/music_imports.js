@@ -213,6 +213,18 @@
     el('files-previous').disabled = busy || offset === 0;
     el('files-next').disabled = busy || status.next_offset === null || status.next_offset === undefined;
   }
+  function renderUploadProgress(status, extraBytes = 0, extraFiles = 0) {
+    const total = status.total_bytes;
+    const uploaded = Math.min(total, status.received_bytes + extraBytes);
+    const percent = (total ? 100 * uploaded / total : 0).toLocaleString(undefined, {maximumFractionDigits:1});
+    const progress = el('import-progress');
+    progress.hidden = false; progress.max = total || 1; progress.value = uploaded;
+    el('import-summary').textContent = `${count(status.received_files + extraFiles)} of ${count(status.total_files)} ${word(status.total_files, 'file')} received`;
+    const hint = busy ? 'Keep this tab open.' : status.received_files < status.total_files
+      ? 'Choose the same files or folder to continue. Completed files will not upload again.'
+      : 'Choose Check uploaded files to continue.';
+    el('import-helper').textContent = `${bytes(uploaded)} of ${bytes(total)} uploaded · ${percent}%. ${hint}`;
+  }
   function render(status) {
     job = status;
     el('job-panel').hidden = false;
@@ -248,9 +260,10 @@
               : busy ? 'Keep this tab open while files upload.' : 'Choose the same files or folder to continue. Completed files will not upload again.';
     el('approve').hidden = state !== 'review' || !(status.eligible_files || status.linked_files || status.low_quality_files);
     el('approve').textContent = `Import ${count(status.eligible_files)} ${word(status.eligible_files, 'song')}${status.linked_files ? `; link ${count(status.linked_files)} already in the library` : ''}${status.low_quality_files ? `; add ${count(status.low_quality_files)} from the catalog` : ''}${status.skipped_files ? `; skip ${count(status.skipped_files)} ${word(status.skipped_files, 'file')}` : ''}`;
-    el('review').hidden = !uploadStage || status.received_files < status.total_files;
+    el('review').hidden = state !== 'uploading' || status.received_files < status.total_files;
     el('resume').hidden = state !== 'paused';
-    el('reselect').hidden = !uploadStage || busy;
+    el('reselect').hidden = !uploadStage || busy || (state !== 'declaring' && status.received_files >= status.total_files);
+    el('upload').textContent = jobId ? 'Continue upload' : 'Upload for review';
     el('stop').hidden = complete || cancelled;
     el('stop').textContent = importing || state === 'paused' || status.complete_files ? 'Stop import' : 'Discard upload';
     el('open-original').hidden = !(status.complete_files || status.linked_done_files);
@@ -260,6 +273,7 @@
     progress.hidden = !importing && !checking;
     if (checking) { progress.max = status.total_files || 1; progress.value = checked; }
     if (importing) { progress.max = status.eligible_files || 1; progress.value = status.complete_files; }
+    if (state === 'uploading') renderUploadProgress(status);
     renderFiles(status);
     clearTimeout(poll);
     if ((importing || checking) && !busy) poll = setTimeout(() => refresh().catch(explain), 3000);
@@ -408,14 +422,15 @@
     const file = sources.get(item.client_key);
     if (!file || file.size !== item.size) return;
     for (let retry = 0; retry < 3 && !stopped; retry++) {
-      try { await sendFile(item, file, progress); return; }
+      progress(0);
+      try { await sendFile(item, file, progress); progress(item.size, true); return; }
       catch (error) {
         if (stopped || [401,403].includes(error.status)) throw error;
         // A missing response does not prove failure. Read the durable item before replay.
         const saved = await page(start);
         item = saved.items.find(row => row.id === initial.id);
         if (!item) throw new ApiError('The saved file could not be found. Reload this import.');
-        if (finished.has(item.state)) return;
+        if (finished.has(item.state)) { progress(item.size, true); return; }
         if (item.state === 'uploading' || retry === 2 || (error.status && error.status < 500)) throw error;
       }
     }
@@ -456,20 +471,26 @@
       }
       el('picker').hidden = true;
       for (let start = 0; !stopped;) {
-        current = await page(start); render(current);
+        current = await page(start); offset = start; render(current);
         const pending = current.items.filter(item => !finished.has(item.state));
         let cursor = 0;
-        const inFlight = new Map();
+        // Each status has whole-batch receipts. Track only this page's new transfers
+        // on top, so pagination and resume never reset the bar or count bytes twice.
+        const pageProgress = new Map();
         const update = () => {
-          const uploaded = [...inFlight.values()].reduce((a,b) => a+b, 0);
-          el('import-helper').textContent = `Uploading · ${bytes(uploaded)} in current files. Keep this tab open.`;
-          const bar = el('import-progress'); bar.hidden = false;
-          bar.max = pending.reduce((sum,item) => sum + item.size, 0) || 1; bar.value = uploaded;
+          let uploaded = 0, received = 0;
+          for (const entry of pageProgress.values()) {
+            uploaded += entry.loaded;
+            if (entry.received) received++;
+          }
+          renderUploadProgress(current, uploaded, received);
         };
         const workers = Array.from({length:Math.min(2, limits.max_uploads || 1)}, async () => {
           while (cursor < pending.length && !stopped) {
             const item = pending[cursor++];
-            await uploadItem(item, start, loaded => { inFlight.set(item.id, loaded); update(); });
+            await uploadItem(item, start, (loaded, received = false) => {
+              pageProgress.set(item.id, {loaded:Math.min(item.size, loaded), received}); update();
+            });
           }
         });
         const results = await Promise.allSettled(workers);
@@ -509,7 +530,8 @@
   }
   el('upload').addEventListener('click', upload);
   el('reselect').addEventListener('click', () => {
-    el('picker').hidden = false; el('picker-heading').textContent = 'Choose the same files or folder';
+    el('picker').hidden = false; el('picker-heading').textContent = 'Resume your upload';
+    el('selection-summary').textContent = 'Choose the same files or folder. Completed files will not upload again.';
     el('picker').scrollIntoView({block:'start'});
   });
   el('approve').addEventListener('click', () => perform('approve'));

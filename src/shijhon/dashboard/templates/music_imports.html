@@ -41,7 +41,7 @@
     <p class="music-import-selection" data-selection-summary role="status" aria-live="polite">No files selected.</p>
     <div class="music-import-buttons"><button class="btn-primary" data-upload disabled>Upload for review</button></div>
     <p class="music-import-muted">Keep this tab open while files upload.</p>
-    <details class="music-import-more"><summary>If the upload stops</summary><p>If this tab closes, return here and choose the same files or folder to continue. Changed source files need a new import; completed uploads keep the bytes already received.</p></details>
+    <details class="music-import-more"><summary>If the upload stops</summary><p>If this tab closes, reopen this batch under Your imports and choose Resume upload. Select the same files or folder, then Continue upload. Completed files will not upload again; an unfinished file starts again. Changed source files need a new import. Discard upload stops the batch permanently; start a new import afterward.</p></details>
   </section>
   <section class="music-import-panel" data-job-panel{% if not job %} hidden{% endif %} aria-labelledby="import-stage">
     <div class="music-import-stage-heading"><h2 id="import-stage" tabindex="-1" data-stage>{{ 'Import progress' if job else '' }}</h2><span data-stage-count></span></div>
@@ -52,7 +52,7 @@
     <div class="music-import-buttons">
       <button class="btn-primary" data-approve hidden>Import ready songs</button>
       <button data-resume hidden>Resume import</button>
-      <button data-reselect hidden>Choose the same files or folder</button>
+      <button data-reselect hidden>Resume upload</button>
       <button data-review hidden>Check uploaded files</button>
       <a class="btn" data-open-original href="{{ prefix }}/collection?profile_id=original&amp;view=saved" hidden>Open Original imported library</a>
       <a class="btn" data-open-all href="{{ prefix }}/collection?profile_id=all&amp;view=saved" hidden>Open All</a>

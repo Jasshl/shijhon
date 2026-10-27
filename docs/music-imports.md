@@ -7,6 +7,20 @@ authorized people can play the physical files and explicitly choose them for the
 collections; only the verified importing account receives original-import credit.
 New accounts inherit no import credit. Client originals are never changed.
 
+Keep the tab open while uploading. If it closes or the transfer is interrupted,
+open the batch under **Your imports** and choose **Resume upload**. Select the same
+files or folder, then choose **Continue upload**. Completed files are kept; only an
+unfinished file starts over. **Discard upload** ends the batch permanently; start
+a new import afterward. Nothing is published before you approve its review.
+
+The upload bar measures bytes across the whole batch, including files currently
+transferring. The received-file count advances when each complete file is accepted.
+Resuming restores saved progress; an unfinished file starts from zero again.
+
+Uploads verify current account and library access before receiving a file, once
+per second while data arrives, and before accepting the complete file. A failed
+check discards the unfinished attempt. Stop and storage checks run for every chunk.
+
 The imported copy preserves the selected filename and safe relative folders under
 one server-generated batch folder. An untagged song keeps a useful filename for
 Navidrome's title fallback. Missing title, artist or album tags produce warnings;

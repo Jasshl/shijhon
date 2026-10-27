@@ -274,7 +274,7 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.2.0"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.2.1"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 

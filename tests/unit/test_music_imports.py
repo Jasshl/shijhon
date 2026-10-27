@@ -9,6 +9,7 @@ import sys
 import textwrap
 from contextlib import asynccontextmanager
 from dataclasses import replace
+from types import SimpleNamespace
 
 import anyio
 import pytest
@@ -282,6 +283,64 @@ async def test_idempotent_pages_seal_conflicts_and_bounded_owner_only_status(har
     assert await h.service.listing("b") == []
 
 
+async def test_large_manifest_status_has_bounded_database_work_and_preserves_copy_details(harness):
+    h = harness
+    job = await declared(h, [ManifestEntry("first", "First.flac", 1)])
+    original = job["items"][0]["id"]
+    await h.service.receive("a", job["id"], original, 0, chunks(b"x"))
+    async with h.store.transaction() as conn:
+        await conn.executemany(
+            "INSERT INTO music_import_items"
+            " (id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
+            "state,staging_name,final_name) VALUES (?,?,?,?,?,1,1,'declared',?,?)",
+            [
+                (
+                    f"{n:032x}",
+                    f"asset-{n}",
+                    job["id"],
+                    f"key-{n}",
+                    f"Song {n}.flac",
+                    f"{n}.part",
+                    f"batch-{job['id']}/{n}.flac",
+                )
+                for n in range(5999)
+            ],
+        )
+        for key, state in (("active-copy", "eligible"), ("old-copy", "discarding")):
+            await conn.execute(
+                "INSERT INTO music_import_items"
+                " (id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
+                "state,staging_name,final_name,derived_from,received_size)"
+                " VALUES (?,?,?,?,?,1,1,?,?,?,?,1)",
+                [key, key, job["id"], key, "First.flac", state, key, key, original],
+            )
+
+    # A deterministic instruction budget catches repeated full-table scans without a
+    # wall-clock assertion that would fail on a busy development machine.
+    instructions = 0
+
+    def progress():
+        nonlocal instructions
+        instructions += 1000
+        return instructions > 5_000_000
+
+    await h.store.conn.set_progress_handler(progress, 1000)
+    try:
+        first = await h.service.status("a", job["id"], limit=100)
+        last = await h.service.status("a", job["id"], offset=5999, limit=100)
+    finally:
+        await h.store.conn.set_progress_handler(None, 0)
+    assert first["total_files"] == first["filtered_total"] == 6000
+    assert first["total_bytes"] == last["total_bytes"] == 6000
+    assert first["received_bytes"] == last["received_bytes"] == 1
+    assert first["received_files"] == last["received_files"] == 1
+    assert len(first["items"]) == 100 and first["next_offset"] == 100
+    assert last["next_offset"] is None and len(last["items"]) == 1
+    assert last["items"][0]["id"] == original
+    assert last["items"][0]["copy_state"] == "eligible"
+    assert last["copy_files"] == 1
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -354,6 +413,71 @@ async def test_whole_file_retry_size_digest_cancellation_and_grant_checks(harnes
     if failure != "digest":
         await h.service.receive("a", result["id"], item["id"], 1, chunks(data))
         assert (await h.service.status("a", result["id"]))["received_files"] == 1
+
+
+async def test_upload_rechecks_current_access_by_elapsed_time_not_chunk_count(harness, monkeypatch):
+    h = harness
+    result = await declared(h, [ManifestEntry("file", "song.flac", 24)])
+    item = result["items"][0]
+    clock = [0.0]
+    monkeypatch.setattr(
+        import_service,
+        "time",
+        SimpleNamespace(time=import_service.time.time, monotonic=lambda: clock[0]),
+    )
+    checks = []
+    original = h.access.authorize
+
+    async def authorize(owner):
+        checks.append(clock[0])
+        return await original(owner)
+
+    monkeypatch.setattr(h.access, "authorize", authorize)
+
+    async def stream():
+        for now in (0.0, 0.25, 0.75, 1.0, 1.9, 2.0):
+            clock[0] = now
+            yield b"data"
+
+    received = await h.service.receive("a", result["id"], item["id"], 0, stream())
+    assert received["received_files"] == 1
+    assert received["received_bytes"] == 24
+    assert checks.count(0.0) == 2  # fresh admission checks
+    assert checks.count(1.0) == 1 and checks.count(2.0) == 3  # interval, final and status
+    assert not any(now in checks for now in (0.25, 0.75, 1.9))
+
+
+@pytest.mark.parametrize("when", ["periodic", "finish"])
+async def test_upload_revocation_at_interval_or_before_receipt_discards_partial_bytes(
+    harness, monkeypatch, when
+):
+    h = harness
+    result = await declared(h, [ManifestEntry("file", "song.flac", 8)])
+    item = result["items"][0]
+    clock = [0.0]
+    monkeypatch.setattr(
+        import_service,
+        "time",
+        SimpleNamespace(time=import_service.time.time, monotonic=lambda: clock[0]),
+    )
+
+    async def stream():
+        yield b"data"
+        h.access.allowed = False
+        if when == "periodic":
+            clock[0] = 1.0
+        yield b"data"
+
+    with pytest.raises(ImportError) as exc:
+        await h.service.receive("a", result["id"], item["id"], 0, stream())
+    assert exc.value.code == "access"
+    h.access.allowed = True
+    status = await h.service.status("a", result["id"])
+    assert status["received_files"] == 0
+    assert status["received_bytes"] == 0
+    assert status["items"][0]["state"] == "declared"
+    assert status["items"][0]["attempt"] == 1
+    assert not list((h.root / "_imports" / ".incoming").glob("*.part"))
 
 
 async def test_review_exclusions_revision_no_late_upload_and_invalid_audio(harness):

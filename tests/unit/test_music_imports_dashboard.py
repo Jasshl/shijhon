@@ -30,6 +30,7 @@ class Imports:
             total_files=2,
             total_bytes=42,
             received_files=2,
+            received_bytes=42,
             eligible_files=1,
             eligible_bytes=21,
             complete_files=0,

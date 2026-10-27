@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Speed up music uploads, including large import batches.
+- Make interrupted uploads easier to resume without uploading completed files again.
+- Show upload progress across the whole batch, including files currently transferring,
+  and update received-file counts and file-page ranges as uploads advance.
+
 ## 0.2.0
 
 - Make playlists on the new **Playlists** page and publish them to Navidrome: discovery

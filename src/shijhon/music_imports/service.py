@@ -101,6 +101,7 @@ class CatalogVersions(Protocol):
 
 _KEY = re.compile(r"[A-Za-z0-9_.:-]{1,160}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+UPLOAD_AUTH_SECONDS = 1.0
 _FINISHED = (
     "received",
     "eligible",
@@ -158,6 +159,8 @@ _STATUS_COUNTS = (  # constant fragments only
     "coalesce(sum(CASE WHEN i.derived_from='' THEN i.expected_size ELSE 0 END),0)"
     " AS total_bytes,"
     "coalesce(sum(i.received_size>0 AND i.derived_from=''),0) AS received_files,"
+    "coalesce(sum(CASE WHEN i.derived_from='' THEN i.received_size ELSE 0 END),0)"
+    " AS received_bytes,"
     "coalesce(sum(i.state IN ('eligible','placing','placed','complete')),0)"
     " AS eligible_files,"
     "coalesce(sum(CASE WHEN i.state IN ('eligible','placing','placed','complete')"
@@ -193,7 +196,9 @@ _STATUS_ITEMS = (  # constant fragments only
     "coalesce(d.song_id,'') AS copy_song_id,coalesce(l.audio,'') AS audio,"
     "CASE WHEN d.id IS NULL THEN i.upgraded_from ELSE d.upgraded_from END AS upgraded"
     " FROM music_import_items i LEFT JOIN music_import_items d"
-    " ON d.derived_from=i.id AND d.state<>'discarding'"
+    # Copies always name a nonempty original ID. State this explicitly so SQLite
+    # uses the partial derived_from index instead of scanning every item per row.
+    " ON d.derived_from<>'' AND d.derived_from=i.id AND d.state<>'discarding'"
     " LEFT JOIN music_import_links l ON l.item_id=i.id"
     " WHERE i.job_id=? AND i.derived_from='' AND " + _SHOWN + " ORDER BY i.id LIMIT ? OFFSET ?"
 )
@@ -729,6 +734,7 @@ class MusicImports:
         error = "interrupted"
         try:
             hashed, count = hashlib.sha256(), 0
+            recheck_at = time.monotonic() + UPLOAD_AUTH_SECONDS
             with anyio.fail_after(self.limits.upload_seconds):
                 async for chunk in stream:
                     if not isinstance(chunk, bytes) or len(chunk) > 8 * 1024**2:
@@ -738,13 +744,17 @@ class MusicImports:
                     count += len(chunk)
                     if count > item["expected_size"]:
                         raise ImportError("size", "The file exceeds its declared size.")
-                    await self._job(owner_id, job_id)
+                    # Native identity/grants are fresh at admission, periodically while
+                    # receiving, and before accepting the file. Local stop/storage
+                    # checks still run for every chunk, independent of network pacing.
+                    if time.monotonic() >= recheck_at:
+                        await self._job(owner_id, job_id)
+                        recheck_at = time.monotonic() + UPLOAD_AUTH_SECONDS
                     state = await self.store.fetchone(
                         "SELECT state FROM music_import_jobs WHERE id=?", [job_id]
                     )
                     if not state or state["state"] != "uploading":
                         raise ImportError("stopped", "This import was stopped.")
-                    self.storage.check()
                     if self.storage.free() < self.limits.min_free_bytes + len(chunk):
                         raise ImportError("space", "There is not enough free space to continue.")
                     view = memoryview(chunk)
