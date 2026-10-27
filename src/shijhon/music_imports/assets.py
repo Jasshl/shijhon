@@ -64,23 +64,30 @@ class AssetResolver:
                 raise ImportError("storage", "The retained import root changed. Check storage.")
             prefix = storage.folder + "/"
             native_ids = [song["id"] for song in songs if isinstance(song.get("id"), str)]
-            # Spell out the partial receipt index's predicate and the page's native
-            # aliases so both arms use indexed lookups instead of library-wide joins.
+            # Resolve the page's distinct native/import bindings before joining
+            # receipts, avoiding a scan of all import aliases for every native ID.
             receipts = await self.store.fetchall(
-                "WITH page_ids AS (SELECT value AS id FROM json_each(?))"
+                "WITH page_ids AS (SELECT value AS id FROM json_each(?)),"
+                " native_page AS ("
+                " SELECT DISTINCT p.id AS song_id,n.library_id,n.track_key"
+                " FROM page_ids p JOIN collection_track_aliases n"
+                " ON n.library_id=? AND n.alias='native:'||p.id"
+                " WHERE n.alias IN (SELECT 'native:'||id FROM page_ids)),"
+                " import_page AS ("
+                " SELECT DISTINCT a.library_id,a.track_key,a.alias FROM collection_track_aliases a"
+                " WHERE a.library_id IN (SELECT library_id FROM native_page)"
+                " AND a.track_key IN (SELECT track_key FROM native_page)"
+                " AND a.alias GLOB 'import:*')"
                 " SELECT p.id AS song_id,i.asset_id,i.final_name,i.expected_size,j.root_id"
                 " FROM page_ids p JOIN music_import_items i ON i.song_id<>'' AND i.song_id=p.id"
                 " JOIN music_import_jobs j ON j.id=i.job_id WHERE j.library_id=?"
                 " UNION"
-                " SELECT p.id AS song_id,i.asset_id,i.final_name,i.expected_size,j.root_id"
-                " FROM page_ids p JOIN collection_track_aliases n"
-                " ON n.library_id=? AND n.alias='native:'||p.id"
-                " JOIN collection_track_aliases a ON a.library_id=n.library_id"
-                " AND a.track_key=n.track_key AND a.alias GLOB 'import:*'"
+                " SELECT n.song_id,i.asset_id,i.final_name,i.expected_size,j.root_id"
+                " FROM native_page n JOIN import_page a ON a.library_id=n.library_id"
+                " AND a.track_key=n.track_key"
                 " JOIN music_import_items i ON i.asset_id=substr(a.alias,8)"
                 " JOIN music_import_jobs j ON j.id=i.job_id AND j.library_id=n.library_id"
-                " WHERE i.state IN ('placing','placed','complete')"
-                " AND n.alias IN (SELECT 'native:'||id FROM page_ids) LIMIT 501",
+                " WHERE i.state IN ('placing','placed','complete') LIMIT 501",
                 [json.dumps(native_ids), library_id, library_id],
             )
             # Native aliases learned during restore remain bound to the asset, even

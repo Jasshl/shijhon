@@ -986,7 +986,7 @@ async def test_large_asset_page_bounds_query_work_and_preserves_restored_identit
     def progress():
         nonlocal instructions
         instructions += 1000
-        return instructions > 40_000_000
+        return instructions > 5_000_000
 
     await h.store.conn.set_progress_handler(progress, 1000)
     try:
