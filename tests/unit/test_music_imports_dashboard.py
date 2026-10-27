@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from types import MethodType
+from types import MethodType, SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -159,6 +160,27 @@ async def test_render_disclosure_disabled_setup_and_owner_only_history(imports_d
         headers={"x-csrf-token": "csrf"},
     )
     assert unavailable.status_code == 503 and unavailable.json()["code"] == "unavailable"
+
+
+async def test_import_page_requests_reauthentication_without_signing_out_or_losing_batch(
+    imports_dashboard,
+):
+    service, dashboard, client = imports_dashboard
+    bearers = set()
+    dashboard.services.collection_refresh = SimpleNamespace(
+        reader=SimpleNamespace(has_bearer=lambda owner: owner in bearers)
+    )
+    path = "/shijhon/collection/import/private-job"
+    response = await client.get(path)
+    assert response.status_code == 303
+    target = urlsplit(response.headers["location"])
+    assert target.path == "/shijhon/sign-in"
+    assert parse_qs(target.query) == {"reauth": ["1"], "next": [path]}
+    assert "set-cookie" not in response.headers
+    assert not any(call[0] in ("receive", "review", "approve") for call in service.calls)
+    bearers.add("immutable-owner")
+    response = await client.get(path)
+    assert response.status_code == 200 and "private-job" in response.text
 
 
 async def test_create_manifest_review_and_approval_keep_current_owner_and_revision(

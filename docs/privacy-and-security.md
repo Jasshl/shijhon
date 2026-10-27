@@ -17,6 +17,9 @@
   current administrator. Unknown identity/grants refuse work, with no stale admin grace.
   A sign-in lasts 7 days, or 12 hours without use; changing the password does not end it.
   Sign-in attempts are limited to 5 a minute per client address (IPv6: per /64).
+- Library reads use a temporary Navidrome bearer held only in memory and checked fresh
+  with Navidrome. An hour without a successful check, or a server restart, requires
+  signing in again for those reads. The dashboard session and saved library choices stay.
 - It shares its origin with Navidrome's web interface. Its own cookie, CSRF tokens and a
   strict content security policy protect it, but a script running in Navidrome's web
   interface could still use a signed-in admin's session. Keep Navidrome up to date; `[server] dashboard = false`

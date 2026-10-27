@@ -64,19 +64,22 @@
     native_unsupported: 'The stock Navidrome scanner cannot import this format.'
   };
   class ApiError extends Error {
-    constructor(message, status = 0) { super(message); this.status = status; }
+    constructor(message, status = 0, code = '') { super(message); this.status = status; this.code = code; }
   }
   const showError = message => {
     el('import-error').textContent = message;
     el('import-error').hidden = !message;
   };
+  function signInLink() {
+    const target = jobId ? `${root.dataset.page}/${encodeURIComponent(jobId)}` : root.dataset.page;
+    const link = document.createElement('a');
+    link.href = `${root.dataset.page.split('/collection/')[0]}/sign-in?reauth=1&next=${encodeURIComponent(target)}`;
+    link.textContent = 'Sign in again'; return link;
+  }
   function explain(error) {
-    if (error.status === 401) {
-      const target = new URL(`${root.dataset.page}/${encodeURIComponent(jobId)}`, location.origin);
+    if (error.status === 401 || (error.status === 403 && error.code === 'access')) {
       el('import-error').replaceChildren(document.createTextNode('Sign in to continue this import. '));
-      const link = document.createElement('a');
-      link.href = `${root.dataset.page.split('/collection/')[0]}/sign-in?next=${encodeURIComponent(target.pathname)}`;
-      link.textContent = 'Sign in'; el('import-error').append(link); el('import-error').hidden = false;
+      el('import-error').append(signInLink()); el('import-error').hidden = false;
     } else showError(error.message || 'Import paused. Check its status before trying again.');
   }
   async function request(path, data) {
@@ -91,7 +94,7 @@
     let result;
     try { result = await response.json(); }
     catch (_) { throw new ApiError('Could not read the import response. Reload this page to check progress.', response.status); }
-    if (!response.ok) throw new ApiError(result.error || 'Import could not continue.', response.status);
+    if (!response.ok) throw new ApiError(result.message || result.error || 'Import could not continue.', response.status, result.code || '');
     return result;
   }
   const action = (name, data = {}) => request(`/${encodeURIComponent(jobId)}/${name}`, data);
@@ -274,6 +277,10 @@
     if (checking) { progress.max = status.total_files || 1; progress.value = checked; }
     if (importing) { progress.max = status.eligible_files || 1; progress.value = status.complete_files; }
     if (state === 'uploading') renderUploadProgress(status);
+    if (state === 'paused' && status.error === 'access') {
+      el('import-helper').replaceChildren(document.createTextNode('Choose Resume import to retry the access check, or '),
+        signInLink(), document.createTextNode('. Your uploaded files are kept.'));
+    }
     renderFiles(status);
     clearTimeout(poll);
     if ((importing || checking) && !busy) poll = setTimeout(() => refresh().catch(explain), 3000);
@@ -409,9 +416,12 @@
       xhr.onabort = () => finish(new ApiError('Upload stopped. Completed files are kept.'));
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) { finish(); return; }
-        let message = 'File upload could not continue.';
-        try { message = JSON.parse(xhr.responseText).error || message; } catch (_) { /* status is checked next */ }
-        finish(new ApiError(message, xhr.status));
+        let message = 'File upload could not continue.', code = '';
+        try {
+          const result = JSON.parse(xhr.responseText);
+          message = result.message || result.error || message; code = result.code || '';
+        } catch (_) { /* status is checked next */ }
+        finish(new ApiError(message, xhr.status, code));
       };
       xhr.send(file);
     });

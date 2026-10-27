@@ -17,7 +17,7 @@ async function main() {
   let randomRequests = 0, eventLoopYields = 0;
   const browserCrypto = {getRandomValues(values) { randomRequests++; return crypto.webcrypto.getRandomValues(values); }};
   if (!insecure) browserCrypto.subtle = crypto.webcrypto.subtle;
-  let state='declaring', concurrency=0, peak=0;
+  let state='declaring', savedError='', concurrency=0, peak=0;
   const element=name => { if(!elements.has(name)) elements.set(name,new Element()); return elements.get(name); };
   Object.defineProperty(element('import-progress'),'value',{
     get(){return this._value||0;},
@@ -30,7 +30,7 @@ async function main() {
   root.dataset={api:'/shijhon/collection/import/api',page:'/shijhon/collection/import',csrf:'synthetic',job:'',capabilities:JSON.stringify({ready:true,formats:['mp3','flac'],manifest_page_size:500,limits:{max_file_bytes:1000,max_job_bytes:1000000,max_job_files:100000,max_uploads:2}})};
   root.querySelector=selector=>element(selector.match(/data-([^\]]+)/)[1]);
   element('file-filter').value='all';
-  const status=(offset=0, problemsOnly=false, overlapOnly=false)=>{ const filtered=problemsOnly?rows.filter(row=>row.state==='rejected'||row.warnings.length):overlapOnly?rows.filter(row=>row.outcome):rows; return ({id:'job',state,revision:3,total_files:rows.length,total_bytes:rows.length*9,received_files:rows.filter(row=>row.state==='received').length,received_bytes:rows.filter(row=>row.state==='received').length*9,eligible_files:0,eligible_bytes:0,complete_files:0,rejected_files:0,excluded_files:0,skipped_files:0,linked_files:rows.filter(row=>row.state==='matched').length,duplicate_files:0,held_files:0,copy_files:0,error:'',items:filtered.slice(offset,offset+100),filtered_total:filtered.length,next_offset:offset+100<filtered.length?offset+100:null}); };
+  const status=(offset=0, problemsOnly=false, overlapOnly=false)=>{ const filtered=problemsOnly?rows.filter(row=>row.state==='rejected'||row.warnings.length):overlapOnly?rows.filter(row=>row.outcome):rows; return ({id:'job',state,revision:3,total_files:rows.length,total_bytes:rows.length*9,received_files:rows.filter(row=>row.state==='received').length,received_bytes:rows.filter(row=>row.state==='received').length*9,eligible_files:0,eligible_bytes:0,complete_files:0,rejected_files:0,excluded_files:0,skipped_files:0,linked_files:rows.filter(row=>row.state==='matched').length,duplicate_files:0,held_files:0,copy_files:0,error:savedError,items:filtered.slice(offset,offset+100),filtered_total:filtered.length,next_offset:offset+100<filtered.length?offset+100:null}); };
   const context={document:{querySelector:()=>root,createElement:()=>new Element(),createDocumentFragment:()=>new Element(),createTextNode:text=>({textContent:text})},crypto:browserCrypto,TextEncoder,URL,location:{origin:'http://fixture'},history:{replaceState(){}},sessionStorage:{getItem(){return null;},setItem(){},removeItem(){}},setTimeout(callback,delay){if(delay===0){eventLoopYields++;setImmediate(callback);}return 1;},clearTimeout(){},console};
   context.fetch=async (url,options)=>{
     const body=options.body?JSON.parse(options.body):null;
@@ -143,6 +143,21 @@ async function main() {
   assert.equal(uploads.at(-1).progress,1000*9,'Reselection must retain the saved baseline.');
   assert.equal(rows.filter(row=>row.state==='received').length,1001);
   assert.equal(element('reselect').hidden,true);
+  // A paused access check and a current API refusal offer direct reauthentication.
+  state='paused'; savedError='access';
+  vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),context);
+  await new Promise(resolve=>setImmediate(resolve));
+  const retrySignIn=element('import-helper').children.find(child=>child.textContent==='Sign in again');
+  assert(retrySignIn);
+  assert.equal(retrySignIn.href,'/shijhon/sign-in?reauth=1&next=%2Fshijhon%2Fcollection%2Fimport%2Fjob');
+  const allowedFetch=context.fetch;
+  context.fetch=async()=>({ok:false,status:403,json:async()=>({error:'Access changed.',code:'access'})});
+  vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),context);
+  await new Promise(resolve=>setImmediate(resolve));
+  const deniedSignIn=element('import-error').children.find(child=>child.textContent==='Sign in again');
+  assert(deniedSignIn && deniedSignIn.href===retrySignIn.href);
+  assert.equal(uploads.length,before+1,'Reauthentication must not replay or approve uploads.');
+  context.fetch=allowedFetch; savedError='';
   // A discarded batch has no resume action.
   state='cancelled';
   vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),context);

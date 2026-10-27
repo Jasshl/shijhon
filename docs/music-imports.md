@@ -17,6 +17,9 @@ The upload bar measures bytes across the whole batch, including files currently
 transferring. The received-file count advances when each complete file is accepted.
 Resuming restores saved progress; an unfinished file starts from zero again.
 
+If an import needs a fresh sign-in, use **Sign in again** and return to the same
+batch, then resume. You do not need to sign out first. Uploaded files are kept.
+
 Uploads verify current account and library access before receiving a file, once
 per second while data arrives, and before accepting the complete file. A failed
 check discards the unfinished attempt. Stop and storage checks run for every chunk.

@@ -1949,7 +1949,7 @@ class MusicImports:
         ):
             raise ImportError("indexing", "Navidrome has not verified the exact imported file yet.")
         reused = await self.store.fetchone(
-            "SELECT id FROM music_import_items WHERE song_id=? AND id<>?",
+            "SELECT id FROM music_import_items WHERE song_id<>'' AND song_id=? AND id<>?",
             [native.song_id, item["id"]],
         )
         if reused:
@@ -1990,7 +1990,7 @@ class MusicImports:
             ):
                 raise ImportError("stopped", "This import was stopped.")
             cursor = await conn.execute(
-                "SELECT id FROM music_import_items WHERE song_id=? AND id<>?",
+                "SELECT id FROM music_import_items WHERE song_id<>'' AND song_id=? AND id<>?",
                 [native.song_id, item["id"]],
             )
             if await cursor.fetchone():

@@ -930,6 +930,80 @@ async def test_native_identity_reuse_cannot_rebind_existing_owner_during_any_ref
     assert (await h.store.fetchone("SELECT owner_id FROM collection_originals"))[0] == "a"
 
 
+async def test_large_asset_page_bounds_query_work_and_preserves_restored_identity(harness):
+    h = harness
+    result = await reviewed(h)
+    await h.service.approve("a", result["id"], result["revision"], "approve")
+    await h.service.tick()
+    receipt = await h.service._item(result["id"], result["items"][0]["id"])
+    async with h.store.transaction() as conn:
+        await conn.executemany(
+            "INSERT INTO music_import_items"
+            " (id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
+            "state,staging_name,final_name,song_id) VALUES (?,?,?,?,?,?,0,'complete',?,?,?)",
+            [
+                (
+                    f"receipt-{n}",
+                    f"asset-{n}",
+                    result["id"],
+                    f"key-{n}",
+                    f"Song {n}.flac",
+                    receipt["expected_size"],
+                    f"{n:032x}.part",
+                    f"{n:032x}.flac",
+                    f"native-{n}" if n % 2 else "",  # Restore can precede the song receipt.
+                )
+                for n in range(6000)
+            ],
+        )
+        await conn.executemany(
+            "INSERT INTO collection_track_aliases(library_id,alias,track_key) VALUES ('1',?,?)",
+            [
+                (alias, f"track-{n}")
+                for n in range(6000)
+                for alias in (f"native:native-{n}", f"import:asset-{n}")
+            ],
+        )
+    data = (h.root / "_imports/.incoming" / receipt["staging_name"]).read_bytes()
+    page = []
+    for n in range(5500, 5999):
+        staged = h.root / f"_imports/.incoming/{n:032x}.part"
+        staged.write_bytes(data)
+        os.link(staged, h.root / f"_imports/{n:032x}.flac")
+        page.append(
+            song(
+                n,
+                id=f"native-{n}",
+                libraryId=1,
+                path=f"_imports/{n:032x}.flac",
+                size=receipt["expected_size"],
+            )
+        )
+    page.append(song(7000, libraryId=1, path="Other/unrelated.flac"))
+    resolver = AssetResolver(h.store, library_id="1", library_path=h.root)
+    instructions = 0
+
+    def progress():
+        nonlocal instructions
+        instructions += 1000
+        return instructions > 40_000_000
+
+    await h.store.conn.set_progress_handler(progress, 1000)
+    try:
+        assert await resolver("1", page) == {f"native-{n}": f"asset-{n}" for n in range(5500, 5999)}
+    finally:
+        await h.store.conn.set_progress_handler(None, 0)
+    # A second asset claiming a page identity must still fail closed, including
+    # when that identity exists only in aliases learned during restore.
+    await h.store.execute(
+        "UPDATE collection_track_aliases SET track_key='track-5500'"
+        " WHERE library_id='1' AND alias='import:asset-0'"
+    )
+    with pytest.raises(ImportError) as ambiguous:
+        await resolver("1", page)
+    assert ambiguous.value.code == "identity"
+
+
 async def test_malformed_manifest_unicode_digest_and_overflow_are_safe_refusals(harness):
     h = harness
     job = await h.service.create("a", "job")

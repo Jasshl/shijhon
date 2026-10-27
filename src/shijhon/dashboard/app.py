@@ -757,7 +757,8 @@ class Dashboard:
 
     async def sign_in_page(self, request: Request, **context: Any) -> Response:
         if (
-            request.query_params.get("reauth") != "1"
+            not context.get("error")
+            and request.query_params.get("reauth") != "1"
             and self.sessions is not None
             and await self.sessions.get(request.cookies.get(SESSION_COOKIE))
         ):

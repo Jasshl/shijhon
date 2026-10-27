@@ -94,12 +94,20 @@ class CallerLibrary:
             if principal.user_id != owner or not principal.can_access(self.library_id):
                 raise AccessDenied
         except AccessDenied:
-            self._bearers.pop(owner, None)
+            entry = self._bearers.get(owner)
+            if entry is not None and entry.token.get_secret_value() == token:
+                self._bearers.pop(owner, None)
             raise CollectionError("Your current library access could not be verified.") from None
         except AccessUnavailable:
             raise CollectionError(
                 "Navidrome could not verify your library access. Try again."
             ) from None
+        # Expire idle authorization, not an import that is still proving access.
+        # A concurrent sign-in/eviction must not be overwritten by this older proof.
+        entry = self._bearers.get(owner)
+        if entry is not None and entry.token.get_secret_value() == token:
+            self._bearers[owner] = _Bearer(entry.token, time.monotonic())
+            self._bearers.move_to_end(owner)
         return principal, token
 
     async def token_for(self, principal: Principal) -> str | None:

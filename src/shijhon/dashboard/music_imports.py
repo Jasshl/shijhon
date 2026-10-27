@@ -6,6 +6,7 @@ import json
 from hashlib import sha256
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -142,6 +143,15 @@ class Pages:
             history, job, status_code = [], None, 503
             caps = {"enabled": False, "ready": False, "formats": [], "limits": {}}
             error = "Your current account access could not be checked. Reload to try again."
+        refresher = getattr(self.dashboard.services, "collection_refresh", None)
+        if (
+            self.service
+            and refresher is not None
+            and not refresher.reader.has_bearer(session.user_id)
+        ):
+            return self.dashboard._see(
+                "/sign-in?reauth=1&next=" + quote(request.url.path, safe="/")
+            )
         revision = sha256(
             b"".join(
                 files("shijhon.dashboard").joinpath("static", name).read_bytes()

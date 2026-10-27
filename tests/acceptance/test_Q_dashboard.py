@@ -212,6 +212,15 @@ def test_refresh_reauthentication_explains_preserved_library_choices(browser: Br
     assert refresh.status_code == 200
     assert f'<div class="notice" role="status"><p>{notice}</p></div>' in refresh.text
     assert 'class="notice notice-error"' not in refresh.text
+    values = forms(refresh.text)[f"{PATH}/sign-in"]
+    values.update(username=ADMIN_USER, password="wrong-password")
+    wrong = browser.post("sign-in", values)
+    assert wrong.status_code == 400 and "Wrong username or password" in wrong.text
+    assert f'value="{PATH}/collection"' in wrong.text
+    values = forms(wrong.text)[f"{PATH}/sign-in"]
+    values.update(username=ADMIN_USER, password=ADMIN_PASSWORD)
+    accepted = browser.post("sign-in", values)
+    assert accepted.status_code == 303 and accepted.headers["location"] == f"{PATH}/collection"
     assert forms(refresh.text)[f"{PATH}/sign-in"]["next"] == f"{PATH}/collection"
     assert browser.get("addons").status_code == 200
 

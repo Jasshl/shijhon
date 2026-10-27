@@ -2,8 +2,9 @@
 
 ## 0.2.1
 
-- Speed up music uploads, including large import batches.
+- Speed up music uploads and library updates for large import batches.
 - Make interrupted uploads easier to resume without uploading completed files again.
+- Let imports request a fresh sign-in without logging out or losing uploaded files.
 - Show upload progress across the whole batch, including files currently transferring,
   and update received-file counts and file-page ranges as uploads advance.
 

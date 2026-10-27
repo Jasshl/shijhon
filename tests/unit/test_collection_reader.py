@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+import shijhon.collection.reader as reader_module
 from shijhon.access import AccessDenied, AccessUnavailable, Principal
 from shijhon.collection.contracts import CollectionError
 from shijhon.collection.gates import MusicGate
@@ -28,6 +29,64 @@ def reader():
     result.access.verify_native = AsyncMock(return_value=OWNER)
     result.remember(OWNER, "original-caller-bearer")
     return result
+
+
+async def test_active_native_proofs_refresh_idle_expiry_but_unavailable_proofs_do_not(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(reader_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    source = reader()
+    other = Principal("owner-b", "Other listener", False, frozenset({1}))
+    source.remember(other, "other-bearer")
+    try:
+        for moment in (3500.0, 7000.0):
+            now[0] = moment
+            assert (await source.authorize("owner-a")).owner_id == "owner-a"
+        assert source.access.verify_native.await_count == 2
+        assert not source.has_bearer("owner-b")  # activity never refreshes another owner
+        now[0] = 10500.0
+        source.access.verify_native.side_effect = AccessUnavailable
+        with pytest.raises(CollectionError):
+            await source.authorize("owner-a")
+        now[0] = 10601.0
+        assert not source.has_bearer("owner-a")
+    finally:
+        await source.aclose()
+
+
+@pytest.mark.parametrize("replacement", [None, "replacement-bearer"])
+async def test_in_flight_native_proof_does_not_restore_evicted_or_replaced_bearer(replacement):
+    source = reader()
+
+    async def verified(token):
+        source._bearers.clear()
+        if replacement:
+            source.remember(OWNER, replacement)
+        return OWNER
+
+    source.access.verify_native.side_effect = verified
+    try:
+        await source._native("owner-a")
+        assert source._token("owner-a") == (replacement or "")
+    finally:
+        await source.aclose()
+
+
+async def test_denied_older_native_proof_does_not_forget_concurrent_sign_in():
+    source = reader()
+
+    async def denied(token):
+        source.remember(OWNER, "replacement-bearer")
+        raise AccessDenied
+
+    source.access.verify_native.side_effect = denied
+    try:
+        with pytest.raises(CollectionError):
+            await source._native("owner-a")
+        assert source._token("owner-a") == "replacement-bearer"
+        source.access.verify_native.side_effect = None
+        assert (await source.authorize("owner-a")).owner_id == "owner-a"
+    finally:
+        await source.aclose()
 
 
 async def test_native_pages_use_only_original_caller_and_stable_bounded_library_query():

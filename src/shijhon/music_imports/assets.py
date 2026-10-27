@@ -64,10 +64,12 @@ class AssetResolver:
                 raise ImportError("storage", "The retained import root changed. Check storage.")
             prefix = storage.folder + "/"
             native_ids = [song["id"] for song in songs if isinstance(song.get("id"), str)]
+            # Spell out the partial receipt index's predicate and the page's native
+            # aliases so both arms use indexed lookups instead of library-wide joins.
             receipts = await self.store.fetchall(
                 "WITH page_ids AS (SELECT value AS id FROM json_each(?))"
                 " SELECT p.id AS song_id,i.asset_id,i.final_name,i.expected_size,j.root_id"
-                " FROM page_ids p JOIN music_import_items i ON i.song_id=p.id"
+                " FROM page_ids p JOIN music_import_items i ON i.song_id<>'' AND i.song_id=p.id"
                 " JOIN music_import_jobs j ON j.id=i.job_id WHERE j.library_id=?"
                 " UNION"
                 " SELECT p.id AS song_id,i.asset_id,i.final_name,i.expected_size,j.root_id"
@@ -77,7 +79,8 @@ class AssetResolver:
                 " AND a.track_key=n.track_key AND a.alias GLOB 'import:*'"
                 " JOIN music_import_items i ON i.asset_id=substr(a.alias,8)"
                 " JOIN music_import_jobs j ON j.id=i.job_id AND j.library_id=n.library_id"
-                " WHERE i.state IN ('placing','placed','complete') LIMIT 501",
+                " WHERE i.state IN ('placing','placed','complete')"
+                " AND n.alias IN (SELECT 'native:'||id FROM page_ids) LIMIT 501",
                 [json.dumps(native_ids), library_id, library_id],
             )
             # Native aliases learned during restore remain bound to the asset, even
