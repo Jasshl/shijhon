@@ -1,8 +1,28 @@
-# Shijhon
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/shijhon-logo-dark.svg">
+    <img src="docs/images/shijhon-logo-light.svg" alt="Shijhon" width="160">
+  </picture>
+</h1>
 
-Blend your own music library with a music catalog, in the music apps you already
-use. Shijhon sits in front of an unmodified [Navidrome](https://www.navidrome.org/) and
-adds the catalog to what your apps see.
+<p align="center">
+  <strong>Blend your own music library with a music catalog, in the music apps you already use.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Jasshl/shijhon/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Jasshl/shijhon?include_prereleases&label=release"></a>
+  <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue"></a>
+  <a href="https://github.com/Jasshl/shijhon/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/Jasshl/shijhon/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+</p>
+
+<p align="center">
+  <a href="docs/quick-start.md">Quick start</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
+</p>
+
+Shijhon sits in front of an unmodified [Navidrome](https://www.navidrome.org/) and adds a
+music catalog to what your Subsonic apps see.
 
 <p>
   <a href="docs/images/dashboard-addons-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-addons-dark.png"><img width="32%" src="docs/images/dashboard-addons-light.png" alt="The dashboard's Add-ons page: three add-ons in order, two on and one off, and the form for adding another"></picture></a>
