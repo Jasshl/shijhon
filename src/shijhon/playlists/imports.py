@@ -6,7 +6,10 @@ import json
 import re
 import secrets
 import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
+
+import anyio
 
 from shijhon.catalog.base import CatalogError
 from shijhon.collection.contracts import Access, CollectionError
@@ -38,6 +41,8 @@ class Imports:
         self.service = service
         self.store = service.repo.store
         self.library_reader: Access | None = None
+        # Immutable inputs are shared by batch continuations; bound idle/stopped imports.
+        self.inputs: OrderedDict[str, list[Entry]] = OrderedDict()
 
     @staticmethod
     def review_key(data: dict[str, Any]) -> str:
@@ -299,12 +304,34 @@ class Imports:
         self.service.notify()
         return ident
 
-    async def checkpoint(self, ident: str, state: str, data: dict[str, Any]) -> bool:
-        # A stop/disconnect while a read is in flight must never be overwritten.
+    async def checkpoint(
+        self, ident: str, state: str, data: dict[str, Any], *, start: int | None = None
+    ) -> bool:
+        # Encode only this batch's rows; SQLite merges them on its database thread.
+        # Stop/disconnect still wins through the state predicate, even during encoding.
+        params: list[Any]
+        if start is None:
+            encoded = await anyio.to_thread.run_sync(json.dumps, data)
+            query, params = "?", [encoded]
+        else:
+            end = data.get("cursor", start)
+            delta = json.dumps(data.get("rows", [])[start:end])
+            metadata = {k: v for k, v in data.items() if k != "rows"}
+            query = "json_set(data" + ",?,json(?)" * len(metadata) + ")"
+            params = [part for k, v in metadata.items() for part in ("$." + k, json.dumps(v))]
+            query = (
+                "json_set(" + query + ",'$.rows',json((SELECT json_group_array(json(value))"  # noqa: S608
+                " FROM (SELECT value FROM ("
+                " SELECT cast(key AS INTEGER) AS n,value FROM json_each(data,'$.rows')"
+                " WHERE cast(key AS INTEGER)<? OR cast(key AS INTEGER)>=?"
+                " UNION ALL SELECT cast(key AS INTEGER)+?,value FROM json_each(?)"
+                ") ORDER BY n))))"
+            )
+            params.extend([start, end, start, delta])
         async with self.store.transaction() as db:
             cursor = await db.execute(
-                "UPDATE playlist_runs SET data=?,error='' WHERE id=? AND state=?",
-                [json.dumps(data), ident, state],
+                "UPDATE playlist_runs SET data=" + query + ",error='' WHERE id=? AND state=?",  # noqa: S608
+                [*params, ident, state],
             )
             return cursor.rowcount == 1
 
@@ -323,7 +350,7 @@ class Imports:
         connection: Connection | None = None,
     ) -> None:
         current_connection = await self.guard(mix)
-        if connection is not None and current_connection != connection:
+        if connection is not None and not connection.same_settings(current_connection):
             raise PlaylistError("The connection changed. Retry with the current connection.")
         current = await self.store.fetchone("SELECT state FROM playlist_runs WHERE id=?", [ident])
         if not current or current["state"] != state:
@@ -538,18 +565,30 @@ class Imports:
     async def resolve(
         self, connection: Connection, mix: dict[str, Any], ident: str, data: dict[str, Any]
     ) -> dict[str, Any] | None:
-        evidence = await self.evidence(connection.user_id, mix["id"])
-        inputs = [Entry.model_validate(s) for s in json.loads(evidence["input"])["rows"]]
+        inputs = self.inputs.get(mix["id"])
+        if inputs is None:
+            evidence = await self.evidence(connection.user_id, mix["id"])
+            inputs = await anyio.to_thread.run_sync(
+                lambda: [Entry.model_validate(s) for s in json.loads(evidence["input"])["rows"]]
+            )
+            self.inputs[mix["id"]] = inputs
+            if len(self.inputs) > 4:
+                self.inputs.popitem(last=False)
+        self.inputs.move_to_end(mix["id"])
         if not await self.paths(connection, mix, ident, data, inputs):
             return None
         rows = data.setdefault("rows", [])
         attempt = data.get("attempt", 0)
-        cache = {
-            entry.model_dump_json(): result
-            for entry, result in zip(inputs, rows, strict=False)
-            if result["state"] == "matched"
-            or (result["state"] != "removed" and result.get("attempt", 0) == attempt)
-        }
+
+        def remembered() -> dict[str, Any]:
+            return {
+                entry.model_dump_json(): result
+                for entry, result in zip(inputs, rows, strict=False)
+                if result["state"] == "matched"
+                or (result["state"] != "removed" and result.get("attempt", 0) == attempt)
+            }
+
+        cache = await anyio.to_thread.run_sync(remembered)
         start = data.get("cursor", 0)
         # Slow catalogs (an add-on's) can take long for each entry: a batch stops in time
         # to save what it matched, and the next one goes on from there.
@@ -580,10 +619,10 @@ class Imports:
             # Preserve this batch's completed matches on an ordinary matching failure.
             # A concurrent Stop/disconnect must win over this partial checkpoint too.
             await self.running(mix, ident, "generating", connection)
-            await self.checkpoint(ident, "generating", data)
+            await self.checkpoint(ident, "generating", data, start=start)
             raise
         await self.running(mix, ident, "generating", connection)
-        if not await self.checkpoint(ident, "generating", data):
+        if not await self.checkpoint(ident, "generating", data, start=start):
             return None
         if data.get("cursor", 0) < len(inputs):
             return None

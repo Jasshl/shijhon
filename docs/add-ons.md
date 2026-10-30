@@ -9,6 +9,10 @@ Eclipse Music or BitChord.
 
 ## Adding an add-on
 
+The separate [Shijhon Mornye extension bridge](https://github.com/Jasshl/shijhon-mornye-bridge)
+makes Mornye extensions usable as add-ons for audio, catalog data or both. It is not
+affiliated with Mornye; follow its setup guide to obtain the add-on links.
+
 On the dashboard's **Add-ons** page: add one by its URL, order, enable, disable or remove
 it, and fill in the settings its manifest declares. An enabled add-on with a catalog of
 its own is also searched by [playlist imports](playlist-imports.md#add-on-catalogs).
@@ -78,7 +82,6 @@ at once for everyone together, and 2 per add-on. Under **Advanced settings**, ne
 preparation is limited to 1 song per add-on and whole-song fetches to 4 per user. All of
 these limits are adjustable; 0 removes that cap. The hourly quota is optional and defaults
 to 0 (off).
-Existing file, environment and dashboard overrides keep their values after an upgrade.
 
 For each song, Shijhon selects an enabled add-on that permits downloads and has a free
 slot. It keeps the slot until the transfer ends. A source that cannot report whether

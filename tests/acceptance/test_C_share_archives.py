@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from zipfile import ZipFile
@@ -62,7 +63,9 @@ def library_bytes(world: DeliveryWorld, song: str) -> bytes:
     return (world.nd.music / path).read_bytes()
 
 
-@pytest.mark.parametrize(("count", "silent_tail"), [(5000, False), (5000, True), (5001, True)])
+@pytest.mark.parametrize(
+    ("count", "silent_tail"), [(5000, False), (5000, True), (5001, False), (5001, True)]
+)
 def test_shared_playlist_archive_at_the_inspection_boundary(
     world: DeliveryWorld, monkeypatch: pytest.MonkeyPatch, count: int, silent_tail: bool
 ) -> None:
@@ -93,53 +96,65 @@ def test_shared_playlist_archive_at_the_inspection_boundary(
     monkeypatch.setattr(world.services.interceptor, "_ask", observe)
     before = len(world.addons[0].requests("audio"))
     response = httpx.get(world.server.base_url + link, timeout=60)
-    if count > 5000:
-        assert response.status_code == 503 and not forwarded
-        assert states(world, [tail]) == ["placeholder"]
-        assert len(world.addons[0].requests("audio")) == before
-    else:
-        assert response.status_code == 418 and forwarded == ["GET"]
-        if silent_tail:
-            assert states(world, [tail]) == ["delivered"]
-            assert len(world.addons[0].requests("audio")) == before + 1
+    assert response.status_code == 418 and forwarded == ["GET"]
+    if silent_tail:
+        assert states(world, [tail]) == ["delivered"]
+        assert len(world.addons[0].requests("audio")) == before + 1
 
 
-def test_large_mixed_share_prepares_at_most_twenty_then_refuses_silence(
+def test_large_mixed_share_prepares_in_the_background_and_eventually_serves(
     world: DeliveryWorld,
 ) -> None:
-    release = catalog_release("shared-large", "Shared Large", "Share Artist", 22)
+    release = catalog_release("shared-large", "Shared Large", "Share Artist", 30)
     materialized = world.materialize(release)
     songs = [materialized.created[t.ref] for t in release.tracks]
     addon = world.addons[0]
     for track in release.tracks:
         addon.add(FakeTrack(isrc=track.isrc, audio=world.audio("shared-large")))
-    # One delivered song and owned files do not consume the preparation cap.
     assert world.client().request("download", {"id": songs[0]}).status_code == 200
     owned = world.nd.client().ok("search3", {"query": "Share Record"})["searchResult3"]["song"][0][
         "id"
     ]
     playlist = world.nd.client().ok(
         "createPlaylist",
-        {
-            "name": "Mixed shared archive",
-            "songId": [owned, *songs],
-        },
+        {"name": "Mixed shared archive", "songId": [owned, *songs]},
     )["playlist"]["id"]
     link = "/share/d/" + shared(world, playlist, "playlist")
     before = len(addon.requests("audio"))
-    first = httpx.get(world.server.base_url + link, timeout=180)
-    assert first.status_code == 503 and first.content == b"Audio unavailable\n"
-    assert len(addon.requests("audio")) - before == 20
-    assert states(world, songs).count("placeholder") == 1
-    before = len(addon.requests("audio"))
-    second = httpx.get(world.server.base_url + link, timeout=60)
-    assert second.status_code == 200
-    assert len(addon.requests("audio")) - before == 1
-    assert states(world, songs) == ["delivered"] * 22
-    with ZipFile(io.BytesIO(second.content)) as archive:
-        actual = [archive.read(n) for n in archive.namelist() if n.endswith(".flac")]
-    assert len(actual) == 23
-    assert sorted(actual) == sorted(library_bytes(world, s) for s in [owned, *songs])
+    # Hold background preparation: both requests answer before it can finish.
+    entered, resume = threading.Event(), threading.Event()
+    original = world.services.download_first.ensure
+
+    async def held(*args, **kwargs):
+        if kwargs.get("background"):
+            entered.set()
+            await anyio.to_thread.run_sync(resume.wait)
+        return await original(*args, **kwargs)
+
+    world.services.download_first.ensure = held
+    try:
+        for method in ("GET", "HEAD"):
+            response = httpx.request(method, world.server.base_url + link, timeout=10)
+            assert response.status_code == 503 and response.headers["retry-after"] == "5"
+            assert response.content == (b"Audio unavailable\n" if method == "GET" else b"")
+        assert entered.wait(5)
+        assert len(world.services.interceptor._share_preparing) == 29
+        resume.set()
+        deadline = time.monotonic() + 120
+        while True:
+            response = httpx.get(world.server.base_url + link, timeout=60)
+            if response.status_code == 200:
+                break
+            assert response.status_code == 503 and time.monotonic() < deadline
+            time.sleep(0.1)
+        assert states(world, songs) == ["delivered"] * 30
+        assert len(addon.requests("audio")) == before + 29
+        with ZipFile(io.BytesIO(response.content)) as archive:
+            actual = [archive.read(name) for name in archive.namelist() if name.endswith(".flac")]
+        assert sorted(actual) == sorted(library_bytes(world, song) for song in [owned, *songs])
+    finally:
+        resume.set()
+        world.services.download_first.ensure = original
 
 
 @pytest.mark.parametrize("invalid", ["missing", "expired", "not-downloadable"])
@@ -275,3 +290,19 @@ def test_a_share_validation_without_a_verdict_never_forwards_an_unchecked_archiv
     assert response.status_code == 503 and response.content == b"Audio unavailable\n"
     assert forwarded == [] and len(world.addons[0].requests()) == before
     assert states(world, [song]) == ["placeholder"]
+
+
+def test_a_share_preparation_failure_has_no_head_body(
+    world: DeliveryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    song, _, _ = world.placeholder_track("share-prepare-failure", [world.addons[0]])
+    link = "/share/d/" + shared(world, song, "song")
+
+    async def failed(*args: object, **kwargs: object) -> str:
+        return "unavailable"
+
+    monkeypatch.setattr(world.services.download_first, "ensure", failed)
+    for method in ("GET", "HEAD"):
+        response = httpx.request(method, world.server.base_url + link)
+        assert response.status_code == 503
+        assert response.content == (b"Audio unavailable\n" if method == "GET" else b"")

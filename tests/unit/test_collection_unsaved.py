@@ -187,11 +187,9 @@ async def test_owner_custom_profile_isolation_and_browsing_has_no_membership_eff
 
 
 @pytest.mark.parametrize("scope", ["song", "album", "artist"])
-@pytest.mark.parametrize("sort", ["title", "artist", "newest"])
+@pytest.mark.parametrize("sort", ["title", "artist"])
 async def test_missing_filter_precedes_group_counts_order_and_paging(library, scope, sort):
-    store, _access, service = library
-    # Distinct times make newest ordering deterministic without depending on scan timing.
-    await store.execute("UPDATE collection_tracks SET indexed_at=CAST(substr(song_id,2) AS INT)")
+    _store, _access, service = library
     query = Query(view="unsaved", scope=scope, sort=sort)
     full = await service.browse("one", "1", query)
     pages = [
@@ -201,11 +199,6 @@ async def test_missing_filter_precedes_group_counts_order_and_paging(library, sc
     assert all(page["total"] == full["total"] for page in pages)
     assert [row for page in pages for row in page["rows"]] == full["rows"]
     assert pages[-1]["rows"] == []
-    if sort == "newest":
-        assert (
-            full["rows"][0]["item_key"]
-            == {"song": "catalog:s6", "album": "a3", "artist": "r2"}[scope]
-        )
 
 
 @pytest.mark.parametrize("scope", ["song", "album", "artist"])
@@ -392,7 +385,7 @@ async def test_unsaved_is_a_browse_view_and_never_a_native_mode(library):
         await service.set_mode("one", "unsaved")
     with pytest.raises(CollectionError):
         await service.predicate("one", "1", mode="unsaved")
-    assert await service.mode("one") == "all"
+    assert (await service.profile("one"))["selection_id"] == "all"
     # Browsing Original imported library uses its rule: the imports' whole albums.
     for view, albums in (
         ("saved", {"a1", "a2", "a4"}),

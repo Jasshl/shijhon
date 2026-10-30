@@ -26,6 +26,8 @@ reservation goes only once the song is known not to play it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractContextManager
 from typing import Any, Protocol
 
 from shijhon.placeholders.engine import ReplaceError
@@ -40,6 +42,10 @@ UNTAGGABLE, LOW_QUALITY, FAILED = "untaggable", "low_quality", "failed"
 
 
 class Engine(Protocol):
+    def guard_writes(
+        self, authorize: Callable[[], Awaitable[None]]
+    ) -> AbstractContextManager[None]: ...
+
     async def placeholder_row(self, song_id: str) -> Any: ...
 
     async def recover_swap(self, song_id: str) -> int: ...
@@ -78,7 +84,19 @@ class CatalogSongAudio:
         row = await self.engine.placeholder_row(song_id)
         return row is not None and row["state"] == "delivered" and row["import_item"] == item_id
 
-    async def put(self, song_id: str, item_id: str, source_fd: int, suffix: str) -> str:
+    async def put(
+        self,
+        song_id: str,
+        item_id: str,
+        source_fd: int,
+        suffix: str,
+        *,
+        authorize: Callable[[], Awaitable[None]],
+    ) -> str:
+        with self.engine.guard_writes(authorize):
+            return await self._put(song_id, item_id, source_fd, suffix)
+
+    async def _put(self, song_id: str, item_id: str, source_fd: int, suffix: str) -> str:
         """Put the import's audio in place of the catalog song: ``placed`` (also when it
         is there already), ``kept`` (the song has audio of its own), ``pending`` (a
         download got there meanwhile: tried again) or ``failed``."""

@@ -148,35 +148,46 @@ class SourceRegistry:
         downloads: int | None = None,
         preparations: int | None = None,
         capacity_group: str = "",
+        unique_name: bool = False,
+        also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> int:
         if budget_seconds is not None and not 0 < budget_seconds <= 600:
             raise ValueError("budget_seconds must be between 0 and 600")
         own = _checked(limits or Limits())
         _capacity(downloads, preparations, capacity_group)
-        row = await self.store.fetchone("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM sources")
-        position = int(row["p"]) if row else 1
-        source_id = await self.store.execute(
-            "INSERT INTO sources (name, base_url, settings, enabled, position, reach,"
-            " budget_seconds, requests_per_second, request_burst, audio_openings, created_at,"
-            " downloads, preparations, capacity_group)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                name,
-                base_url,
-                json.dumps(settings or {}),
-                int(enabled),
-                position,
-                reach.value,
-                budget_seconds,
-                own.requests_per_second,
-                own.request_burst,
-                own.audio_openings,
-                time.time(),
-                downloads,
-                preparations,
-                capacity_group.strip(),
-            ],
-        )
+        async with self.store.transaction() as conn:
+            if unique_name:
+                cursor = await conn.execute("SELECT 1 FROM sources WHERE name=?", [name])
+                if await cursor.fetchone():
+                    raise ValueError("An add-on with this name is already in the list.")
+            cursor = await conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM sources")
+            row = await cursor.fetchone()
+            position = int(row["p"]) if row else 1
+            cursor = await conn.execute(
+                "INSERT INTO sources (name, base_url, settings, enabled, position, reach,"
+                " budget_seconds, requests_per_second, request_burst, audio_openings, created_at,"
+                " downloads, preparations, capacity_group)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    name,
+                    base_url,
+                    json.dumps(settings or {}),
+                    int(enabled),
+                    position,
+                    reach.value,
+                    budget_seconds,
+                    own.requests_per_second,
+                    own.request_burst,
+                    own.audio_openings,
+                    time.time(),
+                    downloads,
+                    preparations,
+                    capacity_group.strip(),
+                ],
+            )
+            source_id = cursor.lastrowid or 0
+            if also is not None:
+                await also(conn)
         await self.invalidate()
         return source_id
 
@@ -239,21 +250,29 @@ class SourceRegistry:
                 self._fresh_start(source_id)  # a changed add-on: its old failures are past
             await self.invalidate()
 
-    async def set_enabled(self, source_id: int, enabled: bool) -> None:
-        await self.store.execute(
-            "UPDATE sources SET enabled = ? WHERE id = ?", [int(enabled), source_id]
-        )
-        if enabled:
-            self._fresh_start(source_id)
-        await self.invalidate()
+    async def set_enabled(
+        self,
+        source_id: int,
+        enabled: bool,
+        *,
+        also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+    ) -> None:
+        await self.set_enabled_many({source_id: enabled}, also=also)
 
-    async def set_enabled_many(self, changes: Mapping[int, bool]) -> None:
+    async def set_enabled_many(
+        self,
+        changes: Mapping[int, bool],
+        *,
+        also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+    ) -> None:
         """Turn several add-ons on or off together: all of them, or none if it fails."""
         async with self.store.transaction() as conn:
             for source_id, enabled in changes.items():
                 await conn.execute(
                     "UPDATE sources SET enabled = ? WHERE id = ?", [int(enabled), source_id]
                 )
+            if also is not None:
+                await also(conn)
         for source_id, enabled in changes.items():
             if enabled:
                 self._fresh_start(source_id)
@@ -265,16 +284,31 @@ class SourceRegistry:
             stats.failures_since_success = stats.errors_since_success = 0
         self._cooldown.pop(source_id, None)  # a changed add-on: it may work again
 
-    async def reorder(self, ordered_ids: list[int]) -> None:
+    async def reorder(
+        self,
+        ordered_ids: list[int],
+        *,
+        also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+    ) -> None:
         async with self.store.transaction() as conn:
             for position, source_id in enumerate(ordered_ids, start=1):
                 await conn.execute(
                     "UPDATE sources SET position = ? WHERE id = ?", [position, source_id]
                 )
+            if also is not None:
+                await also(conn)
         await self.invalidate()
 
-    async def remove(self, source_id: int) -> None:
-        await self.store.execute("DELETE FROM sources WHERE id = ?", [source_id])
+    async def remove(
+        self,
+        source_id: int,
+        *,
+        also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+    ) -> None:
+        async with self.store.transaction() as conn:
+            await conn.execute("DELETE FROM sources WHERE id = ?", [source_id])
+            if also is not None:
+                await also(conn)
         self._cooldown.pop(source_id, None)
         self._stats.pop(source_id, None)
         await self.invalidate()

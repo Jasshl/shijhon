@@ -245,12 +245,12 @@ async def test_defaults_provenance_and_personal_exclusion(tmp_path):
         undo = await service.undo("one", ident)
         await finish(service, undo)
         assert await service.visible_song_ids("one", "1", ["s1"]) == {"s1"}
-        assert await service.mode("one") == "saved"
+        assert (await service.profile("one"))["id"] == personal
         await service.browse("one", "1", Query(view="all"))
-        assert await service.mode("one") == "saved"
+        assert (await service.profile("one"))["id"] == personal
         await service.set_mode("one", "all")
         assert await service.visible_song_ids("one", "1", ["s1", "s2", "s3"]) == {"s1"}
-        assert await service.mode("two") == "all"
+        assert (await service.profile("two"))["selection_id"] == "all"
     finally:
         await store.close()
 
@@ -342,7 +342,7 @@ async def test_newer_changes_after_review_are_protected_and_access_is_rechecked(
         assert (await finish(service, old))["skipped"] == 1
         access.allowed = False
         for call in (
-            service.mode("one"),
+            service.profile("one"),
             service.browse("one", "1", query),
             service.operation("one", old),
             service.set_mode("one", "all"),
@@ -537,9 +537,9 @@ async def test_profiles_are_independent_activation_is_explicit_and_archive_is_re
         copied = await service.create_profile("one", "Workout", start="copy", source=empty)
         assert await service.visible_song_ids("one", "1", ["s1", "s2"], profile_id=copied) == {"s2"}
         await service.rename_profile("one", copied, "Training")
-        assert await service.mode("one") == "all"
+        assert (await service.profile("one"))["selection_id"] == "all"
         await service.activate_profile("one", copied)
-        assert await service.mode("one") == "saved"
+        assert (await service.profile("one"))["id"] == copied
         assert await service.visible_song_ids("one", "1", ["s1", "s2"]) == {"s2"}
         await service.archive_profile("one", empty)
         assert not await service.visible_song_ids("one", "1", ["s1", "s2"], profile_id=empty)

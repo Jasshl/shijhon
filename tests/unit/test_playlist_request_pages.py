@@ -432,6 +432,7 @@ async def web(service: Playlists, pages: type = Pages) -> AsyncIterator[httpx.As
 
     host._session = session
     host._form = MethodType(dashboard_app.Dashboard._form, host)
+    host._checked_form = MethodType(dashboard_app.Dashboard._checked_form, host)
     host._personal_page = MethodType(dashboard_app.Dashboard._personal_page, host)
     app = Starlette(routes=[Mount("/shijhon", routes=pages(host).routes())])
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as c:
@@ -682,5 +683,65 @@ def test_after_forgetting_the_next_refresh_no_longer_leaves_the_removed_song_out
             again = await refresh(service, "walk")
             assert "Paper Kites" in titles(again)
             assert again["edits"]["remembered"] == {"removed": 0, "added": 0}
+
+    anyio.run(run)
+
+
+def test_reenabling_paused_request_waits_a_full_interval(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with service_at(tmp_path / "db") as service:
+            ident, _ = await service.requests.create("owner", "enable-key", REFRESHING)
+            latest = (await service.repo.runs(ident))[0]
+            await service.repo.update(latest["id"], "published", latest["data"])
+            await service.repo.store.execute(
+                "UPDATE playlist_mixes SET published='fingerprint',enabled=0,due=1 WHERE id=?",
+                [ident],
+            )
+            before = time.time()
+            request = Request({"type": "http", "method": "POST", "path_params": {"ident": ident}})
+            request.state.form = {"action": "enable"}
+            response = await Pages(dashboard(service)).detail(request, SESSION)
+            assert response.status_code == 303
+            mix = await service.repo.mix(ident, "owner")
+            assert mix["enabled"]
+            assert (
+                before + REFRESHING.definition().interval
+                <= mix["due"]
+                <= time.time() + REFRESHING.definition().interval
+            )
+            assert len(await service.repo.runs(ident)) == 1
+
+    anyio.run(run)
+
+
+def test_mix_forms_publish_directly_only_with_the_direct_publication_choice() -> None:
+    from shijhon.dashboard.playlists import definition
+
+    # A form without the publication controls (a page from before them, a stale one)
+    # keeps the preview it promised; only the direct choice publishes at once.
+    assert definition({"name": "Quiet mornings"}).review_before_publishing
+    assert not definition(
+        {"name": "Quiet mornings", "publication_mode": "direct"}
+    ).review_before_publishing
+    assert definition(
+        {
+            "name": "Quiet mornings",
+            "publication_mode": "direct",
+            "review_before_publishing": "true",
+        }
+    ).review_before_publishing
+
+
+def test_mix_preview_action_queues_a_reviewed_run(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with service_at(tmp_path / "db") as service:
+            ident = await service.repo.create("owner", Definition())
+            pages = MixPages(dashboard(service))
+            service.repo.enqueue = AsyncMock()
+            request = Request({"type": "http", "method": "POST", "path_params": {"mix": ident}})
+            request.state.form = {"action": "preview"}
+            response = await pages.action(request, SESSION)
+            assert response.status_code == 303
+            assert service.repo.enqueue.await_args.kwargs.get("review") is True
 
     anyio.run(run)

@@ -32,6 +32,7 @@ from shijhon.collection.history import record_positive
 from shijhon.collection.index import COLUMNS, Index
 from shijhon.collection.policy import builtin_profile_id
 from shijhon.collection.profiles import Profiles
+from shijhon.collection.query_index import QueryIndex
 from shijhon.collection.repository import (
     IMPORTED_SQL,
     WITH_KEYS,
@@ -58,6 +59,7 @@ class Collection:
         self.profiles = Profiles(store)
         self.index = Index(store, access, managed_folder, asset_lookup=asset_lookup)
         self.restore = restore
+        self.query_index: QueryIndex | None = None
         self.worker = anyio.Lock()
         self.wake = anyio.Event()
 
@@ -99,15 +101,6 @@ class Collection:
     ) -> None:
         await self.actor(owner_id)
         await self.profiles.archive(owner_id, profile_id, archived=archived)
-
-    async def mode(self, owner_id: str, *, profile_id: str | None = None) -> Mode:
-        profile = await self.profile(owner_id, profile_id)
-        return cast(
-            Mode,
-            {"original": "original", "shijhon": "saved", "all": "all"}.get(
-                profile["selection_id"], "saved"
-            ),
-        )
 
     async def set_mode(self, owner_id: str, mode: Mode, *, profile_id: str | None = None) -> None:
         await self.actor(owner_id)
@@ -632,7 +625,12 @@ class Collection:
                 raise CollectionError("The restored collection identities are inconsistent.")
             if not restored:
                 return
-            generation = secrets.token_hex(16)
+            state = await self.store.fetchone(
+                "SELECT generation FROM collection_index WHERE library_id=?", [op["library_id"]]
+            )
+            generation = str(state["generation"]) if state else ""
+            if not generation:
+                raise CollectionError("Refresh your music before restoring this selection.")
             tracks, aliases = await self.index._rows(
                 op["library_id"], generation, list(restored.values())
             )
@@ -669,16 +667,25 @@ class Collection:
                     "INSERT OR IGNORE INTO collection_track_aliases VALUES (?,?,?)",
                     [(library, alias, key) for library, _, alias, key in aliases],
                 )
-                # QueryIndex joins by generation. Publish the augmented COMPLETE
-                # prior snapshot atomically and invalidate every old candidate set.
-                # The scan lock prevents mixing this with a partial full refresh.
+                # Preserve the complete source generation. Cached query facts reconcile
+                # this durable addition before their next read, also after a restart.
                 await conn.execute(
-                    "UPDATE collection_tracks SET generation=? WHERE library_id=? AND present=1",
-                    [generation, op["library_id"]],
+                    "INSERT INTO collection_index_additions SELECT ?,?,COALESCE((SELECT"
+                    " max(revision) FROM collection_index_additions WHERE library_id=?"
+                    " AND generation=?),0)+1,value FROM json_each(?)",
+                    [
+                        op["library_id"],
+                        generation,
+                        op["library_id"],
+                        generation,
+                        json.dumps([str(track[2]) for track in tracks]),
+                    ],
                 )
                 await conn.execute(
-                    "UPDATE collection_index SET generation=?,state='ready',updated_at=?,"
+                    "UPDATE collection_index SET state='ready',updated_at=?,"
                     "indexed=(SELECT count(*) FROM collection_tracks"
                     " WHERE library_id=? AND present=1),error='' WHERE library_id=?",
-                    [generation, time.time(), op["library_id"], op["library_id"]],
+                    [time.time(), op["library_id"], op["library_id"]],
                 )
+            if self.query_index is not None:
+                await self.query_index.extend(op["library_id"], generation)

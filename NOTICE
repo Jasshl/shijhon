@@ -75,10 +75,16 @@ the versions uv.lock names. Two of them are under licenses other than permissive
   License 2.0 (MPL-2.0). Used unmodified.
 
 The others are under permissive licenses, each with its license text in its own package:
-aiolimiter, aiosqlite, annotated-types, anyio, async-lru, h11, pydantic, pydantic-core,
-pydantic-settings and typing-inspection (MIT); click, httpcore, httpx, idna, Jinja2,
-MarkupSafe, python-dotenv, Starlette and uvicorn (BSD-3-Clause); defusedxml and
-typing-extensions (PSF-2.0).
+
+- MIT: aiolimiter, aiosqlite, annotated-types, anyio, async-lru, attrs, h11, jsonschema,
+  jsonschema-specifications, mcp, mcp-types, pydantic, pydantic-core, pydantic-settings,
+  PyJWT, referencing, rpds-py, truststore and typing-inspection.
+- MIT-0: cffi.
+- BSD-3-Clause: click, httpcore, httpcore2, httpx, httpx2, idna, Jinja2, MarkupSafe,
+  pycparser, python-dotenv, sse-starlette, Starlette and uvicorn.
+- Apache-2.0: opentelemetry-api and python-multipart.
+- Apache-2.0 OR BSD-3-Clause: cryptography.
+- PSF-2.0: defusedxml and typing-extensions.
 
 Shijhon contains no code of Navidrome (GPL-3.0). It talks to an unmodified Navidrome over
 HTTP and reads its database's contents; the Compose file names Navidrome's own image, which
@@ -110,6 +116,7 @@ Shijhon:
   the same addresses.
 
 Whoever distributes such an image names the base image and its digest, says where those
-sources are, and keeps this file and LICENSE with it. The uv binary is used in the build
-stage only and is not in the final image. docs/development.md ("Publishing an image") has
+sources are, and keeps this file, LICENSE and the packages' license texts with it,
+including any upstream NOTICE files required by Apache-2.0. The uv binary is used in the
+build stage only and is not in the final image. docs/development.md ("Publishing an image") has
 the commands that list the packages and fetch their sources.

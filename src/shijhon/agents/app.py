@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -23,12 +24,13 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from shijhon.agents.oauth import FLOW_SECONDS, SCOPES, OAuth
 from shijhon.agents.tools import register_tools
 from shijhon.dashboard.auth import Attempts, client_key, same
-from shijhon.playlists.model import Connection, PlaylistError
+from shijhon.dashboard.context import legal_context
+from shijhon.playlists.model import Connection, PlaylistError, UpstreamUnavailable
 from shijhon.playlists.requests import RequestError, digest
 
 if TYPE_CHECKING:
@@ -43,6 +45,26 @@ PRIVATE = {
     "content-security-policy": "default-src 'none'; style-src 'self'; font-src 'self';"
     " img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
 }
+
+
+class UpstreamErrors:
+    """Run outside SDK authentication middleware, before any response has started."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await self.app(scope, receive, send)
+        except UpstreamUnavailable:
+            await JSONResponse(
+                {
+                    "error": "temporarily_unavailable",
+                    "error_description": "Navidrome is temporarily unavailable. Retry later.",
+                },
+                503,
+                headers=PRIVATE,
+            )(scope, receive, send)
 
 
 class Agents:
@@ -143,6 +165,8 @@ class Agents:
                 allowed_origins=[self.origin],
             ),
         )
+        auth.add_middleware(UpstreamErrors)
+        http.add_middleware(UpstreamErrors)
         self.app = RequestBodyLimitMiddleware(
             Starlette(
                 routes=[
@@ -237,7 +261,9 @@ class Agents:
         # A new document starts a GET navigation without widening the credential
         # form's CSP to the client's callback. The callback was validated by the SDK.
         response = HTMLResponse(
-            self.host.dashboard.env.get_template("agent_return.html").render(target=target),
+            self.host.dashboard.env.get_template("agent_return.html").render(
+                target=target, **legal_context()
+            ),
             headers=PRIVATE,
         )
         response.delete_cookie(COOKIE, path=self.cookie_path)
@@ -295,6 +321,17 @@ class Agents:
                     )
                 if form.get("action") != "allow":
                     raise RequestError("Choose Connect or Cancel.")
+                if flow["owner"]:
+                    if "username" in form or "password" in form:
+                        raise RequestError(
+                            "This sign-in is already complete. "
+                            "Reload the page to choose permissions.",
+                            409,
+                        )
+                    scopes = [scope for scope in SCOPES if form.get("scope_" + scope) == "true"]
+                    async with self.service.changes:
+                        target = await self.oauth.approve(raw, flow["owner"], scopes)
+                    return self.return_to_agent(target)
                 peer = request.client.host if request.client else ""
                 client_address = self.host.forwarding.client(peer, request.headers.raw)
                 if not self.login_attempts.allow(client_key(client_address, peer)):
@@ -304,7 +341,6 @@ class Agents:
                     form.get("password", ""),
                     str(client_address or "127.0.0.1"),
                 )
-                scopes = [scope for scope in SCOPES if form.get("scope_" + scope) == "true"]
                 async with self.service.changes:
                     old = await self.service.repo.connection(login["id"])
                     values = {
@@ -317,14 +353,33 @@ class Agents:
                     if not old:
                         connection = connection.model_copy(update={"use_shared_ai": True})
                     await self.service.save_connection(connection)
-                    target = await self.oauth.approve(raw, login["id"], scopes)
-                return self.return_to_agent(target)
+                    async with self.oauth.store.transaction() as db:
+                        changed = await db.execute(
+                            "UPDATE agent_oauth_flows SET owner=?"
+                            " WHERE id=? AND expires>? AND owner=''",
+                            [login["id"], flow["id"], time.time()],
+                        )
+                        claimed = changed.rowcount == 1
+                    if not claimed:
+                        await self.oauth.flow(raw)  # distinguish expiry from another sign-in
+                        raise RequestError(
+                            "This sign-in is already complete. "
+                            "Reload the page to choose permissions.",
+                            409,
+                        )
+                flow = await self.oauth.flow(raw)
+            selected = await self.oauth.consent_scopes(flow, flow["owner"]) if flow["owner"] else []
+            signed_in = await self.service.repo.connection(flow["owner"]) if flow["owner"] else None
             template = self.host.dashboard.env.get_template("agent_connect.html")
             response = HTMLResponse(
                 template.render(
                     client_name=(client.client_name or "Connected agent")[:100],
                     callback_host=urlsplit(str(params.redirect_uri)).netloc,
-                    scopes={scope: SCOPES[scope] for scope in params.scopes or []},
+                    scopes={scope: SCOPES[scope] for scope in selected},
+                    selected_scopes=selected,
+                    consenting=bool(flow["owner"]),
+                    username=signed_in.username if signed_in else "",
+                    **legal_context(),
                     csrf=cookie,
                     action=self.oauth.issuer + "/connect?" + urlencode({"flow": raw}),
                     prefix=self.oauth.issuer,
@@ -346,7 +401,9 @@ class Agents:
             code = exc.status if isinstance(exc, RequestError) else 400
             # Fixed messages only; never echo form fields or native login responses.
             return HTMLResponse(
-                self.host.dashboard.env.get_template("agent_error.html").render(error=message),
+                self.host.dashboard.env.get_template("agent_error.html").render(
+                    error=message, **legal_context()
+                ),
                 code,
                 headers=PRIVATE,
             )

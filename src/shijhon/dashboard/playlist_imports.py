@@ -10,9 +10,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl
 
 from pydantic import ValidationError
-from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
 from shijhon.dashboard.auth import Session
@@ -27,6 +26,8 @@ if TYPE_CHECKING:
 
 async def read_form(request: Request, *, max_bytes: int = MAX_BYTES) -> dict[str, str]:
     """Parse a bounded form in memory; no upload is written to disk."""
+    from shijhon.dashboard.app import HEADERS, Refused
+
     kind = request.headers.get("content-type", "")
     multipart = kind.split(";", 1)[0].lower() == "multipart/form-data"
     limit = max_bytes * 2 + 65536 if multipart else max_bytes * 3 + 65536
@@ -34,7 +35,13 @@ async def read_form(request: Request, *, max_bytes: int = MAX_BYTES) -> dict[str
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > limit:
-            raise HTTPException(413, "The import form exceeds the administrator's input budget.")
+            raise Refused(
+                PlainTextResponse(
+                    "The import form exceeds the administrator's input budget.",
+                    413,
+                    headers=HEADERS,
+                )
+            )
     try:
         if multipart:
             message = BytesParser(policy=policy.default).parsebytes(
@@ -78,20 +85,30 @@ async def read_form(request: Request, *, max_bytes: int = MAX_BYTES) -> dict[str
         elif kind.split(";", 1)[0].lower() == "application/x-www-form-urlencoded":
             pairs = parse_qsl(body.decode("utf-8"), keep_blank_values=True, max_num_fields=24)
         else:
-            raise HTTPException(
-                415, "Submit pasted text or a local playlist file from the import page."
+            raise Refused(
+                PlainTextResponse(
+                    "Submit pasted text or a local playlist file from the import page.",
+                    415,
+                    headers=HEADERS,
+                )
             )
         if len({key for key, _ in pairs}) != len(pairs):
             raise ValueError
         result = dict(pairs)
         if sum(len(result.get(k, "").encode()) for k in ("lines", "csv", "file")) > max_bytes:
-            raise HTTPException(
-                413, "The decoded playlist exceeds the administrator's input budget."
+            raise Refused(
+                PlainTextResponse(
+                    "The decoded playlist exceeds the administrator's input budget.",
+                    413,
+                    headers=HEADERS,
+                )
             )
         return result
     except (UnicodeError, ValueError, TypeError):
-        raise HTTPException(
-            400, "Unreadable import form. Check the file encoding and format."
+        raise Refused(
+            PlainTextResponse(
+                "Unreadable import form. Check the file encoding and format.", 400, headers=HEADERS
+            )
         ) from None
 
 
@@ -161,7 +178,10 @@ class Pages:
             evidence = await service.imports.evidence(session.user_id, ident)
             original = json.loads(evidence["input"])
             mix = await service.repo.mix(ident, session.user_id)
-            run = (await service.repo.runs(ident))[0]
+            runs = await service.repo.runs(ident)
+            if not runs:
+                raise PlaylistError("This import has no current run. Open it from the import list.")
+            run = runs[0]
             data = run["data"]
             all_rows = data.get("rows", [])
             listed = [
@@ -244,7 +264,7 @@ class Pages:
         )
 
     async def index(self, request: Request, session: Session) -> Response:
-        if request.method == "GET":
+        if request.method != "POST":
             return await self.render(session)
         form = request.state.form
         try:

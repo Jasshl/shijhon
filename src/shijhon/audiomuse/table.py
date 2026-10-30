@@ -127,12 +127,12 @@ class FactsTable:
         return {row["song_id"] for row in rows}
 
     async def gone(self, library_id: str) -> set[str]:
-        """Songs with facts that Navidrome's library no longer has, as Shijhon's index of the
-        library knows them (a song it never indexed is not in this list)."""
+        """Songs Navidrome's library no longer has, as Shijhon's index knows them
+        (a song it never indexed is not in this list)."""
         rows = await self.store.fetchall(
-            "SELECT DISTINCT f.song_id FROM sound_facts f"
-            " JOIN collection_tracks t ON t.library_id = ? AND t.song_id = f.song_id"
-            " WHERE t.present = 0 AND NOT EXISTS (SELECT 1 FROM collection_tracks p"
+            "SELECT DISTINCT t.song_id FROM collection_tracks t"
+            " WHERE t.library_id = ? AND t.present = 0"
+            " AND NOT EXISTS (SELECT 1 FROM collection_tracks p"
             " WHERE p.library_id = t.library_id AND p.song_id = t.song_id AND p.present = 1)",
             [library_id],
         )

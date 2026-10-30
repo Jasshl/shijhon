@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock
 
 import anyio
 import pytest
-from pydantic import SecretStr
 
 from shijhon.collection.contracts import Actor
 from shijhon.playlists.import_publish import APPEND_BATCH, PREPARE_BATCH
@@ -182,10 +181,17 @@ def test_distinct_recordings_checkpoint_per_batch_with_bounded_json_volume(tmp_p
             checkpoint = service.imports.checkpoint
             sizes, cursors = [], []
 
-            async def counted(ident: str, state: str, data: dict[str, Any]) -> bool:
-                sizes.append(len(json.dumps(data).encode()))
+            async def counted(
+                ident: str, state: str, data: dict[str, Any], *, start: int | None = None
+            ) -> bool:
+                delta = (
+                    {**data, "rows": data["rows"][start : data["cursor"]]}
+                    if start is not None
+                    else data
+                )
+                sizes.append(len(json.dumps(delta).encode()))
                 cursors.append(data["cursor"])
-                return await checkpoint(ident, state, data)
+                return await checkpoint(ident, state, data, start=start)
 
             service.imports.checkpoint = counted
             result = await process_until(service, run_id, "preview")
@@ -196,7 +202,7 @@ def test_distinct_recordings_checkpoint_per_batch_with_bounded_json_volume(tmp_p
             assert cursors == list(range(BATCH_ROWS, count + 1, BATCH_ROWS))
             # The R1 regression submitted 709.7 MB for these 2,000 distinct rows.
             # Include byte volume as well as update count to catch oversized payloads.
-            assert sum(sizes) < 12 * 1024 * 1024
+            assert sum(sizes) < 2 * 1024 * 1024
 
     anyio.run(run)
 
@@ -424,7 +430,7 @@ def test_connection_change_during_matching_prevents_late_batch_save_or_more_work
                 tasks.start_soon(service.process, run_id)
                 await entered.wait()
                 await service.repo.connect(
-                    connected().model_copy(update={"token": SecretStr("changed-synthetic-token")})
+                    connected().model_copy(update={"history_source": "navidrome"})
                 )
                 release.set()
             result = await service.repo.run(run_id)

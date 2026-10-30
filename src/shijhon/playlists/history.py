@@ -14,6 +14,7 @@ from aiolimiter import AsyncLimiter
 
 from shijhon.config import PlaylistSettings
 from shijhon.playlists.model import Connection, PlaylistError, music_key
+from shijhon.playlists.repository import AI_FIELDS
 from shijhon.store import Store
 
 ENDPOINT = "https://ws.audioscrobbler.com/2.0/"
@@ -95,6 +96,12 @@ class History:
             "SELECT * FROM playlist_owners WHERE id=?", [connection.user_id]
         )
         assert row is not None
+        # Shared model settings are merged for callers, not stored in this profile, and
+        # fresh native credentials from a sign-in are no change (``same_settings``).
+        stored = Connection.model_validate_json(row["connection"])
+        unshared = {*AI_FIELDS, "token", "salt"}
+        if stored.model_dump(exclude=unshared) != connection.model_dump(exclude=unshared):
+            raise PlaylistError("The history connection changed during import. Generate again.")
         until = int(time.time()) - 1  # fixed ceiling: pagination cannot chase new scrobbles
         first = int(row["history_from"]) or until - self.settings.history_days * 86400
         start = max(first, int(row["history_until"]) - 7 * 86400)
@@ -184,7 +191,7 @@ class History:
             current = await cursor.fetchone()
             if (
                 not current
-                or Connection.model_validate_json(current["connection"]) != connection
+                or not stored.same_settings(Connection.model_validate_json(current["connection"]))
                 or current["generation"] != row["generation"]
             ):
                 raise PlaylistError("The history connection changed during import. Generate again.")

@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from shijhon.playlists.model import PlaylistError
+from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 from shijhon.playlists.prompt import context
 from shijhon.playlists.requests import ContextRequest, PlaylistRequest, RequestError
 from shijhon.playlists.service import Playlists
@@ -57,7 +57,7 @@ class API:
         try:
             headers = request.headers.getlist("authorization")
             if len(headers) != 1:
-                raise RequestError("An agent bearer key is required.", 401)
+                raise RequestError("An OAuth access token is required.", 401)
             scheme, _, raw = headers[0].partition(" ")
             if scheme.lower() != "bearer" or not raw or len(raw) > 256:
                 raise RequestError("An OAuth access token is required.", 401)
@@ -86,7 +86,7 @@ class API:
 
                     async def authorize() -> None:
                         current, fresh = await service.requests.grant(creator, scope)
-                        if current != connection:
+                        if not connection.same_settings(current):
                             raise RequestError("The saved playlist authorization changed.", 403)
                         service.requests.context_scopes(spec, fresh)
 
@@ -113,7 +113,12 @@ class API:
                     else:
                         creation = PlaylistRequest.model_validate(await self.body(request))
                         if (creation.use_history and "history" not in token.scopes) or (
-                            creation.use_library and "library" not in token.scopes
+                            (
+                                creation.use_library
+                                or creation.reference_playlists
+                                or creation.reference_songs
+                            )
+                            and "library" not in token.scopes
                         ):
                             raise RequestError(
                                 "The context needs its separate OAuth permission.", 403
@@ -123,6 +128,7 @@ class API:
                             request.headers.get("idempotency-key", ""),
                             creation,
                             creator=creator,
+                            scopes=token.scopes,
                         )
                         result = await service.requests.status(owner, ident, creator=creator)
                         code = 202 if created else 200
@@ -130,6 +136,8 @@ class API:
             code, result = exc.status, {"error": str(exc)}
         except ValidationError:
             code, result = 400, {"error": "Check the playlist input and supported fields."}
+        except UpstreamUnavailable:
+            code, result = 503, {"error": "Navidrome is temporarily unavailable. Retry later."}
         except PlaylistError:
             code, result = 403, {"error": "The saved playlist authorization is unavailable."}
         except Exception:

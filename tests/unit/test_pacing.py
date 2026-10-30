@@ -377,24 +377,77 @@ async def test_requests_waiting_for_a_turn_are_told_when_the_add_on_says_to_wait
     outcomes: list[str] = []
 
     async def ask(name: str) -> None:
-        try:
-            await pace.request()
-            outcomes.append(f"{name} sent")
-        except Blocked:
-            outcomes.append(f"{name} blocked")
+        with pacing.watched() as waits:
+            try:
+                await pace.request()
+                outcomes.append(f"{name} sent")
+            except Blocked:
+                outcomes.append(f"{name} blocked")
+            assert waits.at is None and waits.since is None
 
     async def open_audio(name: str) -> None:
-        try:
-            with pacing.urgent(pacing.QUEUED):
-                async with pace.opening():
-                    outcomes.append(f"{name} opened")
-        except Blocked:
-            outcomes.append(f"{name} blocked")
+        with pacing.watched() as waits:
+            try:
+                with pacing.urgent(pacing.QUEUED):
+                    async with pace.opening():
+                        outcomes.append(f"{name} opened")
+            except Blocked:
+                outcomes.append(f"{name} blocked")
+            assert waits.at is None and waits.since is None
 
     with anyio.fail_after(2):
         await told(pace, ask, open_audio, outcomes)
     assert sorted(outcomes) == ["a blocked", "audio blocked", "b blocked", "c blocked"]
     assert pace.sent == 1 and not len(pace._requests) and not len(pace._audio)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["request", "open", "turn"])
+async def test_a_blocked_turn_ends_nested_wait_records(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pace = AddonPace(Limits(0, 1, 1))
+    pace.block(30, audio=True)
+    turns = pacing.Turns(1, "work limit")
+
+    def blocked(urgency: Urgency) -> None:
+        raise Blocked(30)
+
+    monkeypatch.setattr(turns, "_take", blocked)
+    with pacing.watched() as outer, pacing.watched() as waits:
+        with pytest.raises(Blocked):
+            if operation == "turn":
+                async with turns.turn():
+                    raise AssertionError("a blocked turn must not enter")
+            elif operation == "open":
+                await pace.open()
+            else:
+                await pace.request()
+        assert waits.at is None and waits.since is None
+        assert outer.at is None and outer.since is None
+        assert waits.seconds >= 0 and outer.seconds == waits.seconds
+        assert turns.taken == 0 and pace._opening == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["request", "open", "turn"])
+async def test_a_cancelled_turn_keeps_its_wait_record(operation: str) -> None:
+    pace = AddonPace(Limits(0.01, 1, 1))
+    turns = pacing.Turns(1, "work limit")
+    await pace.request()
+    with pacing.urgent(pacing.QUEUED):
+        ended = await pace.open()
+        async with turns.turn():
+            with pacing.watched() as waits, anyio.move_on_after(0.01) as scope:
+                if operation == "turn":
+                    async with turns.turn():
+                        raise AssertionError("a second turn must wait")
+                elif operation == "open":
+                    await pace.open()
+                else:
+                    await pace.request()
+            assert scope.cancelled_caught and waits.at is not None and waits.since is not None
+        ended()
 
 
 async def told(pace: AddonPace, ask: Any, open_audio: Any, outcomes: list[str]) -> None:

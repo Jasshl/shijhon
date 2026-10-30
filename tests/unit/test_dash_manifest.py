@@ -553,3 +553,20 @@ def test_the_ffmpeg_dash_muxer_s_durations() -> None:
         found = mpd.plan((folder / "out.mpd").read_bytes(), "http://cdn.example/x/out.mpd")
         assert found.durations is not None and len(found.durations) == len(found.media) == 3
         assert abs(sum(found.durations) / found.timescale - 6) < 0.05, layout
+
+
+def test_integer_times_above_float_precision_keep_every_unit() -> None:
+    start, length = 2**53 + 1, 2**53 + 3
+    found = mpd.plan(
+        one(flac(template(f'<S t="{start}" d="{length}" r="1"/>', media="$Time$.m4s"))),
+        MANIFEST,
+    )
+    assert [p.url.rsplit("/", 1)[1] for p in found.media] == [
+        f"{start}.m4s",
+        f"{start + length}.m4s",
+    ]
+    assert found.earliest == start and found.durations == (length, length)
+    offset = mpd.plan(
+        one(flac(template("", duration="44100", presentationTimeOffset=str(start)))), MANIFEST
+    )
+    assert offset.earliest == start

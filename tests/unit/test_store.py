@@ -142,3 +142,65 @@ def test_audio_disconnect_upgrade_preserves_existing_work_until_disconnect() -> 
         assert conn.execute(sql).fetchone()[0] == 0
     assert conn.execute("SELECT authorization FROM audio_owners").fetchone()[0] is None
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_release_index_upgrade_preserves_rows_and_indexes_cascades() -> None:
+    migrations = load_migrations(
+        Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    )
+    conn = _conn()
+    conn.execute("PRAGMA foreign_keys=ON")
+    assert apply_migrations(conn, migrations[:25]) == 25
+    conn.execute(
+        "INSERT INTO releases(ref,folder,album_id,title,artist,album_tags,data,created_at)"
+        " VALUES ('demo:r','r','album','Glass Garden','Ivo Lane','{}','{}',1)"
+    )
+    conn.execute("INSERT INTO track_links VALUES ('demo:t','native','demo:r',1)")
+    before = conn.execute("SELECT * FROM track_links").fetchall()
+    assert apply_migrations(conn, migrations[:26]) == 26
+    assert conn.execute("SELECT * FROM track_links").fetchall() == before
+    for table in ("placeholders", "track_links"):
+        plan = conn.execute(
+            f"EXPLAIN QUERY PLAN SELECT * FROM {table} WHERE release_ref = ?",  # noqa: S608 - fixed tables
+            ("demo:r",),
+        ).fetchall()
+        assert any(f"USING INDEX {table}_release" in row[3] for row in plan)
+    deletion = conn.execute("EXPLAIN QUERY PLAN DELETE FROM releases WHERE ref='demo:r'").fetchall()
+    assert all("SCAN" not in row[3] for row in deletion)
+    conn.execute("DELETE FROM releases WHERE ref='demo:r'")
+    assert conn.execute("SELECT * FROM track_links").fetchall() == []
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    # Index-only rollback leaves every table intact and lets the previous build open it.
+    conn.execute("DROP INDEX placeholders_release")
+    conn.execute("DROP INDEX track_links_release")
+    conn.execute("PRAGMA user_version=25")
+    assert apply_migrations(conn, migrations[:25]) == 25
+
+
+def test_received_cleanup_upgrade_keeps_receipts_and_reservations_until_deleted() -> None:
+    migrations = load_migrations(
+        Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    )
+    conn = _conn()
+    conn.execute("PRAGMA foreign_keys=ON")
+    assert apply_migrations(conn, migrations[:26]) == 26
+    conn.execute(
+        "INSERT INTO music_import_jobs"
+        " (id,owner_id,library_id,root_id,config_id,request_key,state,created)"
+        " VALUES ('job','owner','1','root','old-binding','request','cancelled',1)"
+    )
+    for state in ("excluded", "complete", "placing", "joined"):
+        conn.execute(
+            "INSERT INTO music_import_items"
+            " (id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
+            "state,received_size,staging_name,final_name) VALUES (?,?, 'job',?,?,4,4,?,4,?,?)",
+            (state, state, state, state, state, state, state),
+        )
+    before = conn.execute("SELECT * FROM music_import_items ORDER BY id").fetchall()
+    assert apply_migrations(conn) == migrations[-1][0]
+    after = conn.execute("SELECT * FROM music_import_items ORDER BY id").fetchall()
+    assert [r[:-3] for r in after] == before
+    assert all(r[-3:-1] == ("", "") for r in after)
+    assert all(r[-1] == ("batch-job/" + r[4] if r[8] == "joined" else r[13]) for r in after)
+    assert conn.execute("SELECT config_id FROM music_import_jobs").fetchone()[0] == "old-binding"
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

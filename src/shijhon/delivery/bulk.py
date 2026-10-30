@@ -26,7 +26,10 @@ from shijhon.delivery.playback import (
     _BULK_LEASE,
     _BULK_REUSE,
     _LIBRARY_ACQUISITION,
+    Accept,
+    ByteRange,
     Deliverer,
+    Known,
     NoSource,
     Opened,
     Pin,
@@ -38,6 +41,7 @@ from shijhon.delivery.playback import (
     _Missing,
     _Paced,
     _Reacquire,
+    _Refused,
 )
 from shijhon.delivery.playback import (
     log as playback_log,
@@ -210,7 +214,7 @@ class _Choice:
     availability: Availability | None = None
     permitted: bool = False
     exclusion: str = "its manifest could not be read"
-    paused: bool = False  # its check was not sent, or answered "too many requests"
+    paused: bool = False  # its check was held back, rate limited or temporarily failed
 
     @property
     def ready(self) -> bool:
@@ -249,13 +253,14 @@ class _Patience:
     in_place: Callable[[], Awaitable[bool]] | None = None
     paused: float = 0.0  # seconds waited while every add-on left for the song was paused
     heard: float = field(default_factory=time.monotonic)
+    recheck_wait: float = 0.0  # last pause, counted only if the next check still finds no choice
 
     async def waited(self, seconds: float, *, paused: bool) -> None:
         if paused:
             self.paused += seconds
             if self.paused >= PAUSED_WAIT:
                 reason = (
-                    "its add-ons stayed paused (rate limited or cooling down)"
+                    "its add-ons stayed paused (rate limited, cooling down or awaiting a manifest)"
                     f" for {PAUSED_WAIT / 60:g} minutes"
                 )
                 playback_log.info("no audio for %r: %s", self.title, reason)
@@ -292,6 +297,7 @@ class Plan:
     failures: list[str] = field(default_factory=list)
     allow_reuse: bool = True
     fresh: bool = False
+    expect: Known | None = None
 
 
 @dataclass(eq=False)
@@ -545,10 +551,14 @@ class BulkAcquisition:
         self._sources = await self.deliverer.registry.enabled()
         enabled = {s.id for s in self._sources}
         kept = [c for c in known or () if c.source.id in enabled]
+        excluded = []
         if ruled_out is None:
-            choices = [
-                _Choice(s) for s in self._sources if not self.deliverer.registry.cooling(s.id)
-            ]
+            choices = []
+            for source in self._sources:
+                if self.deliverer.registry.cooling(source.id):
+                    excluded.append(f"{source.name}: cooling down")
+                else:
+                    choices.append(_Choice(source))
         else:
             checked = {c.source.id for c in kept}
             choices = [
@@ -561,7 +571,7 @@ class BulkAcquisition:
         async def check(choice: _Choice) -> None:
             guard = BULK_API_GUARD.set(lambda: self._guard(choice.source))
             try:
-                with anyio.move_on_after(timeout):
+                with pacing.watched() as waits, anyio.move_on_after(timeout) as scope:
                     self._guard(choice.source)
                     if not (await choice.source.addon.manifest()).downloads:
                         choice.exclusion = "the add-on asks this"
@@ -570,9 +580,25 @@ class BulkAcquisition:
                     choice.cached = await choice.source.addon.cached(track.wanted)
                     if not choice.ready:
                         choice.availability = await choice.source.addon.availability(track.wanted)
+                if scope.cancelled_caught and not choice.permitted:
+                    if waits.held() is None:
+                        self.deliverer._source_error(
+                            choice.source, AddonError("failed", "manifest read timed out")
+                        )
+                    choice.paused = True
+                    choice.exclusion = "its manifest read timed out"
             except AddonError as exc:
                 self.deliverer._source_error(choice.source, exc)
                 choice.paused = _limited(exc)
+                if not choice.permitted and exc.kind in ("timeout", "failed"):
+                    if exc.kind == "timeout" and not exc.shared and waits.held() is None:
+                        self.deliverer._errored(choice.source, exc.reason)
+                    choice.paused = True
+                    choice.exclusion = (
+                        "its manifest read timed out"
+                        if exc.kind == "timeout"
+                        else "its manifest is temporarily unavailable"
+                    )
             except pacing.Blocked:
                 choice.paused = True
             finally:
@@ -593,10 +619,10 @@ class BulkAcquisition:
         if ruled_out is not None:
             left_out = [c for c in left_out if not c.paused]
             ruled_out.update(c.source.id for c in left_out)
-        excluded = [
+        excluded.extend(
             f"{choice.source.name}: not used for downloads ({choice.exclusion})"
             for choice in left_out
-        ]
+        )
         return ordered, excluded
 
     def plan(
@@ -647,14 +673,34 @@ class BulkAcquisition:
         *,
         playing: Callable[[], bool] | None = None,
         background: bool = False,
+        range_header: str | None = None,
+        head: bool = False,
+        accept: Accept | None = None,
     ) -> Opened:
         """The song's audio from one selected permitted source, its lease held through the
         transfer: its attempts, each admitted in turn (``plan``)."""
         plan = self.plan(track, user, progress, playing=playing, background=background)
+        requested = ByteRange.parse(range_header)
+        if (head or (requested is not None and not requested.at_zero)) and (
+            continuing := self._pins.get(track.key)
+        ):
+            pin = continuing[0]
+            plan.expect = Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps)
+            choices, excluded = await self._choices(track)
+            plan.failures.extend(excluded)
+            plan.choices = [
+                choice for choice in choices if choice.source.id == continuing[0].source.id
+            ]
         with self.urgent(plan):
             await report(progress, "waiting")
             while (admission := await self.admit(plan)) is not None:
-                opened = await self.attempt(admission, progress)
+                opened = await self.attempt(
+                    admission,
+                    progress,
+                    requested=requested,
+                    head=head,
+                    accept=accept,
+                )
                 if opened is not None:
                     return opened
         raise self.failed(plan)
@@ -670,8 +716,15 @@ class BulkAcquisition:
         track = plan.track
         while True:
             if plan.choices is None:
+                checking = time.monotonic()
                 plan.choices, excluded = await self._choices(track, plan.ruled_out)
                 plan.failures.extend(excluded)
+                if plan.patience is not None:
+                    if not plan.choices:
+                        await plan.patience.waited(
+                            plan.patience.recheck_wait + time.monotonic() - checking, paused=True
+                        )
+                    plan.patience.recheck_wait = 0.0
             if not plan.choices:
                 if (
                     plan.patience is None
@@ -716,7 +769,13 @@ class BulkAcquisition:
             return Admission(plan, choice, lease, False, pin)
 
     async def attempt(
-        self, admission: Admission, progress: Progress | None = None
+        self,
+        admission: Admission,
+        progress: Progress | None = None,
+        *,
+        requested: ByteRange | None = None,
+        head: bool = False,
+        accept: Accept | None = None,
     ) -> Opened | None:
         """One admitted attempt, under its lease through transfer EOF/close. None: it ended
         without audio - the plan says why, and what is left to try."""
@@ -737,8 +796,13 @@ class BulkAcquisition:
             deadline = asked + budget
             with self.deliverer._urgent(track, "ahead", False):
                 pin, opened = await self._open_selected(
-                    choice, lease, track, pin, budget, deadline, fresh=plan.fresh
-                )
+                    choice, lease, track, pin, budget, deadline, fresh=plan.fresh,
+                    requested=requested, head=head, expect=plan.expect,
+                )  # fmt: skip
+                if accept is not None and (why := accept(opened.kind, opened.kbps)):
+                    raise _Refused(why)
+                if self.deliverer.pinned(track.song_id) is None:
+                    self.deliverer._remember(track.song_id, pin)
                 self.deliverer._delivered(pin, opened, asked)
             if opened.kind is not None or pin.told is not None:
                 lease.prepared()
@@ -751,11 +815,17 @@ class BulkAcquisition:
             plan.allow_reuse = False
             plan.fresh = plan.fresh or exc.resolve
         except (AddonError, _Missing, _Failed, _Changed) as exc:
+            if isinstance(exc, _Changed) and plan.expect is not None:
+                raise  # a continuation must never fall back to another representation
             if isinstance(exc, AddonError):
                 self.deliverer._source_error(source, exc)
             elif isinstance(exc, _Failed) and pin is not None:
                 self.deliverer._failure(source, exc, pin)
-            if lease.started and lease.cold and not isinstance(exc, (_Missing, _Cooling, _Paced)):
+            if (
+                lease.started
+                and lease.cold
+                and not isinstance(exc, (_Missing, _Cooling, _Paced, _Refused))
+            ):
                 # The protocol has no cancellation handle for remote preparation.
                 # Leave this backend's new cold starts alone for a bounded pause;
                 # cached ready-only work can still proceed. This is not a claim that
@@ -809,6 +879,7 @@ class BulkAcquisition:
                 return False
             if began is not None:
                 if not all(self._held_back(s) for s in left):
+                    patience.recheck_wait += time.monotonic() - began
                     return True  # (before its last moment counts: a pause just over)
                 await patience.waited(time.monotonic() - began, paused=True)
             began = time.monotonic()
@@ -824,6 +895,9 @@ class BulkAcquisition:
         deadline: float,
         *,
         fresh: bool = False,
+        requested: ByteRange | None = None,
+        head: bool = False,
+        expect: Known | None = None,
     ) -> tuple[Pin, Opened]:
         source = choice.source
         # A plain play and a bulk request share resolution too. Publish a new pin only
@@ -837,6 +911,7 @@ class BulkAcquisition:
                 and not fresh
                 and published is not None
                 and published.source is source
+                and not self.deliverer._expired(published)
                 and not choice.ready
             ):
                 pin = published
@@ -847,7 +922,13 @@ class BulkAcquisition:
                 pin = replace(pin, checked=False, waited=0.0, first_byte_by=None, own_by=None)
             if pin is None:
                 if choice.ready and choice.cached is not None and choice.cached.selector:
+                    if self.deliverer._known_wrong(source, track):
+                        raise _Missing("another recording (remembered)")
                     info = await source.addon.cached_stream(choice.cached.selector)
+                    if info.transport == "hls":
+                        raise _Failed("HLS streams are not supported")
+                    if info.transport == "dash" and self.deliverer.dash is None:
+                        raise _Failed(f"DASH is off ({self.deliverer.dash_off})")
                     pin = Pin(
                         track.song_id,
                         source,
@@ -860,11 +941,12 @@ class BulkAcquisition:
                 else:
                     hint = choice.availability.track_id if choice.availability else None
                     pin = await self.deliverer._resolve_at(source, track, budget, hint)
-            self._pins[track.key] = pin, lease
+            if expect is None:
+                self._pins[track.key] = pin, lease
             while len(self._pins) > 4096:
                 self._pins.pop(next(iter(self._pins)))
             try:
-                opened = await self.deliverer._request(pin, None, False, deadline)
+                opened = await self.deliverer._request(pin, requested, head, deadline, expect)
             except _Changed:
                 if not reused or choice.ready or pin.cached:
                     raise
@@ -873,11 +955,11 @@ class BulkAcquisition:
                         "a replacement link needs its own upstream admission", resolve=True
                     ) from None
                 pin = await self.deliverer._resolve_at(source, track, budget)
-                self._pins[track.key] = pin, lease
-                opened = await self.deliverer._request(pin, None, False, deadline)
-            opened = await self.deliverer._verify(pin, opened, track, None, deadline)
-            if self.deliverer.pinned(track.song_id) is None:
-                self.deliverer._remember(track.song_id, pin)
+                if expect is None:
+                    self._pins[track.key] = pin, lease
+                opened = await self.deliverer._request(pin, requested, head, deadline, expect)
+            opened = await self.deliverer._verify(pin, opened, track, requested, deadline)
+            self._pins[track.key] = pin, lease
             return pin, opened
 
     async def aclose(self) -> None:

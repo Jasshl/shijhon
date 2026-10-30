@@ -268,7 +268,7 @@ async def test_worker_history_and_membership_commit_or_rollback_together(collect
     assert (await store.fetchone("SELECT count(*) n FROM collection_history"))["n"] == 7
 
 
-async def test_unavailable_history_restores_only_after_approval_and_publishes_complete_generation(
+async def test_unavailable_history_restores_only_after_approval_and_extends_complete_generation(
     collection,
 ):
     store, access, service = collection
@@ -294,7 +294,9 @@ async def test_unavailable_history_restores_only_after_approval_and_publishes_co
     assert calls == [(actor, "1", [recording().ref])]
     assert await service.visible_song_ids("one", "1", ["restored"]) == {"restored"}
     state = await service.index_state("one", "1")
-    assert state.generation != before
+    assert state.generation == before
+    additions = await store.fetchall("SELECT generation,song_id FROM collection_index_additions")
+    assert [(row["generation"], row["song_id"]) for row in additions] == [(before, "restored")]
     present = await store.fetchall("SELECT generation FROM collection_tracks WHERE present=1")
     assert len(present) == len(access.rows) + 1
     assert {r["generation"] for r in present} == {state.generation}
@@ -561,7 +563,7 @@ async def test_restore_retry_reuses_partially_published_batch_idempotently(colle
         restored
     )
     complete = (await service.index_state("one", "1")).generation
-    assert complete != before
+    assert complete == before
     await service.tick()
     assert len(calls) == 2
     assert (await service.index_state("one", "1")).generation == complete
@@ -674,3 +676,50 @@ async def test_activity_is_told_apart_from_choices_on_the_collection_page(collec
     assert await service.visible_song_ids(
         "one", "1", [f"s{n}" for n in range(1, 8)], profile_id="shijhon"
     ) == {f"s{n}" for n in range(1, 7)}  # the whole album, not the import's own album
+
+
+@pytest.mark.parametrize("extend_now", [False, True])
+async def test_restore_keeps_other_owners_ready_queries_and_reconciles_additions(
+    collection, tmp_path, extend_now
+):
+    from shijhon.collection.query_index import Binding, QueryIndex, SourcePage
+
+    store, access, service = collection
+    generation = (await service.index_state("one", "1")).generation
+    await History(store).record_catalog(Actor("one", frozenset({"1"})), "1", [recording()])
+
+    async def valid():
+        pass
+
+    async def fetch(start, limit):
+        return SourcePage(access.rows, len(access.rows))
+
+    async def restore(actor, library, refs, *, authorize):
+        await authorize()
+        await managed_link(store, "restored")
+        return {"demo:t1": song(99, id="restored", path="_shijhon/restored.flac")}
+
+    service.restore = restore
+    operation = await prepare(service)
+    await service.approve("one", operation)
+    async with anyio.create_task_group() as group:
+        index = QueryIndex(tmp_path / "queries" / "db", tmp_path / "history.db", group.start_soon)
+        bindings = [
+            Binding(owner, frozenset({"1"}), (("1", generation),)) for owner in ("one", "two")
+        ]
+        for binding in bindings:
+            await index.ensure(binding, "songs", fetch, valid)
+        if extend_now:
+            service.query_index = index
+        assert (await finish(service, operation))["state"] == "done"
+        for binding in bindings:
+            assert await index.has_ready(binding, "songs")
+            # The durable revision also repairs facts if the process stopped before extend.
+            await index.page(binding.key("songs"), binding, "song", None, 0, 20)
+            with sqlite3.connect(index.path) as conn:
+                assert conn.execute(
+                    "SELECT 1 FROM edges WHERE facts=? AND kind='song' AND item_id='restored'",
+                    (binding.facts,),
+                ).fetchone()
+        assert (await service.index_state("one", "1")).generation == generation
+        await index.close()

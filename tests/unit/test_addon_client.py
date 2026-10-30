@@ -14,10 +14,20 @@ import pytest
 import shijhon
 from shijhon.catalog.plugin import Context
 from shijhon.delivery import netpolicy, pacing
-from shijhon.delivery.addon import Addon, AddonError
+from shijhon.delivery.addon import MAX_WORDS, Addon, AddonError, Found, Wanted, mismatches
 from shijhon.delivery.netpolicy import Reach, policy_client
 
 MANIFEST = {"id": "test.addon", "name": "Test", "resources": ["stream", "isrc"]}
+
+
+@pytest.mark.parametrize("field", ["title", "artist"])
+@pytest.mark.parametrize("size", [MAX_WORDS, MAX_WORDS + 1, 20_000])
+def test_resolved_recording_text_has_the_search_bounds(field: str, size: int) -> None:
+    item = {"id": "demo", "title": "Invented Song", "artist": "Demo", "durationMs": 3000}
+    item[field] = "[" * size
+    found = Found.resolved(item)
+    assert getattr(found, field) == (item[field] if size <= MAX_WORDS else None)
+    assert field in mismatches(found, Wanted(None, "Invented Song", "Demo", 3000))
 
 
 class Server:

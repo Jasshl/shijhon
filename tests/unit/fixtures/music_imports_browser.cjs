@@ -190,6 +190,38 @@ async function main() {
   assert(calls.some(call=>call.path.endsWith('/distinct')));
   assert.equal(element('approve').hidden,true); // checking again after the change
   delete rows[5].outcome; rows[5].state='received'; state='review';
+  // A response for an old filter or page must not replace the current rows.
+  let releaseOld;
+  context.fetch=async(url, options)=>{
+    const response=await allowedFetch(url, options);
+    return new Promise(resolve=>{releaseOld=()=>resolve(response);});
+  };
+  element('file-filter').value='all';
+  element('file-filter').listeners.change();
+  await new Promise(resolve=>setImmediate(resolve));
+  context.fetch=allowedFetch;
+  element('file-filter').value='problems';
+  element('file-filter').listeners.change();
+  await new Promise(resolve=>setImmediate(resolve));
+  releaseOld();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(element('file-rows').children[0].children.length,1);
+  assert(element('file-range').textContent.endsWith('1–1 of 1'));
+  element('file-filter').value='all';
+  element('file-filter').listeners.change();
+  await new Promise(resolve=>setImmediate(resolve));
+  context.fetch=async(url, options)=>{
+    const response=await allowedFetch(url, options);
+    return new Promise(resolve=>{releaseOld=()=>resolve(response);});
+  };
+  element('files-next').listeners.click();
+  await new Promise(resolve=>setImmediate(resolve));
+  context.fetch=allowedFetch;
+  element('files-previous').listeners.click();
+  await new Promise(resolve=>setImmediate(resolve));
+  releaseOld();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert(element('file-range').textContent.endsWith('1–100 of 1,001'));
   // Reselection recomputes exactly the same keys on either browser crypto surface.
   root.dataset.job=''; state='declaring';
   vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),context);
@@ -214,6 +246,32 @@ async function main() {
   await element('file-picker').listeners.change({target:{files:[{name:'x'.repeat(1025)+'.flac',size:9,lastModified:100}]}});
   assert.equal(element('upload').disabled,true);
   assert(element('import-error').textContent.includes('path is too long'));
+  // Every refused selection discards partial File references and cannot upload later.
+  const capabilities=JSON.parse(root.dataset.capabilities);
+  capabilities.limits.max_job_files=2; capabilities.limits.max_job_bytes=15;
+  root.dataset.capabilities=JSON.stringify(capabilities);
+  vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),context);
+  const small={name:'small.flac',size:9,lastModified:100};
+  const refusedSelections=[
+    [small,{name:'big.flac',size:1001,lastModified:100}],
+    [small,{name:'second.flac',size:9,lastModified:100}],
+    [{...small,size:4},{...small,size:4}],
+    [small,{name:'x'.repeat(1025)+'.flac',size:1,lastModified:100}]
+  ];
+  for (const selection of refusedSelections) {
+    const beforeCalls=calls.length;
+    await element('file-picker').listeners.change({target:{files:selection}});
+    assert.equal(element('selection-summary').textContent,'No files selected. Choose your files again.');
+    assert.equal(element('upload').disabled,true);
+    await element('upload').listeners.click();
+    assert.equal(calls.length,beforeCalls,'A refused selection must leave no uploadable partial selection.');
+  }
+  capabilities.limits.max_job_bytes=1000; capabilities.limits.max_job_files=1;
+  root.dataset.capabilities=JSON.stringify(capabilities);
+  vm.runInNewContext(fs.readFileSync(process.argv[2],'utf8'),context);
+  await element('file-picker').listeners.change({target:{files:[small,{name:'second.flac',size:1,lastModified:100}]}});
+  assert.equal(element('selection-summary').textContent,'No files selected. Choose your files again.');
+  assert.equal(element('upload').disabled,true);
   console.log(`${insecure ? 'HTTP-compatible crypto' : 'SubtleCrypto'}: SHA-256 metadata keys match Node, bounded paths and random request IDs.`);
   console.log('1001 files: manifests 500/500/1; <=2 uploads; lost-response receipt checked; unfinished retry uses current attempt; checking awaits approval; reload uploads nothing.');
 }

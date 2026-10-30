@@ -142,10 +142,19 @@ class Upgrades:
             if made is None or made["size"] > reserved:
                 raise _Refused("the add-ons' audio could not carry the imported song's tags")
             old_final = item["final_name"]
+            new_final = str(PurePosixPath(old_final).with_suffix(suffix))
+            if new_final != old_final:
+                with storage.final_parent(new_final) as (parent, leaf):
+                    try:
+                        os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise _Refused("another file is at the upgraded song's path")
             intent = {
                 "phase": SWAP,
                 "staging": name,
-                "final": str(PurePosixPath(old_final).with_suffix(suffix)),
+                "final": new_final,
                 "size": made["size"],
                 "sha256": made["sha256"],
                 "quality": quality.describe(),
@@ -283,6 +292,11 @@ class Upgrades:
             "upgraded_to": intent["quality"],
             "at": time.time(),
         }
+        original = json.loads(item["upgraded_from"] or "{}")
+        if original:
+            original.setdefault("upgrades", []).append(replaced)
+            original["upgraded_to"] = intent["quality"]
+            replaced = original
         async with self.imports.store.transaction() as conn:
             await conn.execute(
                 "UPDATE music_import_items SET staging_name=?,final_name=?,expected_size=?,"
@@ -326,11 +340,55 @@ class Upgrades:
         storage, store = self.imports.storage, self.imports.store
         phase = intent.get("phase") or SWAP
 
+        def original_present() -> bool:
+            original = storage.file(item["staging_name"])
+            try:
+                with storage.final_parent(item["final_name"]) as (parent, leaf):
+                    current = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                kept = os.fstat(original)
+                return (current.st_dev, current.st_ino) == (kept.st_dev, kept.st_ino)
+            except FileNotFoundError:
+                return False
+            finally:
+                os.close(original)
+
+        def replacement_present() -> bool:
+            with storage.final_parent(intent["final"]) as (parent, leaf):
+                try:
+                    os.stat(leaf, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    return False
+            return True
+
+        untouched = (
+            phase == SWAP
+            and await anyio.to_thread.run_sync(original_present)
+            and (
+                intent.get("final") == item["final_name"]
+                or not await anyio.to_thread.run_sync(replacement_present)
+            )
+        )
+        if phase == SWAP and not untouched and not intent.get("verify"):
+            # Remember that native confirmation is needed *before* restoring the link.
+            # A stop during rollback must not later mistake that link for an untouched one.
+            intent["verify"] = True
+            recorded = json.dumps(intent)
+            await store.execute(
+                "UPDATE music_import_items SET upgrade=? WHERE id=? AND upgrade=?",
+                [recorded, item["id"], item["upgrade"]],
+            )
+            item["upgrade"] = recorded
+        untouched = untouched and not intent.get("verify")
+
         def files() -> None:
             if phase == SWAP and intent.get("staging") and intent.get("final"):
                 with suppress(FileNotFoundError):
                     _unlink_ours(
-                        storage, intent["final"], intent["staging"], keep=item["staging_name"]
+                        storage,
+                        intent["final"],
+                        intent["staging"],
+                        keep=item["staging_name"],
+                        missing_ok=True,
                     )
                 try:
                     descriptor = storage.file(item["final_name"], final=True)
@@ -343,14 +401,14 @@ class Upgrades:
 
         if phase in (CARRY, SWAP):
             await anyio.to_thread.run_sync(files)
-            following = "" if phase == CARRY else json.dumps({"phase": VERIFY})
+            following = "" if phase == CARRY or untouched else json.dumps({"phase": VERIFY})
             async with store.transaction() as conn:
                 await conn.execute(
                     "UPDATE music_import_items SET upgrade=?,reserved_size=max(0,reserved_size-?)"
                     " WHERE id=? AND upgrade=?",
                     [following, int(intent.get("reserved") or 0), item["id"], item["upgrade"]],
                 )
-            if phase == CARRY:
+            if not following:
                 return
         await self.imports.scan([storage.folder])
         native = await self.imports.native_lookup(
@@ -480,11 +538,13 @@ def _described(song: Mapping[str, Any] | None) -> tuple[Any, ...]:
     )
 
 
-def _unlink_ours(storage: Any, final: str, staging: str, *, keep: str = "") -> bool:
+def _unlink_ours(
+    storage: Any, final: str, staging: str, *, keep: str = "", missing_ok: bool = False
+) -> bool:
     """Unlink the published name ``final`` when it is the retained ``staging`` file's
     link (never anything else). ``keep``: another retained file whose link may be there
     instead (an upgrade of the same format not swapped yet): it stays. Returns whether it
-    was unlinked."""
+    was unlinked. ``missing_ok``: rollback ignores a destination it never installed."""
     source = storage.file(staging)
     kept = storage.file(keep) if keep else -1
     try:
@@ -499,6 +559,8 @@ def _unlink_ours(storage: Any, final: str, staging: str, *, keep: str = "") -> b
                 if (current.st_dev, current.st_ino) == (other.st_dev, other.st_ino):
                     return False
             if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+                if missing_ok:
+                    return False
                 raise ImportError("changed", "The published import changed. Check storage.")
             os.unlink(leaf, dir_fd=parent)
             os.fsync(parent)

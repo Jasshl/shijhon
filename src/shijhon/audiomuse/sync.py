@@ -2,7 +2,7 @@
 
 A sync lists every analyzed song with a fingerprint of its analysis (``/api/sync``, a page of
 1000 a request, cheap for AudioMuse-AI), fetches the analysis of the songs that are new or
-whose fingerprint changed (100 a request, four requests at once), and removes what is gone:
+whose fingerprint changed (100 a request, two requests at once), and removes what is gone:
 
 - songs AudioMuse-AI no longer lists - each asked for once more before it goes, so that a
   song analyzed while the list was read is not mistaken for a missing one,
@@ -128,7 +128,9 @@ class FactsSync:
         report.listed = len(listed)
         placeholders = await self.table.placeholders()
         stored = await self.table.fingerprints()
-        wanted = {song: fp for song, fp in listed.items() if song not in placeholders}
+        absent = await self.table.gone(self.library_id)
+        excluded = placeholders | absent
+        wanted = {song: fp for song, fp in listed.items() if song not in excluded}
         todo = [song for song, fp in wanted.items() if stored.get(song) != fp]
         fresh = set(todo)
         unchanged = [song for song in wanted if song in stored and song not in fresh]
@@ -137,11 +139,11 @@ class FactsSync:
         report.skipped = len(empty)
         # Stored songs the list lacks are asked for once more: the list was read page by
         # page while songs were analyzed. What AudioMuse-AI still has is saved.
-        lost = [song for song in stored if song not in listed and song not in placeholders]
+        lost = [song for song in stored if song not in listed and song not in excluded]
         gone = await self._fetch(lost, report)
         # ... and what has no facts (any more), is a placeholder now, or has left the library.
         remove = empty | gone | placeholders | await self.table.gone(self.library_id)
-        report.removed = await self.table.delete(sorted(remove & stored.keys()))
+        report.removed = await self.table.delete(sorted(remove))
         if report.removed:
             self.changed()
         await self.table.confirm(unchanged, self.clock())

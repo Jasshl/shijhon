@@ -278,6 +278,52 @@ async def advance(removals: ImportRemovals, owner: str, job: str, wanted: str) -
     pytest.fail(f"Removal did not reach {wanted}")
 
 
+async def test_finished_import_frees_rejected_excluded_and_selection_duplicate_bytes(
+    navidrome_factory, tmp_path
+):
+    nd = navidrome_factory()
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "source"
+    best = write_album(source, replace(LIBRARY, tracks=LANTERNS[:1], folder="Best"))
+    duplicate = write_album(
+        source, replace(LIBRARY, tracks=LANTERNS[:1], fmt="mp3", folder="Duplicate")
+    )
+    excluded = write_album(source, replace(LIBRARY, tracks=LANTERNS[1:2], folder="Excluded"))
+    bad = source / "bad.flac"
+    bad.write_bytes(b"not an audio file")
+    review = await upload(w, "ben", best + duplicate + excluded + [bad], source, "unused")
+    excluded_id = next(i["id"] for i in review["items"] if i["path"].startswith("Excluded/"))
+    await w.imports.review(ben, review["id"], exclude=[excluded_id])
+    review = await settle(w, "ben", review["id"], "review")
+    assert sorted(i["state"] for i in review["items"]) == [
+        "eligible",
+        "excluded",
+        "rejected",
+        "skipped",
+    ]
+    assert next(i for i in review["items"] if i["state"] == "skipped")["outcome"] == "duplicate"
+    done = await approve(w, "ben", review)
+    assert done["complete_files"] == 1 and done["skipped_files"] == 3
+    while await w.imports.tick():
+        pass
+    rows = await w.store.fetchall("SELECT * FROM music_import_items")
+    for row in rows:
+        received = nd.music / "_imports/.incoming" / row["staging_name"]
+        if row["state"] == "complete":
+            assert received.read_bytes() == best[0].read_bytes()
+            assert row["reserved_size"] == len(best[0].read_bytes())
+        else:
+            assert not received.exists()
+            assert row["reserved_size"] == 0 and row["received_cleanup"] == "deleted"
+    after = await w.imports.status(ben, review["id"])
+    assert after == done  # reports and the frozen receipt survive private cleanup
+    assert len(await w.caller.songs(ben, "1", 0, 10)) == 1
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
+
+
 async def test_concurrent_imports_of_one_album_link_the_later_one(navidrome_factory, tmp_path):
     nd = navidrome_factory()
     w = await world(nd, tmp_path, ("ana", "ben"))

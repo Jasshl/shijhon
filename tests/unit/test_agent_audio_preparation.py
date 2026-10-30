@@ -182,12 +182,11 @@ def test_optional_scope_and_explicit_readback_replay_conflict_and_tombstone(tmp_
     async def run() -> None:
         async with world(tmp_path) as (app, http, prep, client, fetcher):
             flow = await begin(http, "status downloads")
-            page = await http.get(flow["location"])
-            assert (
-                'name="scope_downloads" value="true" aria-describedby="downloads-help"' in page.text
-            )
-            assert 'name="scope_downloads" value="true" checked' not in page.text
             tokens = await finish(http, flow, "status downloads")
+            assert (
+                'name="scope_downloads" value="true" checked aria-describedby="downloads-help"'
+                in flow["consent_page"]
+            )
             capabilities = await call(http, tokens["access_token"], "get_capabilities")
             assert capabilities["features"]["audio_preparation"]["ready"]
             assert not capabilities["features"]["description_playlist"]["ready"]
@@ -656,7 +655,7 @@ class KeptAttribution:
 def test_a_preparation_keeps_its_attribution_with_its_batch_and_a_replay_retries_it(
     tmp_path: Path,
 ) -> None:
-    """Review finding S1: the songs to record go into the queue in the batch's own
+    """The songs to record go into the queue in the batch's own
     transaction - durable with it, never lost to a stop or a failure after it - and an agent
     replaying its request wakes the recorder again."""
 

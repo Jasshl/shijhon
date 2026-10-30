@@ -11,9 +11,8 @@ from importlib.resources import files
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, quote, urlencode
 
-from starlette.exceptions import HTTPException
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from shijhon.collection.contracts import BrowseView, CollectionError, Query
@@ -28,23 +27,35 @@ if TYPE_CHECKING:
 
 
 async def read_form(request: Request) -> dict[str, str]:
+    from shijhon.dashboard.app import HEADERS, Refused
+
     if (
         request.headers.get("content-type", "").split(";", 1)[0]
         != "application/x-www-form-urlencoded"
     ):
-        raise HTTPException(415, "Submit the collection form from the page.")
+        raise Refused(
+            PlainTextResponse("Submit the collection form from the page.", 415, headers=HEADERS)
+        )
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > 256 * 1024:
-            raise HTTPException(413, "The selection is too large. Choose every matching result.")
+            raise Refused(
+                PlainTextResponse(
+                    "The selection is too large. Choose every matching result.",
+                    413,
+                    headers=HEADERS,
+                )
+            )
     try:
         pairs = parse_qsl(body.decode(), keep_blank_values=True, max_num_fields=1200)
         if len(set(k for k, _ in pairs)) != len(pairs):
             raise ValueError
         return dict(pairs)
     except (UnicodeError, ValueError):
-        raise HTTPException(400, "Reload the collection form and try again.") from None
+        raise Refused(
+            PlainTextResponse("Reload the collection form and try again.", 400, headers=HEADERS)
+        ) from None
 
 
 # Show: the library's music, the music you collected that is not in it, or everything on
@@ -83,12 +94,11 @@ def parse_query(values: Any) -> Query:
     if show not in SHOWS:
         raise CollectionError("Choose a valid collection filter and page.")
     fields["view"], fields["pool"] = SHOWS[show]
-    if fields.get("origin", "all") not in ORIGIN_LABELS:
-        # The source filters of recorded changes, as the page offers them now.
-        fields["origin"] = "catalog" if fields["origin"] == "catalog" else "imported"
-    # The old scan timestamp ordering was not a stable discovery date.
-    if fields.get("sort") == "newest":
-        fields["sort"] = "artist"
+    if fields.get("origin", "all") not in ORIGIN_LABELS or fields.get("sort", "artist") not in (
+        "title",
+        "artist",
+    ):
+        raise CollectionError("Choose a valid collection filter and page.")
     pool_changed = bool(values.get("previous_pool")) and fields["pool"] != values.get(
         "previous_pool"
     )
@@ -141,15 +151,17 @@ class Pages:
         return str(self.dashboard.services.navidrome.library_id)
 
     def routes(self) -> list[Route]:
-        wrapper = getattr(self.dashboard, "_personal_page", self.dashboard._page)
+        wrapper = self.dashboard._personal_page
         return [
             Route(
                 "/collection", wrapper(self.index, form_reader=read_form), methods=["GET", "POST"]
             ),
             Route("/collection/changes/{ident}", wrapper(self.change), methods=["GET", "POST"]),
-            Route("/collection/progress/{ident}", wrapper(self.progress)),
-            Route("/collection/source-progress", wrapper(self.source_progress)),
-            Route("/collection/artwork/{ident}", wrapper(self.artwork)),
+            Route("/collection/progress/{ident}", wrapper(self.progress, cache_identity=True)),
+            Route(
+                "/collection/source-progress", wrapper(self.source_progress, cache_identity=True)
+            ),
+            Route("/collection/artwork/{ident}", wrapper(self.artwork, cache_identity=True)),
         ]
 
     async def render(
@@ -350,7 +362,7 @@ class Pages:
             query = parse_query(values)
             profile = values.get("profile_id") or None
             layout = values.get("layout", "grid")
-            if request.method == "GET":
+            if request.method != "POST":
                 return await self.render(
                     session,
                     query=query,
@@ -429,7 +441,7 @@ class Pages:
                 if values.get("selected"):
                     selected = json.loads(values["selected"])
                 if not isinstance(selected, list) or any(not isinstance(k, str) for k in selected):
-                    raise CollectionError("Select rows from the collection page.")
+                    raise CollectionError("Select rows and try again.")
             ident = await self.service.prepare(
                 session.user_id,
                 self.library,
@@ -448,7 +460,7 @@ class Pages:
                 href("", browse_query, profile_id=profile, layout=layout, operation=ident)
                 + "#change-heading"
             )
-        except (CollectionError, json.JSONDecodeError) as exc:
+        except (CollectionError, json.JSONDecodeError, RecursionError) as exc:
             return await self.render(
                 session,
                 query=query,

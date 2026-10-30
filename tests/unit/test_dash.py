@@ -126,11 +126,21 @@ async def test_the_link_s_headers_are_not_sent_on_to_another_origin(tmp_path: Pa
     server = Server(dash_audio("unit-moved", 6))
     server.moved = True
     joiner = Dash(tmp_path, FFMPEG)
-    await joined(joiner, link(server, authorization="Bearer made-up", **{"x-key": "made-up"}))
+    await joined(
+        joiner,
+        link(
+            server,
+            authorization="Bearer made-up",
+            **{"x-key": "made-up", "User-Agent": "Private Agent"},
+        ),
+    )
     first, moved = server.seen[0], server.seen[1]
     assert first.headers["x-key"] == "made-up" and first.headers["authorization"]
     assert moved.url.host == "mirror.example"
     assert "x-key" not in moved.headers and "authorization" not in moved.headers
+    assert first.headers["user-agent"] == "Private Agent"
+    assert moved.headers["user-agent"] == dash_module.USER_AGENT
+    assert all(r.headers["user-agent"] == dash_module.USER_AGENT for r in server.seen[1:])
 
 
 @pytest.mark.anyio
@@ -632,3 +642,88 @@ async def test_a_request_timed_out_on_a_file_being_fetched_is_told_it_goes_on(
                 await anyio.sleep(0.01)
         assert joiner.outlasts(stream.key) == "kept"
         group.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("changed", [False, True, "missing", "weak", "transient"])
+async def test_a_segment_keeps_its_probed_etag(tmp_path: Path, changed: bool | str) -> None:
+    server = Server(dash_audio("unit-validator", 6))
+
+    counts: dict[str, int] = {}
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        response = await server.handle(request)
+        if request.url.host == "cdn.example":
+            probe = request.headers.get("range") == "bytes=0-0"
+            response.headers["etag"] = '"original"' if probe or not changed else '"changed"'
+            if not probe:
+                counts[request.url.path] = counts.get(request.url.path, 0) + 1
+                if changed == "missing":
+                    response.headers.pop("etag", None)
+                elif changed == "weak":
+                    response.headers["etag"] = 'W/"different"'
+                elif changed == "transient" and counts[request.url.path] > 1:
+                    response.headers["etag"] = '"original"'
+            if (
+                changed is True
+                and not probe
+                and not request.url.path.rsplit("/", 1)[1].startswith("init")
+            ):
+                data = response.content
+                return httpx.Response(
+                    200, content=data[:-1] + bytes([data[-1] ^ 1]), headers=response.headers
+                )
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        the_link = Link("k" * 64, MANIFEST, {}, http, None, "Made-up")
+        async with anyio.create_task_group() as group:
+            joiner = Dash(tmp_path, FFMPEG, spawn=group.start_soon)
+            stream = await served(joiner, the_link)
+            assert stream.file.validators[0] == '"original"'
+            if changed is True:
+                with pytest.raises(httpx.ReadError, match="segment changed"):
+                    await read(joiner, stream)
+                assert stream.file.fetched == 0 and not stream.file.complete
+            else:
+                assert await read(joiner, stream)
+                assert stream.file.complete
+            group.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_relink_reprobes_validators_on_a_new_cdn(tmp_path: Path) -> None:
+    server = Server(dash_audio("unit-relink-validator", 6))
+    segments = anyio.Event()
+    stale = False
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        response = await server.handle(request)
+        if request.url.host in ("manifests.example", "mirror.example"):
+            text = response.text
+            if request.url.params.get("new"):
+                text = text.replace(CDN, "https://other-cdn.example/seg/")
+            return httpx.Response(200, text=text)
+        probe = request.headers.get("range") == "bytes=0-0"
+        if not probe and not request.url.path.rsplit("/", 1)[1].startswith("init"):
+            await segments.wait()
+            if stale and request.url.host == "cdn.example":
+                return httpx.Response(410)
+        response.headers["etag"] = (
+            '"new-cdn"' if request.url.host == "other-cdn.example" else '"old-cdn"'
+        )
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        first = Link("k" * 64, MANIFEST, {}, http, None, "Made-up")
+        newer = Link(first.key, MANIFEST + "&new=1", {}, http, None, "Made-up")
+        async with anyio.create_task_group() as group:
+            joiner = Dash(tmp_path, FFMPEG, spawn=group.start_soon)
+            stream = await served(joiner, first)
+            assert await served(joiner, newer) is stream
+            stale = True
+            segments.set()
+            assert await read(joiner, stream)
+            assert stream.file.complete and stream.link is newer
+            assert stream.file.validators == ('"new-cdn"',) * len(stream.plan.media)
+            group.cancel_scope.cancel()

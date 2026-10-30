@@ -30,11 +30,14 @@ finish this preparation before opening a music app. The completed view survives 
 
 Your imports belong to your Original imported library and All - also songs the library
 already had when you imported them, which your import is linked to, catalog songs
-included. New accounts start with empty libraries. Another account's music, plays and
-choices never change your libraries; someone else's imports enter yours when you add
-them, or when one of your reasons brings in their album. Choosing a library to browse
-does not activate it: **Use in my apps** sets the library your music apps and the native
-web library use, for your whole account on every device.
+included. Until an administrator completes personal library setup in
+**Collection → Import music**, existing originals are shared: their albums appear in
+every account's Original imported library and All. After that setup, new accounts start
+with empty libraries. Another account's music, plays and choices do not change yours;
+someone else's imports enter yours when you add them, or when one of your reasons brings
+in their album. Choosing a library to browse does not activate it: **Use in my apps**
+sets the library your music apps and the native web library use, for your whole account
+on every device.
 
 ## What brings music in
 
@@ -159,9 +162,10 @@ change; preparing and reviewing a change do not create files. Music that cannot 
 restored stays out of apps and is counted as skipped. Missing original files need
 reimporting. Everything on the server contains only music currently present.
 
-In **Not in this library**, selecting rows or **Every match** adds only the currently
-matching songs; the explicit whole-album/artist button still chooses the whole current
-group. Added songs disappear from this filtered view. **Undo** makes those songs appear
+In **Not in this library**, selecting rows or **Every match** chooses the currently
+matching songs. Adding a song brings its whole album, except other songs you removed from
+that library. The explicit whole-album/artist button chooses the whole current group.
+Added songs disappear from this filtered view. **Undo** makes those songs appear
 here again where their choices have not subsequently changed. If a change empties the
 last page while earlier matches remain, browsing moves to the last valid page and keeps
 the library and filters.

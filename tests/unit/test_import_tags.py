@@ -73,7 +73,13 @@ def test_a_copy_in_every_writable_format_takes_the_albums_tags(tmp_path: Path, f
     assert tagmap.family(audio)
     mine = tagmap.album_tags(audio, tags)
     assert album_key(mine, "") == album_key(ALBUM, "Tide Paper")
-    assert mine["album"] == ["Night Letters"] and mine["releasedate"] == ["2020-05-01"]
+    assert mine["album"] == ["Night Letters"]
+    # MP4's ©day also aliases the release date, after the explicit RELEASEDATE.
+    assert mine["releasedate"] == (
+        ["2020-05-01", "2019"] if tagmap.family(audio) == "mp4" else ["2020-05-01"]
+    )
+    if tagmap.family(audio) == "mp4":
+        assert mine["recordingdate"] == ["2019"]
     # The original's own album ("Paper Garden") is gone under every name.
     assert "Paper Garden" not in str(tagmap.raw(audio, tags))
 

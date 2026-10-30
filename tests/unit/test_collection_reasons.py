@@ -495,7 +495,7 @@ def test_the_migration_records_the_songs_imports_published_before() -> None:
     assert conn.execute("SELECT count(*) FROM collection_imported").fetchone() == (0,)
 
 
-# --- the review's reproductions (2026-10-26) ----------------------------------------------
+# --- reproductions ------------------------------------------------------------------------
 
 
 async def ledger(store: Store) -> None:
@@ -660,7 +660,7 @@ async def test_kept_actions_are_recorded_and_a_failed_set_stays_to_try_again(
 
 
 async def test_an_app_action_on_more_than_500_songs_is_kept_and_recorded(tmp_path: Path) -> None:
-    """Review finding B3: an accepted playlist of more songs than one request confirms is
+    """An accepted playlist of more songs than one request confirms is
     not dropped. Its distinct songs are kept and recorded from the ledger; the same song
     many times is one song, confirmed with the request."""
     store, service = await open_library(tmp_path / "large.db", personal=True)
@@ -698,7 +698,7 @@ async def test_an_app_action_on_more_than_500_songs_is_kept_and_recorded(tmp_pat
         await store.close()
 
 
-# --- the follow-up review's reproductions (2026-10-26) ---------------------------------
+# --- more reproductions ---------------------------------------------------------------
 
 
 async def act(recorder: CollectionRequests, method: str, pairs: list[tuple[str, str]]) -> None:
@@ -724,7 +724,7 @@ async def act(recorder: CollectionRequests, method: str, pairs: list[tuple[str, 
 async def test_a_large_playlist_update_and_a_failed_confirmation_are_kept(
     tmp_path: Path,
 ) -> None:
-    """Follow-up review R2-B1: songs added to a playlist (``songIdToAdd``) and a played
+    """Songs added to a playlist (``songIdToAdd``) and a played
     song (``mediaId``) are kept under the queue's own names, not dropped."""
     store, service = await open_library(tmp_path / "update.db", personal=True)
     try:
@@ -745,7 +745,7 @@ async def test_a_large_playlist_update_and_a_failed_confirmation_are_kept(
 async def test_a_failing_item_waits_and_comes_back_without_holding_up_the_others(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Follow-up review R2-S1: an item that keeps failing is tried again later, at growing
+    """An item that keeps failing is tried again later, at growing
     intervals up to an hour, never given up; a start of Shijhon or the same action again
     makes it due at once; the items beside it are recorded meanwhile."""
     store, service = await open_library(tmp_path / "retry.db", personal=True)
@@ -792,7 +792,7 @@ async def test_a_failing_item_waits_and_comes_back_without_holding_up_the_others
 
 
 async def test_every_new_favorite_of_a_large_read_is_kept(tmp_path: Path) -> None:
-    """Follow-up review R2-S2: a read of more than 10,000 new favorites keeps every one to
+    """A read of more than 10,000 new favorites keeps every one to
     record, not the first 10,000 (the next read no longer sees them as new)."""
     store, service = await open_library(tmp_path / "many.db", personal=True)
     try:
@@ -814,7 +814,7 @@ async def test_every_new_favorite_of_a_large_read_is_kept(tmp_path: Path) -> Non
 
 
 def test_the_upgrade_keeps_every_custom_library_s_songs_also_after_undo() -> None:
-    """Follow-up review R2-B2: a custom library holds after the upgrade exactly what it
+    """A custom library holds after the upgrade exactly what it
     held before - with and without the import base, with explicit choices, with choices an
     Undo left empty (NULL), for two accounts."""
     conn, migrations = schema23()
@@ -1053,7 +1053,7 @@ async def test_the_upgrade_maps_choices_classifies_history_and_carries_albums_ov
 
 
 def test_the_upgrade_keeps_a_removal_made_in_shijhon_library() -> None:
-    """The review's reproduction: a song played, saved and then removed in Shijhon
+    """A song played, saved and then removed in Shijhon
     library, with Shijhon library in use, stays removed after the upgrade."""
     conn, migrations = schema23()
     profile = default_profile_id("one")
@@ -1321,7 +1321,7 @@ async def test_an_import_s_songs_replace_its_earlier_ones(learning: Any) -> None
 async def test_a_stalled_read_of_favorites_ends_on_time_and_is_tried_again(
     learning: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review finding 4: a read whose answer never comes ends at its deadline - its
+    """A read whose answer never comes ends at its deadline - its
     credentials with it - and the account is read again later."""
     store, _service = learning
     monkeypatch.setattr(reasons_module, "RETRY_SECONDS", 0.0)
@@ -1344,7 +1344,7 @@ async def test_a_stalled_read_of_favorites_ends_on_time_and_is_tried_again(
 
 
 async def test_reads_of_favorites_are_admitted_and_run_a_few_at_a_time(learning: Any) -> None:
-    """Review finding 4: many accounts at once - a bounded number of reads is admitted, and
+    """Many accounts at once - a bounded number of reads is admitted, and
     only a few ask Navidrome at the same time; the others are read later."""
     store, _service = learning
     navidrome = Navidrome()
@@ -1374,7 +1374,7 @@ async def test_reads_of_favorites_are_admitted_and_run_a_few_at_a_time(learning:
 
 
 async def test_admission_holds_for_many_accounts_arriving_at_once(learning: Any) -> None:
-    """Review round 2, finding 4: requests of many accounts at the same moment are admitted
+    """Requests of many accounts at the same moment are admitted
     up to the limit - the reservation is made before anything is awaited."""
     store, _service = learning
     navidrome = Navidrome()
@@ -1417,3 +1417,143 @@ async def test_a_reservation_goes_when_its_read_cannot_begin(
         with anyio.fail_after(5):
             await spawn.ended[-1].wait()
     assert reasons.reads == 1
+
+
+@pytest.mark.parametrize("action", ["star", "unstar", "setRating", "scrobble", "reportPlayback"])
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_annotation_writes_invalidate_owned_rows_only_after_native_acceptance(
+    tmp_path, action, accepted
+):
+    store = await Store.open(tmp_path / "annotation.db")
+    try:
+        recorder = requests(store)
+        recorder.query_index = SimpleNamespace(
+            annotations_changed=AsyncMock(), invalidate=AsyncMock()
+        )
+        recorder._tracks = AsyncMock(return_value=[])  # owned music has no catalog activity
+        call = RestCall.build(
+            action,
+            "GET",
+            b"/rest/action",
+            b"id=owned&rating=0&state=stopped&mediaId=owned",
+            [],
+            None,
+        )
+        principal = Principal("one", "Listener", False, frozenset({1}))
+        ctx = SimpleNamespace(
+            head=False,
+            caller=AsyncMock(return_value=object()),
+            kept={"shijhon.principal": principal},
+        )
+        body = {"subsonic-response": {"status": "ok" if accepted else "failed"}}
+        recorder._answer = AsyncMock(
+            return_value=LibraryAnswer(
+                200, [(b"content-type", b"application/json")], json.dumps(body).encode()
+            )
+        )
+        recorder._play_count = AsyncMock(side_effect=[0, 1])
+        await recorder(call, ctx, None)
+        recorder._answer.assert_awaited_once_with(call, None)
+        changed = recorder.query_index.annotations_changed
+        if accepted and action in ("star", "unstar", "setRating"):
+            changed.assert_awaited_once_with("one", every=True)
+        elif accepted and action in ("scrobble", "reportPlayback"):
+            changed.assert_awaited_once_with("one")  # playback keeps other views warm
+        else:
+            changed.assert_not_awaited()
+        recorder.query_index.invalidate.assert_not_awaited()
+    finally:
+        await store.close()
+
+
+@pytest.mark.parametrize(
+    "action,params,counts",
+    [
+        ("scrobble", "submission=false", []),
+        ("reportPlayback", "state=starting", []),
+        ("reportPlayback", "state=playing", []),
+        ("reportPlayback", "state=paused", []),
+        ("reportPlayback", "state=stopped&ignoreScrobble=true", []),
+        ("reportPlayback", "state=stopped", [2, 2]),
+        ("reportPlayback", "state=stopped", [None]),
+        ("reportPlayback", "state=stopped", [2, None]),
+    ],
+)
+async def test_now_playing_and_reports_without_a_recorded_play_leave_queries_alone(
+    tmp_path, action, params, counts
+):
+    store = await Store.open(tmp_path / "annotation.db")
+    try:
+        recorder = requests(store)
+        recorder.query_index = SimpleNamespace(
+            annotations_changed=AsyncMock(), invalidate=AsyncMock()
+        )
+        recorder._tracks = AsyncMock(return_value=[])
+        recorder._play_count = AsyncMock(side_effect=counts)
+        recorder._answer = AsyncMock(
+            return_value=LibraryAnswer(
+                200,
+                [(b"content-type", b"application/json")],
+                b'{"subsonic-response":{"status":"ok"}}',
+            )
+        )
+        call = RestCall.build(
+            action, "GET", b"/rest/action", ("id=owned&mediaId=owned&" + params).encode(), [], None
+        )
+        ctx = SimpleNamespace(
+            head=False,
+            caller=AsyncMock(return_value=object()),
+            kept={"shijhon.principal": Principal("one", "Listener", False, frozenset({1}))},
+        )
+        await recorder(call, ctx, None)
+        recorder.query_index.annotations_changed.assert_not_awaited()
+        recorder.query_index.invalidate.assert_not_awaited()
+    finally:
+        await store.close()
+
+
+async def test_stopped_playback_checks_counts_for_the_forwarded_native_recording(tmp_path):
+    from shijhon.proxy.app import Forward
+
+    store = await Store.open(tmp_path / "annotation.db")
+    try:
+        recorder = requests(store)
+        recorder.query_index = SimpleNamespace(
+            annotations_changed=AsyncMock(), invalidate=AsyncMock()
+        )
+        original = RestCall.build(
+            "reportPlayback",
+            "GET",
+            b"/rest/reportPlayback",
+            b"mediaId=sh.tr.demo.invented&state=stopped",
+            [],
+            None,
+        )
+        native = RestCall.build(
+            "reportPlayback",
+            "GET",
+            b"/rest/reportPlayback",
+            b"mediaId=owned&state=stopped",
+            [],
+            None,
+        )
+        forwarded = Forward(native)
+        recorder._attribute = AsyncMock(return_value=forwarded)
+        recorder._play_count = AsyncMock(side_effect=[0, 1])
+        recorder._answer = AsyncMock(
+            return_value=LibraryAnswer(
+                200,
+                [(b"content-type", b"application/json")],
+                b'{"subsonic-response":{"status":"ok"}}',
+            )
+        )
+        ctx = SimpleNamespace(
+            head=False,
+            caller=AsyncMock(return_value=object()),
+            kept={"shijhon.principal": Principal("one", "Listener", False, frozenset({1}))},
+        )
+        await recorder(original, ctx, forwarded)
+        assert [args.args[0] for args in recorder._play_count.await_args_list] == [native, native]
+        recorder.query_index.annotations_changed.assert_awaited_once_with("one")
+    finally:
+        await store.close()

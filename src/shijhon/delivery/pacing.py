@@ -58,6 +58,8 @@ from dataclasses import dataclass, field
 import anyio
 import httpx
 
+from shijhon.delivery.netpolicy import USER_AGENT
+
 # Urgencies: the lower, the sooner.
 PLAY = 0  # the song being played: its lookups, its link, its audio, its seeks
 QUEUED = 1  # a client's other requests: fetches ahead, probes, queued downloads
@@ -358,7 +360,12 @@ class Turns:
         if waits is not None:
             waits._began(self.what)
         # (Canceled: the wait stays noted.)
-        await self._line.enter(urgency, lambda: self._take(urgency))
+        try:
+            await self._line.enter(urgency, lambda: self._take(urgency))
+        except Blocked:
+            if waits is not None:
+                waits._ended(time.monotonic() - began)
+            raise
         if waits is not None:
             waits._ended(time.monotonic() - began)
         try:
@@ -524,7 +531,11 @@ class AddonPace:
             return
         began = self.clock()
         waits._began(REQUESTS)
-        await self._requests.enter(_URGENCY.get() or Urgency(), self._take)
+        try:
+            await self._requests.enter(_URGENCY.get() or Urgency(), self._take)
+        except Blocked:
+            waits._ended(self.clock() - began)
+            raise
         waits._ended(self.clock() - began)
 
     async def open(self) -> Callable[[], None]:
@@ -537,7 +548,12 @@ class AddonPace:
         began = self.clock()
         if waits is not None:
             waits._began(OPENINGS)
-        await self._audio.enter(urgency, lambda: self._take_opening(urgency))
+        try:
+            await self._audio.enter(urgency, lambda: self._take_opening(urgency))
+        except Blocked:
+            if waits is not None:
+                waits._ended(self.clock() - began)
+            raise
         if waits is not None:
             waits._ended(self.clock() - began)
         over = False
@@ -586,6 +602,7 @@ async def send(
         if private and origin(str(following.url)) != home:
             for name in private:
                 following.headers.pop(name, None)
+            following.headers.setdefault("user-agent", USER_AGENT)
         request = following
     raise httpx.TooManyRedirects("too many redirects", request=request)
 

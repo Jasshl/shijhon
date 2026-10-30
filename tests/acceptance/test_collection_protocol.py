@@ -345,3 +345,74 @@ def test_jsonp_album_details_are_complete_and_preserve_native_refusals(
     finally:
         proxied.close()
         refused.close()
+
+
+@pytest.mark.parametrize("album_list", ["getAlbumList", "getAlbumList2"])
+def test_star_refreshes_filtered_lists_without_cooling_normal_browse(protocol_world, album_list):
+    w = protocol_world
+    w.activate(w.profile)
+    album = next(song["albumId"] for song in w.songs if song["id"] in w.chosen)
+    document(w.read("unstar", [("albumId", album)]), "json")
+    container = "albumList2" if album_list.endswith("2") else "albumList"
+
+    def starred():
+        return {
+            row["id"]
+            for row in document(w.read(album_list, [("type", "starred")]), "json")[container].get(
+                "album", []
+            )
+        }
+
+    assert album not in starred()
+    browse = "getAlbumList2"
+    params = [("type", "alphabeticalByName")]
+    before = document(w.read(browse, params), "json")["albumList2"]
+    document(w.read("star", [("albumId", album)]), "json")
+    try:
+        assert album in starred()
+        after = document(w.read(browse, params), "json")["albumList2"]
+        assert [a["id"] for a in after["album"]] == [a["id"] for a in before["album"]]
+    finally:
+        document(w.read("unstar", [("albumId", album)]), "json")
+    assert album not in starred()
+
+
+def test_playback_invalidates_only_when_navidrome_records_a_play(protocol_world, monkeypatch):
+    w = protocol_world
+    w.activate(w.profile)
+    song = next(song for song in w.songs if song["id"] in w.chosen)
+    index = w.world.services.written.query_index
+    assert index is not None
+    from unittest.mock import AsyncMock
+
+    changed = AsyncMock(wraps=index.annotations_changed)
+    monkeypatch.setattr(index, "annotations_changed", changed)
+    before = document(w.read("getSong", [("id", song["id"])]), "json")["song"].get("playCount", 0)
+    document(w.read("scrobble", [("id", song["id"]), ("submission", "false")]), "json")
+    params = [("mediaId", song["id"]), ("mediaType", "song")]
+    for state, position, ignored in (
+        ("starting", 0, False),
+        ("playing", 0, False),
+        ("paused", 0, False),
+        ("stopped", 0, False),
+        ("stopped", 999999, True),
+    ):
+        document(
+            w.read(
+                "reportPlayback",
+                [
+                    *params,
+                    ("state", state),
+                    ("positionMs", position),
+                    ("ignoreScrobble", str(ignored).lower()),
+                ],
+            ),
+            "json",
+        )
+    changed.assert_not_awaited()
+    document(
+        w.read("reportPlayback", [*params, ("state", "stopped"), ("positionMs", 999999)]), "json"
+    )
+    after = document(w.read("getSong", [("id", song["id"])]), "json")["song"].get("playCount", 0)
+    assert after == before + 1
+    changed.assert_awaited_once_with(w.owner)

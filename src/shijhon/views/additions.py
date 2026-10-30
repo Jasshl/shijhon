@@ -68,12 +68,14 @@ from typing import Any, TypeVar
 
 import anyio
 
+from shijhon.catalog.addon import IDENTITY_CHANGED
 from shijhon.catalog.artwork import ArtworkIndex
 from shijhon.catalog.base import (
     Catalog,
     CatalogError,
+    PartialReleases,
     SearchResults,
-    addresses_for_clients,
+    client_artwork_template,
 )
 from shijhon.catalog.base import scope as catalog_scope
 from shijhon.catalog.editions import LibraryAlbum, dedupe_editions, merge_twins
@@ -94,6 +96,7 @@ from shijhon.matching.normalize import (
 )
 from shijhon.navidrome.client import NavidromeError, NavidromeService
 from shijhon.proxy.app import Forward, Handler, HandlerResult, RequestContext
+from shijhon.proxy.auth import Caller
 from shijhon.proxy.params import RestCall, folders_read
 from shijhon.proxy.responses import subsonic_ok
 from shijhon.proxy.upstream import Upstream
@@ -355,7 +358,7 @@ class CatalogAdditions:
         answers: list[LibraryAnswer | None] = []
 
         async def library(stop: anyio.CancelScope) -> None:
-            answer = await self._navidrome(call)
+            answer = await self._navidrome(call, caller=caller)
             answers.append(answer)
             found = await answer.parsed("searchResult3") if answer is not None else None
             if found is None or not _room(found[1], wanted):
@@ -510,20 +513,40 @@ class CatalogAdditions:
             names = {fold(a.get("name")) for a in owned_artists}
             artists = _unique(a for a in found.artists if fold(a.name) not in names)
             artists.sort(key=lambda a: fold(a.name) != query)
-            # An artist the library has is described by Navidrome.
-            addresses = self.catalog is None or addresses_for_clients(self.catalog)
-            entries = each(
-                artists,
-                lambda a: library_artists.get(fold(a.name)) or artist_entry(a, addresses=addresses),
-                "artist",
-            )
+            # Select library entries and cut first: only shown catalog artists need DNS.
             ids = {a.get("id") for a in owned_artists}
             kept = []
-            for entry in entries:  # two catalog artists may stand for one library artist
-                if entry["id"] not in ids:
-                    ids.add(entry["id"])
-                    kept.append(entry)
-            additions["artist"] = kept[:room]
+            pictures: list[tuple[dict[str, Any], CatalogArtist]] = []
+            for artist in artists:
+                native = library_artists.get(fold(artist.name))
+                entries = each(
+                    (artist,),
+                    lambda a: (
+                        library_artists.get(fold(a.name))
+                        or artist_entry(replace(a, artwork_template=None))
+                    ),
+                    "artist",
+                )
+                if not entries or entries[0]["id"] in ids:
+                    continue
+                entry = entries[0]
+                ids.add(entry["id"])
+                kept.append(entry)
+                if native is None:
+                    pictures.append((entry, artist))
+                if len(kept) >= room:
+                    break
+            if self.catalog is not None:
+
+                async def checked(entry: dict[str, Any], artist: CatalogArtist) -> None:
+                    assert self.catalog is not None
+                    template = await client_artwork_template(self.catalog, artist.artwork_template)
+                    entry.update(artist_entry(replace(artist, artwork_template=template)))
+
+                async with anyio.create_task_group() as tasks:
+                    for entry, artist in pictures:
+                        tasks.start_soon(checked, entry, artist)
+            additions["artist"] = kept
         if (room := wanted.get("album", 0) - len(owned_albums)) > 0:
             listed = {a.get("id") for a in owned_albums}
             of_songs = [s for s in owned_songs if s.get("albumId") not in listed]
@@ -640,7 +663,13 @@ class CatalogAdditions:
         try:
             answer = await self.navidrome.subsonic(
                 "search3",
-                [("query", name), ("artistCount", "100"), ("albumCount", "0"), ("songCount", "0")],
+                [
+                    ("query", name),
+                    ("artistCount", "100"),
+                    ("albumCount", "0"),
+                    ("songCount", "0"),
+                    ("musicFolderId", str(self.library_id)),
+                ],
             )
         except NavidromeError as exc:
             log.info("library artist lookup failed: %s", exc)
@@ -662,7 +691,7 @@ class CatalogAdditions:
         caller = await ctx.caller()
         if caller is None:
             return None
-        answer = await self._navidrome(call)
+        answer = await self._navidrome(call, caller=caller)
         if answer is None:
             return None
 
@@ -692,9 +721,10 @@ class CatalogAdditions:
         if native is None:
             return None
         answer = await self._navidrome(
-            call.rewritten(lambda k, v: native if k == "id" and v == text else None)
+            call.rewritten(lambda k, v: native if k == "id" and v == text else None),
+            caller=caller,
         )
-        if answer is None:
+        if answer is None or await answer.parsed("artist") is None:
             return None
 
         def releases(owned: list[dict[str, Any]], name: str) -> Awaitable[Any]:
@@ -808,10 +838,27 @@ class CatalogAdditions:
         """(A saved list at once (refreshed in the background when old); without one, the
         catalog's within the budget; while ``syncing`` (asked only when the catalog
         would be), the saved list as it is, or none - and what happened, for the log)."""
+        guard = getattr(self.catalog, "validate_identity", None)
+        if guard is not None:
+            started = self.clock()
+            allowance = self.budget if budget is None else min(budget, self.budget)
+            try:
+                with anyio.move_on_after(allowance) as checking:
+                    await guard()
+                if checking.cancel_called:
+                    return (
+                        (saved[0], "saved (identity unchecked)") if saved else (None, "timed out")
+                    )
+            except CatalogError as exc:
+                # An unreadable declaration is not evidence that a saved list is foreign.
+                if exc.reason == IDENTITY_CHANGED:
+                    return None, "failed"
+                return (saved[0], "saved (identity unchecked)") if saved else (None, "failed")
+            budget = max(0.0, allowance - (self.clock() - started))
 
         async def fetched() -> tuple[T, ...]:
             found = await fetch()
-            if save is not None:
+            if save is not None and not isinstance(found, PartialReleases):
                 try:
                     await save(key, found)
                 except Exception as exc:  # the answer is still good for this page
@@ -893,7 +940,7 @@ class CatalogAdditions:
         try:
             client = (caller.username, call.client)
             return await self._top_songs(
-                call, catalog, cid, name, count, client, report, library_id, deadline
+                call, catalog, cid, name, count, client, report, caller, library_id, deadline
             )
         finally:
             log.info("%s", report)
@@ -931,6 +978,7 @@ class CatalogAdditions:
         count: int,
         client: Client,
         report: TopSongsReport,
+        caller: Caller,
         library_id: str | None = None,
         deadline: float | None = None,
     ) -> HandlerResult:
@@ -988,7 +1036,7 @@ class CatalogAdditions:
         mine: list[dict[str, Any]] = []
         if native is not None:
             with anyio.move_on_after(left()):
-                own = await self._navidrome(asked)
+                own = await self._navidrome(asked, caller=caller)
             if own is None:  # unreachable, or not within the budget: the forward is its answer
                 return Forward(asked)
             found = await own.parsed("topSongs")
@@ -1154,12 +1202,15 @@ class CatalogAdditions:
         titles = {title_key(a.get("name")) for a in owned}
         best: tuple[CatalogRelease, ...] = ()
         shared = 0
+        partial = False
         for candidate in artists[:3]:
             releases = await catalog.artist_releases(candidate.ref.id)
+            partial |= isinstance(releases, PartialReleases)
             count = sum(1 for r in releases if title_key(r.title) in titles)
             if count > shared:
                 best, shared = releases, count
-        return best
+        # Unread pages can change which same-name artist wins, even an empty result.
+        return PartialReleases(best) if partial else best
 
     async def _within_budget(
         self,
@@ -1377,9 +1428,9 @@ class CatalogAdditions:
         folders = folders_read(call)  # (as Navidrome reads them)
         return not folders or str(self.library_id) in folders
 
-    async def _navidrome(self, call: RestCall) -> LibraryAnswer | None:
+    async def _navidrome(self, call: RestCall, *, caller: Caller) -> LibraryAnswer | None:
         """The client's request as Navidrome answers it, uncompressed and read in full."""
-        return await library_answer(self.upstream, call)
+        return await library_answer(self.upstream, call, caller=caller)
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -1432,7 +1483,8 @@ def _count(value: str | None, default: int) -> int:
 
 
 async def _as_tuple[T](found: Awaitable[Iterable[T]]) -> tuple[T, ...]:
-    return tuple(await found)
+    items = await found
+    return items if isinstance(items, tuple) else tuple(items)
 
 
 def _number(value: str | None, default: int) -> str:
@@ -1456,14 +1508,11 @@ def _guard_name(songs_only: bool) -> str:
 
 def _wanted(call: RestCall) -> dict[str, int]:
     """Requested counts of the types whose first page is asked for; empty for a sync-sized
-    request or unreadable numbers (Navidrome answers those as it does)."""
+    request. Unreadable numbers use Navidrome's defaults."""
     wanted: dict[str, int] = {}
     for kind, count_key, offset_key in _TYPES:
-        try:
-            count = int(call.get(count_key) or 20)
-            offset = int(call.get(offset_key) or 0)
-        except ValueError:
-            return {}
+        count = _count(call.get(count_key), 20)
+        offset = _count(call.get(offset_key), 0)
         if count > MAX_COUNT:
             return {}
         if offset == 0 and count > 0:

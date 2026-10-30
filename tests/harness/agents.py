@@ -112,6 +112,11 @@ def connect_agent(
             **{"scope_" + scope: "true" for scope in scopes.split()},
         },
     )
+    assert approved.status_code == 200 and 'class="agent-permissions"' in approved.text
+    approved = http.post(
+        location,
+        data={"csrf": csrf[1], "action": "allow", **{"scope_" + s: "true" for s in scopes.split()}},
+    )
     query = parse_qs(urlsplit(callback_target(approved)).query)
     assert query["state"] == ["synthetic-state"] and query["iss"] == [issuer]
     data = {

@@ -405,7 +405,7 @@ META: dict[str, dict[str, Meta]] = {
             "warm",
         ),
         "download_timeout_seconds": Meta(
-            "Download timeout", "How long fetching one whole song may take.", "downloads"
+            "Download timeout", "How long fetching one whole song may take.", "timing"
         ),
         "keep_streamed_audio": Meta(
             "Keep streamed songs",

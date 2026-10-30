@@ -400,6 +400,7 @@ class _Waiting:
     done: anyio.Event = field(default_factory=anyio.Event)
     result: str | None = "the request it waited for failed"
     decided: bool = False
+    held: bool = False  # it acquired its user's turn before ending
     detached: bool = False  # its observer ended; another request may acquire on its own
     interests: list[_Interest] = field(default_factory=list)
 
@@ -838,6 +839,9 @@ class DownloadFirst:
                 if waiting.decided:
                     yield Turn(waited=True, after=waiting.result, interest=interest)
                     return
+                if not waiting.held:
+                    waiting = self._waiting.get((user, key))
+                    continue  # cancelled in the queue: a new leader must take its turn
                 at_once = True  # it fetched nothing: this one goes on, without queueing again
                 break
         if playing or at_once:
@@ -854,6 +858,7 @@ class DownloadFirst:
         fetching = False
         try:
             async with self.limits.download(user, promoted=mine.promoted, now=now) as give_back:
+                mine.held = True
                 turn = Turn(give_back, waiting=mine, interest=interest)
                 try:
                     yield turn
@@ -1099,7 +1104,8 @@ class DownloadFirst:
                 except (OSError, subprocess.SubprocessError) as exc:
                     return f"the AAC could not be copied into an M4A ({type(exc).__name__})"
                 finally:
-                    await anyio.Path(copy).unlink(missing_ok=True)
+                    with anyio.CancelScope(shield=True):
+                        await anyio.Path(copy).unlink(missing_ok=True)
                 suffix = await anyio.to_thread.run_sync(audio_suffix, partial)
             if suffix == ".mka" and not tagmap.matroska_carries(json.loads(row["tags"])):
                 # (Several artists, say: the same audio in its codec's own container.)
@@ -1108,9 +1114,13 @@ class DownloadFirst:
                     await anyio.to_thread.run_sync(_out_of_matroska, partial, copy)
                     await anyio.Path(copy).replace(partial)
                 except (OSError, subprocess.SubprocessError) as exc:
-                    return f"its tags do not fit in Matroska, nor its audio elsewhere ({exc})"
+                    return (
+                        "its tags do not fit in Matroska, nor its audio elsewhere "
+                        f"({type(exc).__name__})"
+                    )
                 finally:
-                    await anyio.Path(copy).unlink(missing_ok=True)
+                    with anyio.CancelScope(shield=True):
+                        await anyio.Path(copy).unlink(missing_ok=True)
                 suffix = await anyio.to_thread.run_sync(
                     functools.partial(audio_suffix, partial, every=True)
                 )
@@ -1361,9 +1371,12 @@ class DownloadFirst:
                 if failure is None:
                     await anyio.Path(copy).replace(partial)
             except (OSError, subprocess.SubprocessError) as exc:
-                failure = f"its tracks could not be copied out of their fragments ({exc})"
+                failure = (
+                    f"its tracks could not be copied out of their fragments ({type(exc).__name__})"
+                )
             finally:
-                await anyio.Path(copy).unlink(missing_ok=True)
+                with anyio.CancelScope(shield=True):
+                    await anyio.Path(copy).unlink(missing_ok=True)
         elif suffix == ".oga":
             copy = partial.with_name(f".{uuid.uuid4().hex}.part")
             failure = None
@@ -1373,7 +1386,8 @@ class DownloadFirst:
             except (OSError, subprocess.SubprocessError) as exc:
                 failure = f"its Ogg FLAC could not be copied into a FLAC ({type(exc).__name__})"
             finally:
-                await anyio.Path(copy).unlink(missing_ok=True)
+                with anyio.CancelScope(shield=True):
+                    await anyio.Path(copy).unlink(missing_ok=True)
         else:
             return suffix, None
         if failure is not None:

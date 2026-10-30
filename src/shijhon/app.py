@@ -332,6 +332,12 @@ class ShijhonApp:
         deliverer = Deliverer(
             sources,
             PlaybackSettings(
+                catalog_addon=str(getattr(settings.catalog, "addon", ""))
+                if settings.catalog.kind == "addon"
+                else "",
+                catalog_identity=str(getattr(settings.catalog, "identity", ""))
+                if settings.catalog.kind == "addon"
+                else "",
                 budget_seconds=delivery.budget_seconds,
                 max_attempts=delivery.max_attempts,
                 pin_ttl_seconds=delivery.pin_ttl_seconds,
@@ -725,7 +731,9 @@ class ShijhonApp:
         # Imports also ask the catalogs of the add-ons, as the Add-ons page has them now.
         addon_catalogs = AddonCatalogs(
             sources,
-            skip=catalog.key if catalog is not None else None,
+            skip=str(getattr(settings.catalog, "addon", ""))
+            if settings.catalog.kind == "addon"
+            else None,
             timeout=settings.catalog.timeout_seconds,
             ttl=settings.catalog.cache_seconds,
             resolver=self.resolver,
@@ -883,6 +891,8 @@ class ShijhonApp:
         )
         self._opened.append(query_index.close)
         await query_index.open()
+        collection.query_index = query_index
+        collection_requests.query_index = query_index
         access = AccessService(navidrome)
         visibility = Visibility(
             self.upstream,

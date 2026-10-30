@@ -6,6 +6,10 @@
   if (source) {
     const deadline = Date.now() + 10 * 60 * 1000;
     const text = source.querySelector('[data-source-text]');
+    let dirty = false;
+    for (const event of ['input', 'change']) root.addEventListener(event, event => {
+      if (event.target.closest('form')) dirty = true;
+    });
     const pollSource = async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 12000);
@@ -15,7 +19,16 @@
         if (response.redirected && new URL(response.url).origin === location.origin) { location.assign(response.url); return; }
         if (!response.ok) throw new Error();
         const state = await response.json();
-        if (state.state === 'ready' && state.ready) { location.reload(); return; }
+        if (state.state === 'ready' && state.ready) {
+          if (!dirty) { location.reload(); return; }
+          text.textContent = 'Your library is ready. Reload results when you have finished editing. ';
+          const reload = document.createElement('button');
+          reload.type = 'button'; reload.className = 'btn btn-small';
+          reload.textContent = 'Reload results';
+          reload.addEventListener('click', () => location.reload());
+          text.append(reload);
+          return;
+        }
         if (state.failed && state.state !== 'indexing') {
           text.textContent = 'Couldn’t refresh your music. Your previous complete library is retained. Try Refresh music again.';
           again = false;

@@ -776,7 +776,8 @@ def test_no_command_is_given_a_secret_as_an_argument_or_in_its_environment(
     tools.mkdir()
     log = tmp_path / "started.log"
     names = (
-        "dirname cat sed tr tail sort grep od id mkdir rm ln mv nc uname route ipconfig ip sleep"
+        "dirname cat sed tr tail sort grep od id mkdir rm ln mv nc uname route ipconfig ip"
+        " sleep date"
     )
     real = {name: shutil.which(name) for name in names.split()}
     real["docker"] = str(setup.bin / "docker")

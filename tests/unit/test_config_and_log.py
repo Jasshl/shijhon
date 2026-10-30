@@ -197,3 +197,99 @@ def test_the_formatter_alone_keeps_a_message_on_one_line() -> None:
     assert RedactingFormatter("%(name)s: %(message)s").format(record) == (
         "shijhon.access: rest ping c=app\\nforged 200"
     )
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "invalid_toml", "unreadable", "non_utf8"])
+def test_bad_config_files_are_refused_without_a_traceback_or_values(
+    kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from shijhon.cli import restart_problem
+
+    config = tmp_path / "secret-config.toml"
+    running = load_settings(None)
+    error = {
+        "missing": "FileNotFoundError",
+        "directory": "IsADirectoryError",
+        "invalid_toml": "TOMLDecodeError",
+        "non_utf8": "UnicodeDecodeError",
+        "unreadable": "PermissionError",
+    }[kind]
+    if kind == "directory":
+        config.mkdir()
+    elif kind == "invalid_toml":
+        config.write_text('password = "private-token"\n[private-token')
+    elif kind == "non_utf8":
+        config.write_bytes(b'private-token = "\xff"')
+    elif kind == "unreadable":
+
+        def refused(*args: object, **kwargs: object) -> None:
+            raise PermissionError("private-token")
+
+        monkeypatch.setattr(Path, "open", refused)
+    with pytest.raises(SystemExit) as stopped:
+        main(["--config", str(config), "serve"])
+    assert stopped.value.code == 2
+    assert capsys.readouterr().err == (
+        f"shijhon: configuration error: the configuration file cannot be read ({error})\n"
+    )
+    assert restart_problem(config, running) == f"the configuration file cannot be read ({error})"
+
+
+def test_given_config_must_exist(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        load_settings(tmp_path / "missing.toml")
+
+
+@pytest.mark.parametrize("level", ["debug", " WARNING ", "warn", "fatal", "NOTSET"])
+def test_log_level_is_normalized(level: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SHIJHON_LOG_LEVEL", level)
+    assert load_settings().log_level == level.strip().upper()
+
+
+def test_unknown_log_level_is_a_configuration_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("SHIJHON_LOG_LEVEL", "verbose")
+    with pytest.raises(SystemExit) as stopped:
+        main(["serve"])
+    assert stopped.value.code == 2
+    error = capsys.readouterr().err
+    assert error.startswith("shijhon: configuration error in log_level:")
+    assert "Traceback" not in error and "verbose" not in error
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("server", "port", 0),
+        ("server", "port", -1),
+        ("server", "port", 65536),
+        ("server", "credential_cache_seconds", -0.1),
+        ("server", "credential_cache_seconds", float("inf")),
+        ("server", "max_parsed_body_bytes", -1),
+        ("navidrome", "library_id", 0),
+        ("navidrome", "library_id", -1),
+        ("navidrome", "timeout_seconds", 0),
+        ("navidrome", "timeout_seconds", -1),
+        ("navidrome", "timeout_seconds", float("nan")),
+    ],
+)
+def test_core_settings_refuse_values_outside_their_bounds(
+    section: str, key: str, value: int | float
+) -> None:
+    with pytest.raises(ValueError, match=key):
+        load_settings(None, **{section: {key: value}})
+
+
+def test_core_settings_accept_boundaries() -> None:
+    for port in (1, 65535):
+        settings = load_settings(
+            None,
+            server={"port": port, "credential_cache_seconds": 0, "max_parsed_body_bytes": 0},
+            navidrome={"library_id": 1, "timeout_seconds": 0.01},
+        )
+        assert settings.server.port == port
+        assert settings.server.credential_cache_seconds == 0
+        assert settings.server.max_parsed_body_bytes == 0
+        assert settings.navidrome.library_id == 1
+        assert settings.navidrome.timeout_seconds == 0.01

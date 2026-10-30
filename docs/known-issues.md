@@ -24,6 +24,10 @@
 ## Playback and downloads
 
 - **HLS links do not play.** The next add-on is asked.
+- **Navidrome's player transcoding and bitrate limits do not apply while catalog songs
+  or placeholders stream from add-ons.** They play the add-on's audio unless the app
+  asks for a `format` or `maxBitRate` in its stream request (`format=raw` keeps the
+  original audio). Once real audio is in the library, Navidrome serves it normally.
 - **The minimum audio quality covers streams, downloads and direct play through the
   transcoding extension.** A song whose file is below the listener's minimum still plays
   its file when the app asks for a conversion the add-ons' audio would need, and through
@@ -101,8 +105,9 @@
 
 ## The catalog of an add-on
 
-An add-on's catalog ([catalogs.md](catalogs.md#the-catalog-of-an-add-on)) has less
-to go on than an adapter's:
+An add-on's catalog without the optional
+[full-catalog extension](reference/add-on-protocol.md#the-full-catalog-extension)
+has less to go on than an adapter's:
 
 - **Albums partly in your library are matched less often.** The add-on sends no track
   or disc numbers, so an album whose files are numbered differently (a second disc, say)

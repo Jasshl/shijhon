@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from shijhon.catalog.base import Catalog, CatalogError
@@ -121,14 +121,96 @@ class Refresh:
                 result.refused = why
                 return result
             new, retag = await self._plan(album_id, ref_text, fresh, result)
-            stayed: set[tuple[int, int]] = set()  # positions of placeholders that did not move
-            for track, song_id, was in retag:
+            stayed: set[Position] = set()  # positions kept after a failed rewrite
+            occupied = {was for _, _, was in retag}
+            temporary_songs: set[str] = set()
+            origins = {song: was for _, song, was in retag}
+            positions = dict(origins)
+            tracks = {song: track for track, song, _ in retag}
+
+            async def restore_temporary(song_id: str, was: Position) -> Position:
+                if song_id not in temporary_songs:
+                    return was
+
+                async def restore(song: str, visiting: set[str]) -> bool:
+                    original, current = origins[song], positions[song]
+                    if original == current or song in visiting:
+                        return False
+                    visiting.add(song)
+                    occupant = next((s for s, pos in positions.items() if pos == original), None)
+                    # A later mover may already have taken the temporary mover's old
+                    # slot. Unwind that part of the cycle first, through ordinary retags
+                    # whose files/rows/scans remain recoverable at every stop.
+                    if occupant is not None and not await restore(occupant, visiting):
+                        return False
+                    restoring = tracks[song]
+                    try:
+                        await self.engine.retag(
+                            song, replace(restoring, disc=original[0], number=original[1]), fresh
+                        )
+                    except ReplaceError as exc:
+                        result.skipped.append(
+                            f"{restoring.title}: restoring its position failed ({exc})"
+                        )
+                        return False
+                    occupied.discard(current)
+                    occupied.add(original)
+                    positions[song] = original
+                    stayed.add(original)
+                    return True
+
+                await restore(song_id, set())
+                return positions[song_id]
+
+            while retag:
+                # A failed mover keeps its position, as do all movers depending on it.
+                blocked = next((r for r in retag if (r[0].disc, r[0].number) in stayed), None)
+                if blocked is not None:
+                    track, song_id, was = blocked
+                    result.skipped.append(f"{track.title}: its position is another song's")
+                    stayed.add(await restore_temporary(song_id, was))
+                    retag.remove(blocked)
+                    continue
+                ready = next(
+                    (
+                        r
+                        for r in retag
+                        if (r[0].disc, r[0].number) == r[2]
+                        or (r[0].disc, r[0].number) not in occupied
+                    ),
+                    None,
+                )
+                temporary = ready is None
+                track, song_id, was = ready or retag[0]
+                desired = track
+                if temporary:
+                    # Break a cycle at a free position. This is an ordinary recoverable
+                    # retag; a stop leaves its row/file/scan together and a later refresh
+                    # finishes the move from there.
+                    places = occupied | stayed | {(t.disc, t.number) for t in fresh.tracks}
+                    places |= {
+                        (int(s.get("discNumber") or 1), int(s.get("trackNumber") or 0))
+                        for s in await self.navidrome.songs_of_album(album_id)
+                    }
+                    number = max(n for _, n in places) + 1
+                    track = replace(track, number=number)
                 try:
-                    if await self.engine.retag(song_id, track, fresh):
-                        result.updated += 1
+                    changed = await self.engine.retag(song_id, track, fresh)
                 except ReplaceError as exc:
                     result.skipped.append(f"{track.title}: {exc}")
-                    stayed.add(was)
+                    stayed.add(await restore_temporary(song_id, was))
+                    retag.remove((desired, song_id, was))
+                else:
+                    occupied.discard(was)
+                    retag.remove((desired, song_id, was))
+                    positions[song_id] = (track.disc, track.number)
+                    if temporary:
+                        temporary_songs.add(song_id)
+                        position = (track.disc, track.number)
+                        occupied.add(position)
+                        retag.append((desired, song_id, position))
+                    elif changed:
+                        result.updated += 1
             clash = [t for t in new if (t.disc, t.number) in stayed]
             for track in clash:
                 result.skipped.append(f"{track.title}: its position is another song's")
@@ -227,7 +309,7 @@ class Refresh:
                 continue
             if row["state"] == "placeholder":
                 movable[str(row["song_id"])] = (track, row)
-            elif _changed(track, row):
+            elif _changed(track, row, fresh.clean):
                 result.skipped.append(f"{track.title}: delivered audio is kept as it is")
         fixed: dict[Position, str] = {
             (int(s.get("discNumber") or 1), int(s.get("trackNumber") or 0)): str(s["id"])
@@ -260,11 +342,11 @@ class Refresh:
         for track, song_id in wanted:
             key = str(track.ref)
             if key in blocked:
-                if song_id is None or _changed(track, movable[song_id][1]):
+                if song_id is None or _changed(track, movable[song_id][1], fresh.clean):
                     result.skipped.append(f"{track.title}: its position is another song's")
             elif song_id is None:
                 new.append(track)
-            elif _changed(track, (row := movable[song_id][1])):
+            elif _changed(track, (row := movable[song_id][1]), fresh.clean):
                 retag.append((track, song_id, (int(row["disc"]), int(row["track"]))))
         return new, retag
 
@@ -284,7 +366,7 @@ class Refresh:
         ]
 
 
-def _changed(track: CatalogTrack, row: Any) -> bool:
+def _changed(track: CatalogTrack, row: Any, release_clean: bool = False) -> bool:
     """Whether the catalog's track differs from the placeholder's (as far as the
     placeholder shows it)."""
     tags = json.loads(row["tags"] or "{}")
@@ -297,5 +379,6 @@ def _changed(track: CatalogTrack, row: Any) -> bool:
         or track.number != row["track"]
         or track.duration_ms != row["duration_ms"]
         or tags.get("artists") != artists
-        or (track.explicit != (tags.get("itunesadvisory") == ["1"]))
+        or tags.get("itunesadvisory")
+        != (["1"] if track.explicit else ["2"] if track.clean or release_clean else None)
     )

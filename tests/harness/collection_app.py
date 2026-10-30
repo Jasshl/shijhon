@@ -12,7 +12,7 @@ from typing import Any
 import anyio
 
 from shijhon.access import AccessService
-from shijhon.collection.contracts import IndexState, Mode
+from shijhon.collection.contracts import IndexState
 from shijhon.collection.index import structural_metadata
 from shijhon.collection.native import NativeVisibility
 from shijhon.collection.origins import Origins
@@ -30,12 +30,6 @@ from tests.harness.navidrome import NavidromeInstance
 class CollectionReadModel:
     def __init__(self, store: Store) -> None:
         self.store = store
-
-    async def mode(self, owner_id: str) -> Mode:
-        row = await self.store.fetchone(
-            "SELECT mode FROM collection_preferences WHERE owner_id=?", [owner_id]
-        )
-        return row["mode"] if row else "saved"
 
     async def index_state(self, owner_id: str, library_id: str) -> IndexState:
         row = await self.store.fetchone(

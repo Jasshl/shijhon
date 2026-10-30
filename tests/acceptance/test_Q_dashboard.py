@@ -283,7 +283,7 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.2.1"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.3.0"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 
@@ -613,7 +613,7 @@ def test_restart_only_settings_say_so(world: DeliveryWorld, admin: Browser) -> N
         assert saved_rows(world, "catalog")["region"] == '"gb"'
         page = admin.get("addons").text
         assert "<strong>Restart needed.</strong> 1 saved setting applies after Shijhon" in page
-        assert "restarts: region (Catalog)." in page
+        assert "restarts: Region (Catalog)." in page
         assert "Region, saved" in admin.get("diagnostics").text
         assert admin.submit("catalog", {"artwork_size": "600"}).status_code == 303
         assert world.services.commits is not None
@@ -662,7 +662,7 @@ def test_choosing_another_catalog_shows_its_settings_and_what_it_says(
         assert 'name="shown-kind" value="demo"' in page
         assert 'id="catalog-token"' not in page and 'id="catalog-region"' not in page
         assert "its artists, albums and songs are invented" in page
-        assert "restarts: catalog (Catalog)." in admin.get("addons").text
+        assert "restarts: Catalog (Catalog)." in admin.get("addons").text
         # The sample catalog's token typed into the demo's page is not saved as anything.
         admin.submit("catalog", {"token": SECRET_TOKEN})
         assert saved_rows(world, "catalog") == {"kind": '"demo"'}
@@ -1382,7 +1382,7 @@ def test_the_token_service_headers_stay_with_its_host(world: DeliveryWorld, admi
         other = "https://other.example.invalid/issue"
         assert admin.submit("catalog", {"token_url": other}).status_code == 303
         page = admin.get("catalog").text
-        assert "Not sent: token service headers" in page and SECRET_TOKEN not in page
+        assert "Not sent: Token service headers" in page and SECRET_TOKEN not in page
     finally:
         admin.submit("catalog", {"token_url-clear": "true"})
         app.configured = configured
@@ -1858,7 +1858,7 @@ def test_handing_the_addon_list_back_waits_for_a_restart(
         assert saved_rows(world, "addons") == {}
         page = admin.get("addons").text
         assert "applies after Shijhon restarts" in page
-        assert "add-on list from the configuration file" in page  # the restart banner
+        assert "Add-on list from the configuration file" in page  # the restart banner
     finally:
         world.app.dashboard.addons_handed_back = False
         world.clear_sources()
@@ -1980,3 +1980,70 @@ def test_a_pass_mode_without_a_pass_waits_for_a_restart(
     finally:
         admin.submit("library", {"library_pass": "dry_run"}, action="library/pass")
     assert "library_pass" not in saved_rows(world, "fill")
+
+
+def test_native_login_refreshes_salt_without_revoking_prior_credentials(
+    world: DeliveryWorld,
+) -> None:
+    """A new dashboard login must not invalidate playlist work holding the first pair."""
+    first = httpx.post(
+        world.nd.base_url + "/auth/login",
+        json={"username": ADMIN_USER, "password": ADMIN_PASSWORD},
+    ).json()
+    second = httpx.post(
+        world.nd.base_url + "/auth/login",
+        json={"username": ADMIN_USER, "password": ADMIN_PASSWORD},
+    ).json()
+    assert first["subsonicSalt"] != second["subsonicSalt"]
+    for login in (first, second):
+        response = httpx.get(
+            world.nd.base_url + "/rest/ping",
+            params={
+                "u": ADMIN_USER,
+                "t": login["subsonicToken"],
+                "s": login["subsonicSalt"],
+                "v": "1.16.1",
+                "c": "dashboard-test",
+                "f": "json",
+            },
+        )
+        assert response.json()["subsonic-response"]["status"] == "ok"
+
+
+def test_head_on_every_combined_page_is_read_only(world: DeliveryWorld, admin: Browser) -> None:
+    """Exercise Starlette's implicit HEAD route with action-looking query fields."""
+    routes = world.app.dashboard.app.routes[0].routes
+    combined = [r for r in routes if getattr(r, "methods", set()) >= {"GET", "POST"}]
+    assert len(combined) >= 13
+
+    async def saved_state():
+        store = world.services.sources.store
+        tables = (
+            "sources",
+            "saved_settings",
+            "playlist_mixes",
+            "playlist_runs",
+            "collection_profiles",
+            "collection_operations",
+            "collection_preferences",
+        )
+        return {
+            table: [
+                tuple(r)
+                for r in await store.fetchall(f"SELECT * FROM {table}")  # noqa: S608 - fixed tables
+            ]
+            for table in tables
+        }
+
+    for route in combined:
+        path = PATH + re.sub(r"\{[^}]+\}", "missing", route.path)
+        read = admin.http.get(path)
+        assert read.status_code < 500, path
+        before = world.server.call(saved_state)
+        answer = admin.http.head(
+            path,
+            params={"action": "create_profile", "name": "Must not be created", "profile_id": "all"},
+            headers={"sec-fetch-site": "cross-site"},
+        )
+        assert answer.status_code < 500, path
+        assert world.server.call(saved_state) == before, path

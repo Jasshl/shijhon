@@ -740,3 +740,10 @@ async def test_a_record_added_while_an_answer_is_made_does_not_break_it() -> Non
     finally:
         stop.set()
         thread.join()
+
+
+def test_symbol_only_album_titles_do_not_merge() -> None:
+    assert cards(
+        release("question", "?", "2020", 10),
+        release("dots", "...", "2020", 10),
+    ) == ["question", "dots"]

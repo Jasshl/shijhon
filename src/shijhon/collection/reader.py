@@ -154,8 +154,8 @@ class CallerLibrary:
                 raise CollectionError("The native recording could not be verified.") from None
             row = answer
             absent = row.get("missing", False) is True
-        current, current_token = await self._native(owner_id)
-        if current != principal or current_token != token:
+        current, _ = await self._native(owner_id)
+        if current != principal:
             raise CollectionError("Your library access changed. Retry this selection.")
         if absent:
             # The same verified caller before and after: the song is not there.
@@ -173,7 +173,8 @@ class CallerLibrary:
         principal, token = await self._native(owner_id)
         found: set[tuple[str, str]] = set()
         for kind, path in (("song", "/api/song"), ("album", "/api/album")):
-            offset = 0
+            offset, expected = 0, None
+            seen: set[str] = set()
             while True:
                 total = 0
 
@@ -205,15 +206,24 @@ class CallerLibrary:
                         raise ValueError
                 except ValueError:
                     raise CollectionError("Navidrome did not list the favorites.") from None
-                found |= {
-                    (kind, row["id"])
-                    for row in rows
-                    if isinstance(row, dict)
-                    and row.get("starred") is True
-                    and isinstance(row.get("id"), str)
-                }
+                if expected is not None and total != expected:
+                    raise CollectionError("The favorites changed while they were read. Try again.")
+                expected = total
+                if len(rows) != min(500, total - offset):
+                    raise CollectionError("Navidrome did not list all the favorites. Try again.")
+                for row in rows:
+                    if (
+                        not isinstance(row, dict)
+                        or row.get("starred") is not True
+                        or not isinstance(row.get("id"), str)
+                        or not 0 < len(row["id"]) <= 300
+                        or row["id"] in seen
+                    ):
+                        raise CollectionError("Navidrome returned invalid favorites. Try again.")
+                    seen.add(row["id"])
+                    found.add((kind, row["id"]))
                 offset += len(rows)
-                if not rows or offset >= total:
+                if offset == total:
                     break
         current, _ = await self._native(owner_id)
         if current != principal:
@@ -388,8 +398,8 @@ class CallerLibrary:
                 raise ValueError
         except (TypeError, ValueError, KeyError):
             raise CollectionError("Navidrome returned invalid imported-file evidence.") from None
-        current, current_token = await self._native(owner_id)
-        if current != principal or current_token != token:
+        current, _ = await self._native(owner_id)
+        if current != principal:
             raise CollectionError("Your library access changed. Check this import again.")
         return matches[0] if matches else None
 
@@ -453,8 +463,8 @@ class CallerLibrary:
                     raise ValueError
         except (TypeError, ValueError, KeyError):
             raise CollectionError("Navidrome returned invalid imported-file evidence.") from None
-        current, current_token = await self._native(owner_id)
-        if current != principal or current_token != token:
+        current, _ = await self._native(owner_id)
+        if current != principal:
             raise CollectionError("Your library access changed. Check this import again.")
         return not any(row["path"] == relative_path for row in rows)
 

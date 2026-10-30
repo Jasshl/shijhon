@@ -302,6 +302,36 @@ def test_view_suffix_post_and_gzip(world: World) -> None:
         )
 
 
+@pytest.mark.parametrize("method", ["getIndexes", "getAlbumList2", "search3"])
+def test_cached_lists_keep_current_native_metadata(world: World, method: str) -> None:
+    direct, proxied = world.clients()
+    params = {"getIndexes": {}, "getAlbumList2": {"type": "alphabeticalByName"},
+              "search3": {"query": '""'}}[method]  # fmt: skip
+    # Warm the selected source before a write made directly in Navidrome, as by
+    # its scanner or another device. No Shijhon write invalidates this cache.
+    proxied.ok(method, params)
+    before = canonical_body(direct.request(method, params))
+    try:
+        if method != "getIndexes":
+            direct.ok("setRating", {"id": world.album, "rating": 3})
+        else:
+            # A new scan changes the index timestamp without changing its artists.
+            time.sleep(1.05)  # Navidrome's file index has one-second precision.
+            world.navidrome.scan(full=True)
+        assert canonical_body(direct.request(method, params)) != before
+        for fmt in ("json", "xml"):
+            assert_same(
+                direct.request(method, params, fmt=fmt),
+                proxied.request(method, params, fmt=fmt),
+                selected=True,
+            )
+    finally:
+        if method != "getIndexes":
+            direct.ok("setRating", {"id": world.album, "rating": 0})
+        direct.close()
+        proxied.close()
+
+
 @pytest.mark.parametrize("size", [None, "64"])
 def test_cover_art_identical(world: World, size: str | None) -> None:
     direct, proxied = world.clients()

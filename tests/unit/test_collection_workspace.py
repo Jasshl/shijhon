@@ -65,14 +65,19 @@ class Dashboard:
         )
         self.host = SimpleNamespace(try_spawn=lambda work: False)
 
-    def _page(self, handler, form_reader=None):
+    def _personal_page(self, handler, form_reader=None, cache_identity=False):
         async def wrapped(request):
             if request.method == "POST":
-                request.state.form = (
-                    await form_reader(request)
-                    if form_reader
-                    else dict(parse_qsl((await request.body()).decode()))
-                )
+                from shijhon.dashboard.app import Refused
+
+                try:
+                    request.state.form = (
+                        await form_reader(request)
+                        if form_reader
+                        else dict(parse_qsl((await request.body()).decode()))
+                    )
+                except Refused as refused:
+                    return refused.response
             return await handler(
                 request, Session("test", "Listener", "csrf", 9999999999, self.owner)
             )
@@ -439,7 +444,6 @@ async def test_return_context_cannot_change_operation_target_or_review_scope(wor
     [
         {"profile_id": "original"},
         {"profile_id": "all", "origin": "imported"},
-        {"profile_id": "all", "origin": "own"},  # an old link: Imported
     ],
 )
 async def test_original_and_imported_music_can_be_chosen_like_any_other(mixed_workspace, params):
@@ -951,16 +955,16 @@ async def test_new_personal_default_brings_music_and_every_library_is_editable(
     assert "Your imports stay included" not in available.text
     assert 'value="imported"' in available.text and 'value="catalog"' in available.text
     assert 'value="own"' not in available.text and 'value="shared"' not in available.text
-    # Another account's imports are choices on the server, as old "shared" links open.
-    shared = await client.get("/shijhon/collection?view=all&origin=shared&scope=song")
+    # Another account's imports are choices on the server.
+    shared = await client.get("/shijhon/collection?view=all&origin=imported&scope=song")
     assert '<option value="imported" selected>Imported</option>' in shared.text
     assert "data-row-select" in shared.text and "Add to All" in shared.text
     assert "Select Song 1 by Glass Orchard" in shared.text
     assert "Select Echo by Glass Orchard from Cloud House" in shared.text
     assert "from Second Pressing" not in shared.text
-    # Old physical-source bookmarks open imported music on the server.
+    # Removed source names are refused rather than mapped to another filter.
     physical = await client.get("/shijhon/collection?view=original&origin=original&scope=song")
-    assert "Select Song 1 by Glass Orchard" in physical.text
+    assert "Choose a valid collection filter and page." in physical.text
     # The account's own import brings its album into All whole (the album's other imported
     # files too), and can be removed by hand.
     own = await client.get("/shijhon/collection?origin=imported&scope=song")
@@ -1233,9 +1237,15 @@ async def test_switching_to_or_from_the_server_resets_song_scope_and_page_withou
     assert parse_query({"view": "original", "pool": "personal"}).pool == "server"
     assert parse_query({"view": "saved", "pool": "server"}).pool == "personal"
     assert parse_query({"view": "unsaved", "pool": "server"}).pool == "personal"
-    assert [parse_query({"origin": o}).origin for o in ("own", "shared", "original")] == [
-        "imported"
-    ] * 3
+    for fields in ({"origin": o} for o in ("own", "shared", "original", "unknown")):
+        with pytest.raises(CollectionError):
+            parse_query(fields)
+    with pytest.raises(CollectionError):
+        parse_query({"sort": "newest"})
+    from shijhon.collection.contracts import Query
+
+    with pytest.raises(CollectionError):
+        Query(sort="newest")
     with pytest.raises(CollectionError):
         parse_query({"show": "everything"})
 
@@ -1419,3 +1429,39 @@ async def test_archived_profile_restore_keeps_personal_browse_context(workspace)
         "scope": "artist",
         "layout": "list",
     }
+
+
+@pytest.mark.parametrize(
+    "action", ["create_profile", "activate", "rename", "archive", "restore", "refresh"]
+)
+async def test_head_collection_query_never_performs_actions(workspace, monkeypatch, action):
+    from unittest.mock import AsyncMock
+
+    service, _access, client = workspace
+    writes = {}
+    for method in (
+        "create_profile",
+        "activate_profile",
+        "rename_profile",
+        "archive_profile",
+        "refresh",
+    ):
+        writes[method] = AsyncMock(side_effect=AssertionError("HEAD performed an action"))
+        monkeypatch.setattr(service, method, writes[method])
+    response = await client.head(
+        "/shijhon/collection", params={"action": action, "profile_id": "all", "name": "Unwanted"}
+    )
+    assert response.status_code == 200
+    for write in writes.values():
+        write.assert_not_called()
+
+
+@pytest.mark.parametrize("depth", [2, 2000])
+async def test_deeply_nested_selection_shows_the_collection_error(workspace, depth):
+    _service, _access, client = workspace
+    response = await client.post(
+        "/shijhon/collection",
+        data={"action": "save", "selected": "[" * depth + "]" * depth},
+    )
+    assert response.status_code == 200
+    assert "Select rows and try again." in response.text

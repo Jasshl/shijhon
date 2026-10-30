@@ -20,7 +20,9 @@ Submit `prepare_playlist_audio` with the native `playlist_id` and one unique
 `idempotency_key`. Retain both exact values and the returned batch ID. After a
 lost response, replay those same values to recover the original batch; a changed
 playlist ID conflicts. A playlist edited later does not change the saved snapshot.
-This action does not change playlist membership or save catalog albums.
+This action keeps playlist membership as it is. Its catalog songs bring their albums
+into the person's Shijhon library and All through recorded preparation activity;
+this is separate from explicitly saving an album on the Collection page.
 
 Read `get_audio_preparation` with `status` permission. Use bounded polling, up to
 30 checks separated by at least two seconds, then report ongoing work with its

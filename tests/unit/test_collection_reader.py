@@ -338,7 +338,6 @@ async def test_import_absence_includes_missing_rows_and_exact_prefix_neighbours(
         "expired",
         "changed-owner",
         "changed-library",
-        "changed-token",
     ],
 )
 async def test_import_absence_never_uses_unbound_or_incomplete_negative_evidence(failure):
@@ -371,10 +370,6 @@ async def test_import_absence_never_uses_unbound_or_incomplete_negative_evidence
         ]
 
     def upstream(request):
-        if failure == "changed-token":
-            source.remember(OWNER, "replacement-token")
-            source.access.verify_native.side_effect = None
-            source.access.verify_native.return_value = OWNER
         return httpx.Response(200, headers={"x-total-count": total}, json=rows)
 
     await source.http.aclose()
@@ -418,3 +413,89 @@ async def test_prompt_library_context_uses_selected_names_without_broad_native_r
     result = await context(service, connection, history=False, library=True)
     assert result == {"library": provider.return_value}
     provider.assert_awaited_once_with("owner-a", 100)
+
+
+@pytest.mark.parametrize("failure", ["total", "duplicate", "empty", "short", "invalid"])
+async def test_inconsistent_native_favorites_keep_previous_set_and_retry(tmp_path, failure):
+    import anyio
+
+    from shijhon.collection.reasons import Reasons
+    from shijhon.store import Store
+
+    source = reader()
+    broken = True
+
+    def upstream(request):
+        offset = int(request.url.params["_start"])
+        if request.url.path == "/api/album":
+            return httpx.Response(200, headers={"x-total-count": "0"}, json=[])
+        rows = [{"id": f"s{i}", "starred": True} for i in range(offset, min(offset + 500, 501))]
+        total = 501
+        if broken:
+            if offset and failure == "total":
+                total = 502
+            if offset and failure == "duplicate":
+                rows[0]["id"] = "s0"
+            if offset and failure == "empty":
+                rows = []
+            if not offset and failure == "short":
+                rows.pop()
+            if offset and failure == "invalid":
+                rows[0]["starred"] = False
+        return httpx.Response(200, headers={"x-total-count": str(total)}, json=rows)
+
+    await source.http.aclose()
+    source.http = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    store = await Store.open(tmp_path / "favorites.db")
+    try:
+        await store.execute("INSERT INTO collection_favorites VALUES ('owner-a','1','song','old')")
+        async with anyio.create_task_group() as group:
+            reasons = Reasons(store, "1", None, lambda work: group.start_soon(work) or True)
+            await reasons.due_with("owner-a", lambda: source.starred("owner-a"))
+            rows = await store.fetchall("SELECT item_id FROM collection_favorites")
+            assert [row["item_id"] for row in rows] == ["old"]
+            assert reasons._due["owner-a"] > reader_module.time.monotonic()
+            assert not await store.fetchone("SELECT 1 FROM collection_favorites_read")
+            broken = False
+            reasons._due["owner-a"] = 0
+            await reasons.due_with("owner-a", lambda: source.starred("owner-a"))
+            rows = await store.fetchall("SELECT item_id FROM collection_favorites")
+            assert {row["item_id"] for row in rows} == {f"s{i}" for i in range(501)}
+    finally:
+        await source.aclose()
+        await store.close()
+
+
+@pytest.mark.parametrize("operation", ["song", "starred", "imported_file", "imported_file_absent"])
+async def test_native_token_refresh_during_reads_keeps_the_same_principal(operation):
+    source = reader()
+    calls = 0
+
+    def upstream(request):
+        nonlocal calls
+        calls += 1
+        source.remember(OWNER, f"refreshed-{calls}")
+        row = {
+            "id": "one",
+            "libraryId": 1,
+            "path": "_imports/one.flac",
+            "size": 10,
+            "starred": True,
+        }
+        body = row if operation == "song" else [row] if operation == "starred" else []
+        return httpx.Response(200, headers={"x-total-count": str(len(body))}, json=body)
+
+    await source.http.aclose()
+    source.http = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    try:
+        if operation == "song":
+            assert (await source.song("owner-a", "1", "one"))["id"] == "one"
+        elif operation == "starred":
+            assert await source.starred("owner-a") == {("song", "one"), ("album", "one")}
+        elif operation == "imported_file":
+            assert await source.imported_file("owner-a", "1", "_imports/one.flac") is None
+        else:
+            assert await source.imported_file_absent("owner-a", "1", "_imports/one.flac")
+        assert source.access.verify_native.call_args.args == (f"refreshed-{calls}",)
+    finally:
+        await source.aclose()

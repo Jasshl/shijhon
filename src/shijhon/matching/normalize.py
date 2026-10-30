@@ -48,7 +48,10 @@ _DASH_MARKER = _dashed(_MARKER_WORDS)
 _KIND = _bracketed(r"single|ep")
 _FEAT = re.compile(r"[\(\[]?\s*\b(feat\.?|featuring|ft\.)\s+[^\)\]]*[\)\]]?", re.IGNORECASE)
 _KIND_SUFFIX = re.compile(r"\s+-\s+(single|ep)\s*$", re.IGNORECASE)
-_ARTIST_SPLIT = re.compile(r"\s*(?:,|&|\band\b|\bx\b|;|/|\bfeat\.?|\bfeaturing\b|\bft\.?)\s*", re.I)
+_ARTIST_SPLIT = re.compile(
+    r"\s*(?:,|&|\band\b|\bx\b|;|/|\b(?:featuring|feat|ft)\b(?:\.\s*|\s+)(?=\S))\s*",
+    re.I,
+)
 
 
 def fold(text: str | None) -> str:
@@ -65,12 +68,14 @@ def title_key(title: str | None) -> str:
     text = _DASH_MARKER.sub("", text)
     text = _MARKER.sub(" ", text)
     text = _KIND.sub(" ", text)
-    return fold(text) or fold(title)
+    return fold(text) or fold(title) or (title or "").strip().casefold()
 
 
 def name_key(title: str | None) -> str:
     """A single's or EP's title: only a " - Single"/" - EP" suffix is dropped."""
-    return fold(_KIND_SUFFIX.sub("", title or "")) or fold(title)
+    return (
+        fold(_KIND_SUFFIX.sub("", title or "")) or fold(title) or (title or "").strip().casefold()
+    )
 
 
 def edition_marked(title: str | None) -> bool:
@@ -202,7 +207,7 @@ def recording_key(title: str | None) -> str:
     text = _CREDIT.sub(" ", _KIND_SUFFIX.sub("", title or ""))
     text = _BRACKET.sub(_same_audio(" "), text)
     text = _DASH_SUFFIX.sub(_same_audio(""), text)
-    return fold(text) or fold(title)
+    return fold(text) or fold(title) or (title or "").strip().casefold()
 
 
 def artist_names(credit: str | None) -> set[str]:
@@ -233,7 +238,7 @@ def same_artist(a: str | None, b: str | None) -> bool:
 
 def same_title(a: str | None, b: str | None) -> bool:
     """The same recording's title (``recording_key``)."""
-    return recording_key(a) == recording_key(b)
+    return bool(recording_key(a)) and recording_key(a) == recording_key(b)
 
 
 def close_duration(a_ms: int | None, b_ms: int | None, tolerance_ms: int = 3000) -> bool:

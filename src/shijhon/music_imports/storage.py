@@ -109,12 +109,15 @@ class Storage:
             try:
                 marker = os.open(".import-root", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self.fd)
             except FileNotFoundError:
-                if set(os.listdir(self.fd)) != {".import-lock"}:
+                if set(os.listdir(self.fd)) - {".import-lock", ".import-root.stage"}:
                     raise ImportError(
                         "storage", "The imports root is not an empty dedicated root."
                     ) from None
+                # A stop may leave an incomplete private stage, never a partial marker.
+                with suppress(FileNotFoundError):
+                    os.unlink(".import-root.stage", dir_fd=self.fd)
                 marker = os.open(
-                    ".import-root",
+                    ".import-root.stage",
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                     0o600,
                     dir_fd=self.fd,
@@ -124,6 +127,9 @@ class Storage:
                     os.fsync(marker)
                 finally:
                     os.close(marker)
+                os.rename(
+                    ".import-root.stage", ".import-root", src_dir_fd=self.fd, dst_dir_fd=self.fd
+                )
                 os.fsync(self.fd)
             else:
                 try:
@@ -135,6 +141,8 @@ class Storage:
                         raise ImportError("storage", "This imports root belongs to other state.")
                 finally:
                     os.close(marker)
+            with suppress(FileNotFoundError):
+                os.unlink(".import-root.stage", dir_fd=self.fd)
             with suppress(FileExistsError):
                 os.mkdir(".incoming", 0o700, dir_fd=self.fd)
             self.incoming = os.open(".incoming", _DIRECTORY, dir_fd=self.fd)
@@ -280,15 +288,29 @@ class Storage:
         except FileNotFoundError:
             pass
 
+    def discard_unpublished(self, name: str) -> None:
+        """Delete only a private, unlinked received file; never a published inode."""
+        if not _NAME.fullmatch(name):
+            raise ImportError("storage", "The import storage receipt is invalid.")
+        self.check()
+        try:
+            info = os.stat(name, dir_fd=self.incoming, follow_symlinks=False)
+        except FileNotFoundError:
+            # A previous unlink may have stopped before its directory was synced.
+            os.fsync(self.incoming)
+            return
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ImportError("storage", "An unpublished import file changed unexpectedly.")
+        self.discard_attempt(name)
+
     def holds(self, final: str, staging: str, size: int, digest: str) -> bool:
-        """Whether the published file ``final`` still holds exactly an earlier import's
-        bytes: ``size`` bytes of SHA-256 ``digest``. Its retained ``staging`` file itself
-        (the same inode) is taken as it is; any other file of that size at that path - one
-        put in its place, say - is read (at most ``size`` bytes) and holds them when its
-        digest is the same. False when it is gone, or of another size. Anything else at
-        that path - such a file with other bytes, something that is not a file, a file
-        changing while it is read - is neither: it raises (``identity``), as does a changed
-        imports root (``storage``)."""
+        """Whether the published file still holds ``size`` bytes of SHA-256 ``digest``.
+
+        Hash every file, including a link to the retained staging inode: in-place
+        edits also change that link. False when gone or of another size. Other
+        bytes, non-files or changes during reading raise ``identity``; a changed
+        imports root raises ``storage``.
+        """
         if not _NAME.fullmatch(staging):
             raise ImportError("storage", "The import storage receipt is invalid.")
         self.check()
@@ -310,12 +332,6 @@ class Storage:
                 raise ImportError("identity", _UNTOLD)
             if before.st_size != size:
                 return False
-            try:
-                kept = os.stat(staging, dir_fd=self.incoming, follow_symlinks=False)
-            except FileNotFoundError:
-                kept = None
-            if kept is not None and (kept.st_dev, kept.st_ino) == (before.st_dev, before.st_ino):
-                return True
             hashed = hashlib.sha256()
             count = 0
             while chunk := os.read(descriptor, 1024 * 1024):

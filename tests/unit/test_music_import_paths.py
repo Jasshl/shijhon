@@ -132,14 +132,102 @@ async def test_published_directories_are_scannable_with_private_umask(harness, i
     assert destination.stat().st_mode & 0o777 == 0o644
 
 
-@pytest.mark.parametrize("path", [".Song.flac", ".git/Song.flac", "lost+found/Song.flac"])
-async def test_native_ignored_paths_are_explicit_before_upload(harness, path):
-    job = await declared(harness, [ManifestEntry("file", path, len(audio()))])
-    assert job["rejected_files"] == 1
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".Song.flac",
+        ".git/Song.flac",
+        ".Hidden/Song.flac",
+        "Visible/.Nested/Song.flac",
+        "lost+found/Song.flac",
+    ],
+)
+async def test_native_ignored_paths_get_visible_destinations(harness, path):
+    from shijhon.music_imports.model import scanner_ignored_path
+
+    h = harness
+    job = await declared(h, [ManifestEntry("file", path, len(audio()))])
+    assert job["rejected_files"] == 0
     item = job["items"][0]
-    assert item["error"] == "native_ignored" and item["warnings"]
     assert item["path"] == path
-    row = await harness.store.fetchone(
-        "SELECT reserved_size FROM music_import_items WHERE id=?", [item["id"]]
+    await h.service.receive("a", job["id"], item["id"], 0, chunks(audio()))
+    job = await freeze(h, "a", job["id"])
+    # A second review must preserve the allocated destination as well.
+    job = await freeze(h, "a", job["id"])
+    await h.service.approve("a", job["id"], job["revision"], "go")
+    assert await h.service.tick()
+    row = await h.service._item(job["id"], item["id"])
+    assert not scanner_ignored_path(row["final_name"])
+    assert row["final_name"] == row["source_name"]
+    assert (h.root / "_imports" / row["final_name"]).read_bytes() == audio()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_visible_names_do_not_merge_source_folders_across_pages_and_restart(harness, reverse):
+    h = harness
+    job = await h.service.create("a", "hidden-collisions")
+    paths = [
+        ".Velvet Comet/One.flac",
+        "Velvet Comet/Two.flac",
+        ".Velvet Comet/.Three.flac",
+        "Velvet Comet (2)/Four.flac",
+    ]
+    if reverse:
+        paths.reverse()
+    for n, path in enumerate(paths):
+        await h.service.declare("a", job["id"], str(n), [ManifestEntry(str(n), path, 4)])
+        await h.service.aclose()
+        h.service = h.build()
+        await h.service.initialize()
+    rows = await h.store.fetchall("SELECT display_path,final_name FROM music_import_items")
+    targets = {r["display_path"]: r["final_name"] for r in rows}
+    hidden = targets[".Velvet Comet/One.flac"].rsplit("/", 1)[0]
+    assert targets[".Velvet Comet/.Three.flac"].rsplit("/", 1)[0] == hidden
+    assert len({r["final_name"].rsplit("/", 1)[0] for r in rows}) == 3
+    assert len({r["final_name"].casefold() for r in rows}) == 4
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("Folder/.Song.flac", "Folder/Song.flac"),
+        (".Café/One.flac", "Cafe\u0301/Two.flac"),
+        (".Album.flac", "Album.flac/Song.flac"),
+        ("." + "é" * 124 + ".flac", "é" * 124 + ".flac"),
+    ],
+)
+async def test_visible_destination_collisions_keep_safe_names_and_audio_suffixes(
+    harness, first, second
+):
+    from shijhon.music_imports.model import relative_path, scanner_ignored_path
+
+    job = await declared(harness, [ManifestEntry("one", first, 1), ManifestEntry("two", second, 1)])
+    rows = await harness.store.fetchall(
+        "SELECT final_name FROM music_import_items WHERE job_id=?", [job["id"]]
     )
-    assert row["reserved_size"] == 0
+    names = {row["final_name"] for row in rows}
+    assert len(names) == 2
+    for name in names:
+        assert relative_path(name) == name and not scanner_ignored_path(name)
+        assert name.endswith(".flac")
+
+
+async def test_same_inode_duplicate_must_still_have_the_recorded_digest(harness):
+    import hashlib
+
+    h = harness
+    name = "a" * 32 + ".part"
+    final = "batch-" + "b" * 32 + "/Song.flac"
+    original = b"original audio"
+    descriptor = h.service.storage.file(name, create=True)
+    os.write(descriptor, original)
+    os.close(descriptor)
+    h.service.storage.place(name, final)
+    digest = hashlib.sha256(original).hexdigest()
+    assert h.service.storage.holds(final, name, len(original), digest)
+    path = h.root / "_imports" / final
+    with path.open("r+b") as changed:
+        changed.write(b"modified audio")
+    with pytest.raises(ImportError) as error:
+        h.service.storage.holds(final, name, len(original), digest)
+    assert error.value.code == "identity"

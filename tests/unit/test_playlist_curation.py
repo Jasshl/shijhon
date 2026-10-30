@@ -1038,7 +1038,13 @@ async def agent_request(
         cadence="daily",
         preview=True,
     )
-    ident, _ = await service.requests.create("owner", key, spec, creator=digest(token))
+    ident, _ = await service.requests.create(
+        "owner",
+        key,
+        spec,
+        creator=digest(token),
+        scopes=["create", "status", *(["library"] if library else [])],
+    )
     return ident, digest(token)
 
 

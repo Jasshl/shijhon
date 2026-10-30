@@ -35,16 +35,16 @@
     held: 'Not added: it would show as a second album of the same name.',
     unsure: 'Added. It may already be in the library.',
     copy: 'Added to the library\'s album as a copy with that album\'s details. Your file stays unchanged.',
-    low_quality: 'Below your minimum quality: the catalog\'s version is added instead and plays from the add-ons.'
+    low_quality: 'Below your lowest quality: the catalog\'s version is added instead; it plays when an add-on has it.'
   };
   // Where the file's audio is for the catalog song it matched (music_imports/catalog_audio.py).
   const catalogAudio = {
     pending: 'Your file will play for this catalog song shortly.',
     placed: 'Your file now plays for this catalog song.',
     kept: 'The catalog song already has audio of its own: your file was not used for it.',
-    untaggable: 'Your file\'s format cannot carry this catalog song: it still plays from the add-ons.',
-    low_quality: 'Your file is below your lowest quality: the catalog song still plays from the add-ons.',
-    failed: 'Your file could not be put in place: the catalog song still plays from the add-ons.'
+    untaggable: 'Your file\'s format cannot carry this catalog song: it plays when an add-on has it.',
+    low_quality: 'Your file is below your lowest quality: the catalog song plays when an add-on has it.',
+    failed: 'Your file could not be put in place: the catalog song plays when an add-on has it.'
   };
   const errors = {
     unsupported: 'Unsupported format', invalid_audio: 'File could not be read',
@@ -242,20 +242,20 @@
     el('import-summary').textContent = checking
       ? `${count(checked)} of ${count(status.total_files)} ${word(status.total_files, 'file')} checked`
       : state === 'review'
-      ? `${count(status.eligible_files)} ${word(status.eligible_files, 'song')} to add · ${count(status.linked_files)} already in the library${status.low_quality_files ? ` · ${count(status.low_quality_files)} from the catalog instead (below your minimum quality)` : ''} · ${count(status.rejected_files)} cannot be imported · ${count(status.excluded_files + status.duplicate_files + status.held_files + (status.unchecked_files || 0))} skipped`
+      ? `${count(status.eligible_files)} ${word(status.eligible_files, 'song')} to add · ${count(status.linked_files)} already in the library${status.low_quality_files ? ` · ${count(status.low_quality_files)} from the catalog instead (below your lowest quality)` : ''} · ${count(status.rejected_files)} cannot be imported · ${count(status.excluded_files + status.duplicate_files + status.held_files + (status.unchecked_files || 0))} skipped`
       : complete || cancelled
         ? `${count(status.complete_files)} ${word(status.complete_files, 'song')} imported${status.linked_files ? ` · ${count(status.linked_files)} already in the library` : ''}${status.low_quality_files ? ` · ${count(status.low_quality_files)} from the catalog instead` : ''}${status.skipped_files ? ` · ${count(status.skipped_files)} not added` : ''}`
         : importing ? `${count(status.complete_files)} ${word(status.complete_files, 'song')} imported of ${count(status.eligible_files)} approved`
           : `${count(status.received_files)} of ${count(status.total_files)} ${word(status.total_files, 'file')} received`;
     el('import-helper').textContent = cancelled
-      ? 'Importing has stopped. Stop keeps files already published, including those awaiting indexing. Use Review removal below to change their availability.'
+      ? 'Importing has stopped. Uploaded files that were not added are deleted and their space is freed after cleanup. Stop keeps files already published, including those awaiting indexing. Use Review removal below to change their availability.'
       : complete ? (status.linked_files || status.skipped_files
         ? 'Your imported music is in Original imported library and All, songs that were already in the library included. Show "Music the library already had" to see what was not added again, what joined the library\'s albums, and why.'
         : 'Your imported music is in Original imported library and All.')
         : checking ? 'You can leave this page while files are checked. Nothing is imported until you approve the review.'
         : importing ? 'You can leave this page. Import progress is saved. Songs appear after their library records are verified.'
           : state === 'review' && (status.low_quality_files || status.unchecked_files || status.below_minimum_files)
-            ? 'Check the files below. Albums below your minimum quality are added from the catalog instead and play from the add-ons; choose Add my files anyway to add your own files. Songs already in the library are linked and count as your imports.'
+            ? 'Check the files below. Albums below your lowest quality are added from the catalog instead; they play when an add-on has them. Choose Add my files anyway to add your own files. Songs already in the library are linked and count as your imports.'
           : state === 'review' ? (status.linked_files || status.duplicate_files || status.held_files || status.copy_files
             ? 'Check the files below. Songs already in the library are not added again: they are linked and count as your imports. Choose Not the same song if a match is wrong.'
             : 'Check the files below. Only the ready songs in this review will be imported.')
@@ -286,11 +286,15 @@
     if ((importing || checking) && !busy) poll = setTimeout(() => refresh().catch(explain), 3000);
   }
   async function refresh() {
-    let result = await page(offset, el('file-filter').value);
+    const start = offset, filter = el('file-filter').value;
+    const current = () => offset === start && el('file-filter').value === filter;
+    let result = await page(start, filter);
+    if (!current()) return;
     if (!fileFilterChosen && ['review', 'done'].includes(result.state)) {
       fileFilterChosen = true;
       for (const filter of result.state === 'review' ? ['problems', 'overlap'] : ['overlap']) {
         const first = await page(0, filter);
+        if (!current()) return;
         if (first.filtered_total > 0) {
           offset = 0; el('file-filter').value = filter; result = first; break;
         }
@@ -371,6 +375,12 @@
     el('upload').disabled = true;
     let skipped = 0, repeated = 0, total = 0, inspected = 0;
     showError(''); el('selection-summary').textContent = 'Reading files…';
+    const reject = message => {
+      selected = []; sources = new Map();
+      showError(message);
+      el('selection-summary').textContent = 'No files selected. Choose your files again.';
+      el('upload').disabled = true;
+    };
     for (const file of files) {
       // A resolved digest promise only yields microtasks. Let input/rendering run too.
       if (++inspected % 128 === 0) {
@@ -381,19 +391,21 @@
       const format = (file.name.split('.').pop() || '').toLowerCase();
       if (!caps.formats.includes(format)) { skipped++; continue; }
       if (file.size > limits.max_file_bytes) {
-        showError(`${file.name} exceeds the ${bytes(limits.max_file_bytes)} file limit. Choose a smaller selection.`);
-        el('upload').disabled = true; return;
+        reject(`${file.name} exceeds the ${bytes(limits.max_file_bytes)} file limit. Choose a smaller selection.`);
+        return;
       }
       if (selected.length >= limits.max_job_files || total + file.size > limits.max_job_bytes) {
-        showError(`Choose at most ${count(limits.max_job_files)} files and ${bytes(limits.max_job_bytes)} per import.`);
-        el('upload').disabled = true; return;
+        reject(`Choose at most ${count(limits.max_job_files)} files and ${bytes(limits.max_job_bytes)} per import.`);
+        return;
       }
-      const clientKey = await keyFor(file);
+      let clientKey;
+      try { clientKey = await keyFor(file); }
+      catch (error) { if (version === selectionVersion) reject(error.message); return; }
       if (version !== selectionVersion) return;
       if (sources.has(clientKey)) {
         if (sources.get(clientKey) === file) { repeated++; continue; }
-        showError('Two distinct selected files have the same path and file details. Use separate imports; no file will be silently skipped.');
-        el('upload').disabled = true; return;
+        reject('Two distinct selected files have the same path and file details. Use separate imports; no file will be silently skipped.');
+        return;
       }
       sources.set(clientKey, file);
       selected.push({client_key:clientKey, path:file.webkitRelativePath || file.name, size:file.size});

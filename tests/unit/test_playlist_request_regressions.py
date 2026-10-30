@@ -1,4 +1,4 @@
-"""Review regressions use synthetic accounts, music and local library files only."""
+"""Playlist request regressions; synthetic accounts, music and local library files only."""
 
 from __future__ import annotations
 
@@ -280,7 +280,11 @@ def test_failed_automatic_retry_still_requires_current_authorization(
             token = await agent_token(service, "owner", "Agent", history=False, library=False)
             creator = digest(token)
             ident, _ = await service.requests.create(
-                "owner", "retry-guard", PlaylistRequest(prompt="quiet", count=1), creator=creator
+                "owner",
+                "retry-guard",
+                PlaylistRequest(prompt="quiet", count=1),
+                creator=creator,
+                scopes=["create", "status"],
             )
             run_id = (await service.repo.runs(ident))[0]["id"]
             await service.repo.store.execute(

@@ -37,8 +37,7 @@ from starlette.responses import (
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from shijhon import __copyright__, __license__, __version__
-from shijhon.access import AccessDenied, AccessService, AccessUnavailable
+from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
 from shijhon.catalog import plugin
 from shijhon.catalog.addon import AddonCatalog
 from shijhon.catalog.base import CatalogError
@@ -71,6 +70,7 @@ from shijhon.dashboard.auth import (
     same,
 )
 from shijhon.dashboard.collection import Pages as CollectionPages
+from shijhon.dashboard.context import legal_context
 from shijhon.dashboard.downloads import Pages as DownloadPages
 from shijhon.dashboard.errors import RecentErrors
 from shijhon.dashboard.fields import (
@@ -86,6 +86,7 @@ from shijhon.dashboard.music_imports import Pages as MusicImportPages
 from shijhon.dashboard.playlists import Pages as PlaylistPages
 from shijhon.dashboard.saved import (
     ACCENTS,
+    ADDONS,
     APPEARANCE,
     DEFAULT_ACCENT,
     REMOVE,
@@ -98,8 +99,10 @@ from shijhon.dashboard.saved import (
     out_of_place,
     withheld,
 )
+from shijhon.delivery import pacing
+from shijhon.delivery.addon import AddonError
 from shijhon.delivery.bulk import effective_capacity
-from shijhon.delivery.netpolicy import PROJECT_URL, Reach, Resolver, system_resolver
+from shijhon.delivery.netpolicy import Reach, Resolver, system_resolver
 from shijhon.delivery.pacing import AddonPace, Limits, origin
 from shijhon.delivery.quality_gate import CHOICES as QUALITY_CHOICES
 from shijhon.delivery.sources import MAX_LIMIT, StoredSource
@@ -440,6 +443,8 @@ class Dashboard:
         self._cleanup_saves = anyio.Lock()
         # The cleanup's confirmations shown, by session: (nonce, the settings, when).
         self._confirmations: dict[str, tuple[str, tuple[Any, ...], float]] = {}
+        self._verified: dict[str, tuple[float, Principal]] = {}
+        self._verification = KeyedLocks()
         self._form_key = os.urandom(32)  # add-on forms' versions (``_addon_version``)
         # This run of Shijhon: another one after a restart (the page that waits for a
         # restart to end asks for it; it says nothing else).
@@ -452,7 +457,7 @@ class Dashboard:
             Route("/", self.home),
             Route("/sign-in", self.sign_in_page, methods=["GET"]),
             Route("/sign-in", self.sign_in, methods=["POST"]),
-            Route("/sign-out", self._personal_page(self.sign_out), methods=["POST"]),
+            Route("/sign-out", self.sign_out, methods=["POST"]),
             Route("/addons", page(self.addons_page), methods=["GET"]),
             Route("/addons", page(self.addon_add), methods=["POST"]),
             Route("/addons/configuration", page(self.addons_hand_back), methods=["POST"]),
@@ -548,10 +553,7 @@ class Dashboard:
             nav=NAV if session and session.is_admin else PERSONAL_NAV,
             is_admin=bool(session and session.is_admin),
             home="addons" if session and session.is_admin else "collection",
-            version=__version__,
-            copyright=__copyright__,
-            license=__license__,
-            source_url=PROJECT_URL,
+            **legal_context(),
             pending=await self._pending() if session and session.is_admin else [],
             # "Restart Shijhon" is offered where something starts Shijhon again.
             can_restart=bool(session and session.is_admin) and self.host.can_restart,
@@ -588,8 +590,8 @@ class Dashboard:
 
     # --- sign-in ------------------------------------------------------------------------
 
-    async def _session(self, request: Request) -> Session:
-        """A currently verified personal owner, with no stale authorization grace."""
+    async def _session(self, request: Request, *, cached: bool = False) -> Session:
+        """Verify the owner; only collection sub-resources reuse a proof for three seconds."""
         if self.sessions is None:
             raise Refused(PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS))
         token = request.cookies.get(SESSION_COOKIE)
@@ -597,6 +599,15 @@ class Dashboard:
         if session is None:
             where = request.url.path if request.method == "GET" else f"{PATH}/collection"
             raise Refused(self._see(f"/sign-in?next={quote(where, safe='/')}"))
+        async with self._verification.hold(session.token_hash):
+            known = self._verified.get(session.token_hash) if cached else None
+            if known and known[0] > time.monotonic():
+                return replace(session, username=known[1].username, principal=known[1])
+            self._verified.pop(session.token_hash, None)
+            return await self._verify_session(session, cached=cached)
+
+    async def _verify_session(self, session: Session, *, cached: bool) -> Session:
+        assert self.sessions is not None
         services = self.services
         try:
             if not services or not services.navidrome:
@@ -605,10 +616,12 @@ class Dashboard:
                 session.username, expected_user_id=session.user_id
             )
         except AccessDenied:
+            self._verified.clear()
             await self.sessions.end_owner(session.user_id)
             log.info("dashboard: a session ended because identity or library access changed")
             raise Refused(self._see("/sign-in?reason=access")) from None
         except AccessUnavailable:
+            self._verified.pop(session.token_hash, None)
             raise Refused(
                 await self._render(
                     "unverified.html",
@@ -617,6 +630,10 @@ class Dashboard:
                     title="Account access can't be checked",
                 )
             ) from None
+        if cached:
+            if len(self._verified) >= 1000:
+                self._verified.pop(next(iter(self._verified)))
+            self._verified[session.token_hash] = (time.monotonic() + 3, principal)
         return replace(session, username=principal.username, principal=principal)
 
     def _page(
@@ -634,6 +651,7 @@ class Dashboard:
         *,
         form_reader: Callable[[Request], Awaitable[dict[str, str]]] | None = None,
         require_admin: bool = False,
+        cache_identity: bool = False,
     ) -> Callable[[Request], Awaitable[Response]]:
         """Own-account pages; identity/library verification precedes form reads/work.
 
@@ -643,7 +661,11 @@ class Dashboard:
 
         async def endpoint(request: Request) -> Response:
             try:
-                session = await self._session(request)
+                session = (
+                    await self._session(request, cached=True)
+                    if cache_identity and request.method in ("GET", "HEAD")
+                    else await self._session(request)
+                )
                 if require_admin and not session.is_admin:
                     raise Refused(
                         PlainTextResponse(
@@ -651,26 +673,36 @@ class Dashboard:
                         )
                     )
                 if request.method == "POST":
-                    if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
-                        raise Refused(
-                            PlainTextResponse("Cross-site form refused.\n", 403, headers=HEADERS)
-                        )
-                    form = await (form_reader or self._form)(request)
-                    if not same(form.get("csrf", ""), session.csrf):
-                        log.warning("dashboard: a form without its session's token was refused")
-                        raise Refused(
-                            PlainTextResponse(
-                                "The form has expired. Go back, reload the page and try again.\n",
-                                403,
-                                headers=HEADERS,
-                            )
-                        )
-                    request.state.form = form
+                    request.state.form = await self._checked_form(request, session, form_reader)
+                elif request.method == "HEAD":
+                    # Starlette adds HEAD to GET routes. Keep every page handler on its
+                    # read path, including a newly added handler that tests for GET.
+                    request = Request({**request.scope, "method": "GET"}, request.receive)
                 return await handler(request, session)
             except Refused as refused:
                 return refused.response
 
         return endpoint
+
+    async def _checked_form(
+        self,
+        request: Request,
+        session: Session,
+        reader: Callable[[Request], Awaitable[dict[str, str]]] | None = None,
+    ) -> dict[str, str]:
+        if request.headers.get("sec-fetch-site", "same-origin") == "cross-site":
+            raise Refused(PlainTextResponse("Cross-site form refused.\n", 403, headers=HEADERS))
+        form = await (reader or self._form)(request)
+        if not same(form.get("csrf", ""), session.csrf):
+            log.warning("dashboard: a form without its session's token was refused")
+            raise Refused(
+                PlainTextResponse(
+                    "The form has expired. Go back, reload the page and try again.\n",
+                    403,
+                    headers=HEADERS,
+                )
+            )
+        return form
 
     def _personal_api(
         self,
@@ -878,6 +910,9 @@ class Dashboard:
                 )
                 await services.playlists.repo.connect(connected)
         token, _ = await self.sessions.create(login.username, login.user_id)
+        previous = request.cookies.get(SESSION_COOKIE)
+        if previous:
+            await self.sessions.end(previous)
         if services.collection_refresh and login.native_token.get_secret_value():
             await services.collection_refresh.signed_in(
                 principal, login.native_token.get_secret_value()
@@ -904,12 +939,20 @@ class Dashboard:
         response.delete_cookie(SIGNIN_COOKIE, path=PATH)
         return response
 
-    async def sign_out(self, request: Request, session: Session) -> Response:
-        assert self.sessions is not None
-        token = request.cookies.get(SESSION_COOKIE)
-        if token:
-            await self.sessions.end(token)
-        log.info("dashboard: %s signed out", printable(session.username))
+    async def sign_out(self, request: Request) -> Response:
+        try:
+            if self.sessions is None:
+                raise Refused(PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS))
+            token = request.cookies.get(SESSION_COOKIE)
+            session = await self.sessions.get(token)
+            if session is not None:
+                await self._checked_form(request, session)
+                assert token is not None
+                await self.sessions.end(token)
+                self._verified.pop(session.token_hash, None)
+                log.info("dashboard: %s signed out", printable(session.username))
+        except Refused as refused:
+            return refused.response
         response = self._see("/sign-in")
         response.delete_cookie(SESSION_COOKIE, path=PATH)
         return response
@@ -1020,6 +1063,15 @@ class Dashboard:
         flash = None if waited is not None else flash
         if page == "catalog":
             extra = await self._catalog_status(saved)
+            applying_catalog = effective(self.host.configured, saved, locked=self.host.locked)[
+                0
+            ].catalog
+            shown_catalog = sections.form_kind(
+                section, applying_catalog, form, self.host.locked.get(section, {})
+            )
+            if shown_catalog == "addon":
+                identity_info, form = await self._catalog_identity_form(applying_catalog, form)
+                extra.update(identity_info)
             missing = extra["problem"]
             if missing is not None and form is None:  # the row too, as the page notice says
                 shown[missing["key"]] = sections.Problem(missing["row"], "")
@@ -1059,6 +1111,22 @@ class Dashboard:
             locked=self.host.locked,
             unmarked=first_step,
         )
+        if page == "catalog" and "identity_addon" in extra:
+            for _, identity_rows in groups:
+                for identity_row in identity_rows:
+                    if identity_row["name"] != "identity":
+                        continue
+                    identity_row["help"] = extra["identity_notice"]
+                    if identity_row["kind"] != "locked":
+                        identity_row.update(
+                            kind="confirmed_identity",
+                            claim=extra["identity_confirm"],
+                            checked=bool(
+                                form
+                                and form.get("identity-addon") == extra["identity_addon"]
+                                and form.get("confirm-identity") == extra["identity_confirm"]
+                            ),
+                        )
         if page == "playback":  # downloaded audio's limits are on the Cleanup page
             groups = [
                 (group, [row for row in members if row["name"] not in DOWNLOAD_LIMITS])
@@ -1122,6 +1190,32 @@ class Dashboard:
         self, request: Request, session: Session, page: str, section: str
     ) -> Response:
         form: dict[str, str] = request.state.form
+        if page == "catalog":
+            assert self.saved is not None
+            saved = await self.saved.all()
+            applying = effective(self.host.configured, saved, locked=self.host.locked)[0].catalog
+            env = self.host.locked.get("catalog", {})
+            if sections.form_kind(section, applying, form, env) == "addon":
+                chosen = (
+                    str(getattr(applying, "addon", ""))
+                    if "addon" in env
+                    else form.get("addon", str(getattr(applying, "addon", "")))
+                )
+                declared = await self._addon_identity(chosen)
+                if (declared or form.get("identity")) and form.get("identity-addon") != chosen:
+                    return await self._section_render(
+                        session, page, section, form=form, first_step=True
+                    )
+                if "identity" not in env:
+                    # A posted text value cannot confirm a claim. Only the control
+                    # bound to the declaration reviewed for this add-on can do that.
+                    form["identity"] = str(getattr(applying, "identity", ""))
+                    if (
+                        declared is not None
+                        and form.get("identity-addon") == chosen
+                        and form.get("confirm-identity") == declared
+                    ):
+                        form["identity"] = declared
         submitted, written, _ = await self._save(session, section, form)
         if written is None and submitted.first_step:
             # Another catalog was chosen, and its settings are needed: the page for it,
@@ -1277,6 +1371,86 @@ class Dashboard:
 
     # --- catalog ----------------------------------------------------------------------
 
+    async def _catalog_identity_form(
+        self, applying: Any, form: dict[str, str] | None
+    ) -> tuple[dict[str, Any], dict[str, str] | None]:
+        env = self.host.locked.get("catalog", {})
+        values = form or {}
+        chosen = (
+            str(getattr(applying, "addon", ""))
+            if "addon" in env
+            else values.get("addon", str(getattr(applying, "addon", "")))
+        )
+        confirmed = str(getattr(applying, "identity", ""))
+        declared = await self._addon_identity(chosen)
+        notice = ""
+        if declared:
+            notice = f"This add-on says its catalog is {declared}."
+            if confirmed and confirmed != declared:
+                notice += " Its declared identity changed."
+            if confirmed != declared:
+                notice += (
+                    f" Change {env['identity']} to confirm it."
+                    if "identity" in env
+                    else " Select Confirm this identity and save to use its catalog IDs."
+                )
+                notice += (
+                    " Confirming a different catalog key starts matches and saved catalog"
+                    " lists over; music in your library stays."
+                )
+        elif declared is None:
+            notice = (
+                "The add-on's catalog identity could not be confirmed. Catalog requests"
+                " stop if its declaration changed. Check the add-on before changing"
+                " the confirmed identity."
+            )
+        else:
+            notice = (
+                "No catalog identity is confirmed. Shijhon keeps this catalog's items"
+                " under the add-on's name. Confirming a declared identity later starts"
+                " matches and saved catalog lists over; music in your library stays."
+            )
+            if confirmed:
+                notice = (
+                    "The chosen add-on declares no catalog identity."
+                    + (
+                        f" Change {env['identity']} to use items under its name."
+                        if "identity" in env
+                        else " Select Use the add-on's name and save to use items under its name."
+                    )
+                    + " Changing the catalog key starts matches and saved catalog"
+                    " lists over; music in your library stays."
+                )
+        if form is not None:
+            form = {
+                **values,
+                "kind": "addon",
+                sections.SHOWN_KIND: "addon",
+                "addon": chosen,
+                "identity": confirmed,
+            }
+        return {
+            "identity_addon": chosen,
+            "identity_notice": notice,
+            "identity_confirm": declared
+            if declared != confirmed and "identity" not in env
+            else None,
+        }, form
+
+    async def _addon_identity(self, name: str) -> str | None:
+        if self.services is None or not name:
+            return None
+        try:
+            with pacing.urgent(pacing.CHECK), anyio.fail_after(2):
+                for source in await self.services.sources.enabled():
+                    if source.name == name:
+                        manifest = await source.addon.manifest()
+                        declared = manifest.full_catalog
+                        return declared.identity if declared else ""
+        except (AddonError, TimeoutError):
+            pass
+        return None
+
     async def _catalog_status(self, saved: Any) -> dict[str, Any]:
         services = self.services
         catalog = services.catalog if services else None
@@ -1401,10 +1575,11 @@ class Dashboard:
                 )
             )
 
-    async def _owned(self, session: Session) -> None:
+    async def _owned(self, session: Session, conn: aiosqlite.Connection) -> None:
         """Any change in the dashboard makes the stored add-on list the one that applies."""
         assert self.saved is not None
-        await self.saved.take_addons(session.username)
+        if "dashboard" not in await self.saved.section(ADDONS, conn):
+            await self.saved.write(conn, ADDONS, {"dashboard": True}, session.username)
         self.addons_handed_back = False
 
     async def _load_marks(self, conn: aiosqlite.Connection | None = None) -> None:
@@ -1870,15 +2045,21 @@ class Dashboard:
             return await refuse("Nothing added: the add-on can't be asked right now.", str(exc))
         except ValueError as exc:
             return await refuse("Nothing added: no add-on answers at this address.", str(exc))
-        addons = await self._stored()
         name = manifest.name or httpx.URL(url).host or "Add-on"
-        if any(addon.name == name for addon in addons):
+        try:
+            added = await self.services.sources.add(
+                name,
+                url,
+                {},
+                reach=Reach(reach_name),
+                unique_name=True,
+                also=functools.partial(self._owned, session),
+            )
+        except ValueError:
             return await refuse(f"Nothing added: an add-on named “{name}” is in the list already.")
-        added = await self.services.sources.add(name, url, {}, reach=Reach(reach_name))
         for addon in await self._stored():
             if addon.id == added:  # its manifest was read a moment ago: not asked for again
                 self.checks.learn(addon, manifest)
-        await self._owned(session)
         log.info("dashboard: %s added the add-on %s", printable(session.username), printable(name))
         self._remember(session, Flash("addons", words=f"{name} added at the end of the list."))
         return self._see("/addons")
@@ -1889,8 +2070,9 @@ class Dashboard:
         addon = await self._addon(int(request.path_params["addon"]))
         wanted = request.state.form.get("enabled") == "true"
         if wanted != addon.enabled:
-            await self.services.sources.set_enabled(addon.id, wanted)
-            await self._owned(session)
+            await self.services.sources.set_enabled(
+                addon.id, wanted, also=functools.partial(self._owned, session)
+            )
             log.info(
                 "dashboard: %s turned the add-on %s %s",
                 printable(session.username),
@@ -1908,8 +2090,7 @@ class Dashboard:
         step = -1 if request.state.form.get("direction") == "up" else 1
         if 0 <= index + step < len(ids):
             ids[index], ids[index + step] = ids[index + step], ids[index]
-            await self.services.sources.reorder(ids)
-            await self._owned(session)
+            await self.services.sources.reorder(ids, also=functools.partial(self._owned, session))
             log.info(
                 "dashboard: %s moved the add-on %s",
                 printable(session.username),
@@ -1942,8 +2123,9 @@ class Dashboard:
             return JSONResponse({"saved": False}, 409, headers=HEADERS)
         ordered = sorted(ids, key=lambda source_id: (positions[source_id], ids.index(source_id)))
         if ordered != ids:
-            await self.services.sources.reorder(ordered)
-            await self._owned(session)
+            await self.services.sources.reorder(
+                ordered, also=functools.partial(self._owned, session)
+            )
             log.info("dashboard: %s changed the add-ons' order", printable(session.username))
         return JSONResponse({"saved": True}, headers=HEADERS)
 
@@ -1954,8 +2136,9 @@ class Dashboard:
         wanted = request.state.form.get("enabled") == "true"
         changes = {addon.id: wanted for addon in await self._stored() if addon.enabled != wanted}
         if changes:
-            await self.services.sources.set_enabled_many(changes)
-            await self._owned(session)
+            await self.services.sources.set_enabled_many(
+                changes, also=functools.partial(self._owned, session)
+            )
             log.info(
                 "dashboard: %s turned every add-on %s",
                 printable(session.username),
@@ -1969,11 +2152,14 @@ class Dashboard:
         self._editable_list()
         assert self.services is not None
         addon = await self._addon(int(request.path_params["addon"]))
-        await self.services.sources.remove(addon.id)
+
+        async def also(conn: aiosqlite.Connection) -> None:
+            await self._owned(session, conn)
+            assert self.saved is not None
+            await self.saved.write(conn, SHOWN, {str(addon.id): REMOVE}, session.username)
+
+        await self.services.sources.remove(addon.id, also=also)
         self.checks.forget(addon.id)
-        if self.saved is not None:
-            await self.saved.put(SHOWN, {str(addon.id): REMOVE}, session.username)
-        await self._owned(session)
         log.info(
             "dashboard: %s removed the add-on %s",
             printable(session.username),
@@ -2159,16 +2345,16 @@ class Dashboard:
             return await self.addons_page(
                 request, session, form_for=addon.id, form=form, problems=problems, status_code=400
             )
+
         # The settings and the marks of which may be shown are saved together or not at all:
         # a secret typed here is never stored without its "not shown" mark.
-        also = None
-        if marked != marks and self.saved is not None:
-            also = functools.partial(
-                self.saved.write,
-                section=SHOWN,
-                changes={str(addon.id): marked or REMOVE},
-                by=session.username,
-            )
+        async def also(conn: aiosqlite.Connection) -> None:
+            await self._owned(session, conn)
+            if marked != marks and self.saved is not None:
+                await self.saved.write(
+                    conn, SHOWN, {str(addon.id): marked or REMOVE}, session.username
+                )
+
         await self.services.sources.update(
             addon.id,
             base_url=new_url or None,
@@ -2186,7 +2372,6 @@ class Dashboard:
         )
         if fresh is not None:  # read a moment ago at its address: not asked for again
             self.checks.learn(await self._addon(addon.id), fresh)
-        await self._owned(session)
         log.info(
             "dashboard: %s saved the add-on %s's settings%s",
             printable(session.username),

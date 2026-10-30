@@ -1318,23 +1318,33 @@ async def test_a_repair_of_a_swap_killed_itself_is_finished_at_the_next_start(
 
 
 @pytest.mark.parametrize("step", ["prepared", "committed"])
-@pytest.mark.parametrize("fmt", ["flac", "m4a"])
+@pytest.mark.parametrize("fmt,silent_present", [("flac", False), ("m4a", False), ("m4a", True)])
 async def test_a_revert_of_missing_delivered_audio_killed_never_leaves_silence_under_its_row(
-    navidrome: NavidromeInstance, state: Path, tmp_path: Path, fmt: str, step: str
+    navidrome: NavidromeInstance,
+    state: Path,
+    tmp_path: Path,
+    fmt: str,
+    step: str,
+    silent_present: bool,
 ) -> None:
     """Delivered audio whose file is gone gets its placeholder back: the row says so
     before the silent file is in place, so a stop in between leaves a placeholder's row
     (played from the add-ons) and a backup the next start puts in place - never a
     "delivered" row over the silent file."""
-    key = f"r-missing-{fmt}-{step}"
+    key = f"r-missing-{fmt}-{step}-{silent_present}"
     song, folder = await one_placeholder(navidrome, state, key)
     async with engine_for(navidrome, state) as parts:
+        row = await row_of(parts, song)
+        silent = parts.layout.absolute(row["placeholder_path"]).read_bytes()
         path = await parts.engine.replace_with_delivered(song, delivered_audio(tmp_path, fmt, key))
         parts.layout.absolute(path).unlink()
+        if silent_present:
+            parts.layout.absolute(row["placeholder_path"]).write_bytes(silent)
     await kill_at(navidrome, state, f"revert of a missing file {step}", action="revert", song=song)
     async with restarted(navidrome, state) as parts:
         row = await row_of(parts, song)
-        if step == "prepared":  # nothing changed yet: the expiry's next look does it
+        if step == "prepared" and not silent_present:
+            # With no silent file already in place, the expiry's next look does it.
             assert row["state"] == "delivered" and not parts.layout.absolute(path).exists()
             assert await parts.engine.revert_to_placeholder(song, only_if_missing=True)
         await assert_in_step(parts, folder)
@@ -2163,13 +2173,15 @@ async def test_a_copy_stopped_while_made_is_deleted_also_when_its_file_is_exclud
             pass
         again = await w.imports.status(ben, job["id"])
     assert not await w.store.fetchone("SELECT 1 FROM music_import_items WHERE derived_from<>''")
-    assert _incoming(w) == {original["staging_name"]}
+    assert _incoming(w) == ({original["staging_name"]} if finished != "when idle" else set())
     if finished != "when idle":
         assert [i["state"] for i in again["items"]] == ["excluded"]
         assert again["copy_files"] == 0
     total = await w.store.fetchone("SELECT sum(reserved_size) AS n FROM music_import_items")
     kept = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item_id])
     assert total["n"] == kept["reserved_size"]
+    if finished == "when idle":
+        assert kept["received_cleanup"] == "deleted" and kept["reserved_size"] == 0
     await w.caller.aclose()
     await w.imports.aclose()
     await w.store.close()
@@ -2293,6 +2305,109 @@ async def test_a_stopped_imports_linked_files_keep_their_reservation_until_delet
 
 
 # --- music imports: an import's audio in catalog songs, and upgrades of own imports ---------
+
+
+@pytest.mark.parametrize("terminal", ["done", "cancelled"])
+@pytest.mark.parametrize("when", ["before intent", "intent", "unlinked", "synced", "released"])
+async def test_unpublished_import_cleanup_stopped_at_any_step_frees_only_unused_bytes(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
+    when: str,
+) -> None:
+    from tests.acceptance.test_music_import_overlap import LIBRARY, settle, upload, world
+
+    nd = navidrome_factory()
+    w = await world(nd, tmp_path, ("ben",))
+    ben = w.users["ben"][0]
+    source = tmp_path / "source"
+    files = write_album(source, dataclasses.replace(LIBRARY, tracks=LIBRARY.tracks[:2]))
+    review = await upload(w, "ben", files, source, "unused-stop")
+    excluded = review["items"][0]["id"]
+    await w.imports.review(ben, review["id"], exclude=[excluded])
+    review = await settle(w, "ben", review["id"], "review")
+    await w.imports.approve(ben, review["id"], review["revision"], "go")
+    if terminal == "cancelled":
+        credit = w.imports._credit
+
+        async def stop_after_credit(*args: Any) -> None:
+            await credit(*args)
+            await w.imports.cancel(ben, review["id"])
+
+        monkeypatch.setattr(w.imports, "_credit", stop_after_credit)
+    assert await w.imports.tick()
+    monkeypatch.undo()
+    assert (await w.imports.status(ben, review["id"]))["state"] == terminal
+    [published] = await w.store.fetchall("SELECT * FROM music_import_items WHERE state='complete'")
+    unused = await w.imports._item(review["id"], excluded)
+    receipt = await w.store.fetchall("SELECT * FROM collection_originals")
+    retained = (nd.music / "_imports/.incoming" / published["staging_name"]).read_bytes()
+    incoming = nd.music / "_imports/.incoming" / unused["staging_name"]
+
+    if when in ("before intent", "released"):
+        execute = w.store.execute
+
+        async def stop_at_record(sql: str, params: Any = ()) -> Any:
+            if when == "before intent" and "SET received_cleanup='pending'" in sql:
+                raise _Stopped
+            result = await execute(sql, params)
+            if (
+                when == "released"
+                and "SET received_cleanup='deleted'" in sql
+                and "WHERE id=? AND received_cleanup='pending'" in sql
+            ):
+                raise _Stopped
+            return result
+
+        monkeypatch.setattr(w.store, "execute", stop_at_record)
+    elif when == "unlinked":
+        fsync = os.fsync
+
+        def stop_at_sync(fd: int) -> None:
+            if fd == w.imports.storage.incoming and not incoming.exists():
+                raise _Stopped
+            fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", stop_at_sync)
+    else:
+        discard = w.imports.storage.discard_unpublished
+
+        def stop_at_delete(name: str) -> None:
+            if when == "synced":
+                discard(name)
+            raise _Stopped
+
+        monkeypatch.setattr(w.imports.storage, "discard_unpublished", stop_at_delete)
+    with pytest.raises(_Stopped):
+        await w.imports.tick()
+    monkeypatch.undo()
+    interrupted = await w.imports._item(review["id"], excluded)
+    assert interrupted["received_cleanup"] == (
+        "" if when == "before intent" else "deleted" if when == "released" else "pending"
+    )
+    assert interrupted["reserved_size"] == (0 if when == "released" else unused["reserved_size"])
+    assert incoming.exists() == (when in ("before intent", "intent"))
+
+    await _restart(w)
+    while await w.imports.tick():
+        pass
+    cleaned = await w.imports._item(review["id"], excluded)
+    assert cleaned["received_cleanup"] == "deleted" and cleaned["reserved_size"] == 0
+    assert cleaned["state"] == "excluded" and cleaned["received_size"] == unused["received_size"]
+    assert not incoming.exists()
+    assert _incoming(w) == {published["staging_name"]}
+    assert (nd.music / "_imports" / published["final_name"]).read_bytes() == retained
+    assert (nd.music / "_imports/.incoming" / published["staging_name"]).read_bytes() == retained
+    assert [dict(r) for r in await w.store.fetchall("SELECT * FROM collection_originals")] == [
+        dict(r) for r in receipt
+    ]
+    native = await w.imports.native_lookup(ben, "1", "_imports/" + published["final_name"])
+    assert native and native.song_id == published["song_id"]
+    assert len(await w.caller.songs(ben, "1", 0, 10)) == 1
+    await w.caller.aclose()
+    await w.imports.aclose()
+    await w.store.close()
 
 
 async def _audio_ready(nd: Any, tmp_path: Path) -> tuple[Any, PlaceholderEngine, str, Any]:
@@ -2555,7 +2670,8 @@ async def test_an_upgrade_stopped_at_any_step_keeps_one_song(
 @pytest.mark.parametrize(
     "when",
     ["reserved", "carried", "same format before the swap", "same format within the swap",
-     "roll back unscanned"],
+     "roll back unscanned", "rollback restored before record",
+     "new format within the swap", "new format rollback before record"],
 )  # fmt: skip
 async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
     navidrome_factory: NavidromeFactory,
@@ -2588,6 +2704,10 @@ async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
          "sine=frequency=440:sample_rate=44100", "-t", "4", "-c:a", "libmp3lame", "-b:a",
          "320k", str(fetched)],
     )  # fmt: skip
+    if when.startswith("new format"):
+        fetched = write_album(
+            tmp_path / "addon", dataclasses.replace(album, fmt="flac", folder="A")
+        )[0]
     got = file_quality(fetched)
 
     async def gone(*args: Any) -> None:
@@ -2609,6 +2729,13 @@ async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
             raise _Stopped
 
         monkeypatch.setattr(Upgrades, "_swap_files", stopped)
+    elif when.startswith("new format"):
+
+        def before_unlink(*args: Any, **kwargs: Any) -> bool:
+            # The distinct upgraded path exists; the original link has not gone.
+            raise _Stopped
+
+        monkeypatch.setattr(upgrade_module, "_unlink_ours", before_unlink)
     elif when == "same format within the swap":
         unlink = upgrade_module._unlink_ours
 
@@ -2631,7 +2758,32 @@ async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
     monkeypatch.undo()
     row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
     assert row["upgrade"] and row["reserved_size"] > before["reserved_size"]  # reserved first
-    if when == "roll back unscanned":
+    if when.startswith("new format"):
+        intent = json.loads(row["upgrade"])
+        assert (nd.music / "_imports" / row["final_name"]).exists()
+        assert (nd.music / "_imports" / intent["final"]).exists()
+        await w.imports.scan(["_imports"])  # Native may observe both paths before recovery.
+    if when in ("rollback restored before record", "new format rollback before record"):
+        from shijhon.music_imports.storage import Storage
+
+        discard = Storage.discard_attempt
+
+        def restored(self: Any, name: str) -> None:
+            discard(self, name)
+            raise _Stopped
+
+        monkeypatch.setattr(Storage, "discard_attempt", restored)
+        with pytest.raises(_Stopped):
+            await w.imports.upgrades.recover()
+        monkeypatch.undo()
+        row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+        assert json.loads(row["upgrade"])["verify"] is True
+    if when in (
+        "roll back unscanned",
+        "rollback restored before record",
+        "new format within the swap",
+        "new format rollback before record",
+    ):
         scan = w.imports.scan
 
         async def unscanned(folders: Any) -> None:
@@ -2652,7 +2804,15 @@ async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
     assert incoming == {row["staging_name"], ".ndignore"}
     detail = (await w.call("ana", "getSong", {"id": song}))["song"]
     assert detail["id"] == song and detail["size"] == before["expected_size"]
-    # It can be upgraded after all.
+    if when.startswith("new format"):
+        # Native retains the replacement's separate missing ID after observing both
+        # paths. Reusing it must refuse rather than replace the import's original ID.
+        assert await w.imports.upgrades.upgrade(ana, song, fetched, got) == (
+            "Navidrome did not keep the song's identity for the upgraded file"
+        )
+        # The original container can still be upgraded after the verified rollback.
+        fetched = tmp_path / "addon.mp3"
+        got = file_quality(fetched)
     assert await w.imports.upgrades.upgrade(ana, song, fetched, got) == ""
     row = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
     assert row["reserved_size"] == before["reserved_size"] + row["expected_size"]
@@ -2661,3 +2821,391 @@ async def test_an_upgrade_stopped_before_or_within_its_swap_is_undone_once(
     await w.caller.aclose()
     await w.imports.aclose()
     await w.store.close()
+
+
+@pytest.mark.parametrize("revoke_at", ["before work", "before swap"])
+async def test_catalog_import_audio_rechecks_the_importers_access_at_the_swap(
+    navidrome_factory, tmp_path, monkeypatch, revoke_at
+):
+    from tests.acceptance.test_music_import_audio import drain
+
+    nd = navidrome_factory()
+    w, engine, song, _ = await _audio_ready(nd, tmp_path)
+    ben = w.users["ben"][0]
+
+    async def revoke():
+        await anyio.to_thread.run_sync(lambda: nd.native("DELETE", f"user/{ben}"))
+
+    if revoke_at == "before work":
+        await revoke()
+    else:
+        gate = engine._still_swappable
+
+        async def revoked(staged):
+            await revoke()
+            await gate(staged)
+
+        monkeypatch.setattr(engine, "_still_swappable", revoked)
+    try:
+        await drain(w)
+        [row] = await w.store.fetchall("SELECT * FROM placeholders")
+        [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+        assert row["song_id"] == song and row["state"] == "placeholder"
+        assert not row["import_item"] and link["audio"] == "pending"
+        assert not engine.interrupted()
+        assert {p.name for p in engine.layout.staging.iterdir()} == {".ndignore"}
+    finally:
+        await w.caller.aclose()
+        await w.imports.aclose()
+        await w.store.close()
+
+
+@pytest.mark.parametrize("owner_keeps_access", [False, True])
+async def test_catalog_import_audio_restored_by_admin_accepts_owner_or_admin_access(
+    navidrome_factory, tmp_path, owner_keeps_access
+):
+    from tests.acceptance.test_music_import_audio import advance, drain
+
+    nd = navidrome_factory()
+    w, engine, song, done = await _audio_ready(nd, tmp_path)
+    ben = w.users["ben"][0]
+    admin = nd.native(
+        "POST",
+        "user",
+        json={
+            "userName": "restorer",
+            "name": "restorer",
+            "password": "invented-admin-password",
+            "isAdmin": True,
+        },
+    ).json()["id"]
+    login = nd.login("restorer", "invented-admin-password")
+    w.caller.remember(await w.caller.access.verify_native(login["token"]), login["token"])
+
+    async def administrator(owner):
+        row = await anyio.to_thread.run_sync(lambda: nd.native("GET", f"user/{owner}"))
+        return row.json()["isAdmin"]
+
+    w.removals.administrator = administrator
+    try:
+        await drain(w)
+        await w.removals.review(ben, done["id"])
+        status = await advance(w.removals, ben, done["id"], "review")
+        await w.removals.approve(ben, done["id"], status["fingerprint"], "remove")
+        await advance(w.removals, ben, done["id"], "removed")
+        await drain(w)
+        if not owner_keeps_access:
+            await anyio.to_thread.run_sync(lambda: nd.native("DELETE", f"user/{ben}"))
+        await w.removals.restore(admin, done["id"])
+        await advance(w.removals, admin, done["id"], "restored")
+        await drain(w)
+        [row] = await w.store.fetchall("SELECT * FROM placeholders")
+        [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+        assert row["song_id"] == song and row["state"] == "delivered"
+        assert row["import_item"] == link["item_id"] and link["audio"] == "placed"
+        assert link["owner_id"] == ben
+        # A demoted restorer cannot block an owner who still has access.
+        await engine.revert_to_placeholder(song, pinned=link["item_id"])
+        user = (await anyio.to_thread.run_sync(lambda: nd.native("GET", f"user/{admin}"))).json()
+        await anyio.to_thread.run_sync(
+            lambda: nd.native("PUT", f"user/{admin}", json={**user, "isAdmin": False})
+        )
+        await drain(w)
+        assert (await engine.placeholder_row(song))["state"] == (
+            "delivered" if owner_keeps_access else "placeholder"
+        )
+    finally:
+        await w.caller.aclose()
+        await w.imports.aclose()
+        await w.store.close()
+
+
+@pytest.mark.parametrize("how", ["failed", "canceled"])
+async def test_materialization_cleans_a_stage_when_preparation_stops_after_silence(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    how: str,
+) -> None:
+    async with engine_for(navidrome, tmp_path) as p:
+        p.layout.ensure()
+        before = {f.name for f in p.layout.staging.iterdir()}
+        write = p.silence.write
+
+        async def stop(duration: int, path: Path) -> None:
+            await write(duration, path)
+            if how == "failed":
+                raise OSError("tag preparation stopped")
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(p.silence, "write", stop)
+        if how == "failed":
+            with pytest.raises(MaterializeError):
+                await p.engine.materialize(release_of("prepare-" + how, 2))
+        else:
+            # A child canceled on its own need not cancel its task group, so use an
+            # enclosing scope as the running request would.
+            with anyio.CancelScope() as scope:
+
+                async def cancel(duration: int, path: Path) -> None:
+                    await write(duration, path)
+                    scope.cancel()
+                    await anyio.lowlevel.checkpoint()
+
+                monkeypatch.setattr(p.silence, "write", cancel)
+                await p.engine.materialize(release_of("prepare-" + how, 2))
+        assert {f.name for f in p.layout.staging.iterdir()} == before
+        assert await p.store.fetchall("SELECT * FROM pending_placeholders") == []
+        assert await p.store.fetchall("SELECT * FROM placeholders") == []
+
+
+@pytest.mark.parametrize("fail_recovery", [False, True])
+async def test_removal_recovers_a_delivery_stopped_between_renames_first(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+    fail_recovery: bool,
+) -> None:
+    state = tmp_path / "state"
+    key = "remove-interrupted-" + str(fail_recovery).lower()
+    song, folder = await one_placeholder(navidrome, state, key)
+    audio = delivered_audio(tmp_path, "m4a", key)
+    await kill_at(
+        navidrome, state, "between renames", action="replace", song=song, delivered=str(audio)
+    )
+    async with engine_for(navidrome, state) as p:
+        scan = p.engine._song_at
+        if fail_recovery:
+
+            async def unconfirmed(*args: Any, **kwargs: Any) -> bool:
+                return False
+
+            p.engine._song_at = unconfirmed  # type: ignore[method-assign]
+        removed = await p.engine.remove_release("test:" + key)
+        p.engine._song_at = scan  # type: ignore[method-assign]
+        if fail_recovery:
+            assert removed.kept and removed.unfinished
+            assert await p.store.fetchone("SELECT * FROM releases WHERE ref = ?", ["test:" + key])
+            assert p.engine.interrupted() == {song}
+            assert await p.engine.recover_swap(song) >= 0
+            removed = await p.engine.remove_release("test:" + key)
+        assert removed.removed == 1
+        await assert_in_step(p, folder)
+
+
+@pytest.mark.parametrize("step", ["swapped", "verified", "committed"])
+async def test_recording_identity_and_backing_commit_together_during_a_retag(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+    step: str,
+) -> None:
+    release = release_of("backing-" + step, 1)
+    async with engine_for(navidrome, tmp_path) as p:
+        made = await p.engine.materialize(release)
+        song = next(iter(made.created.values()))
+        await p.engine.set_backing(song, "old-owned-recording")
+        original_recover = p.engine._recover
+
+        async def no_compensation(*args: Any, **kwargs: Any) -> int:
+            return 0
+
+        # Simulate a hard stop: leave the swap's files for a fresh engine's recovery.
+        async def stopped(at: str) -> None:
+            if at == "retag " + step:
+                p.engine._recover = no_compensation  # type: ignore[method-assign]
+                raise _Stopped
+
+        p.engine.step = stopped
+        track = dataclasses.replace(release.tracks[0], isrc="ZZSHJ2600999")
+        with pytest.raises(_Stopped):
+            await p.engine.retag(song, track, release)
+        p.engine.step = None
+        p.engine._recover = original_recover  # type: ignore[method-assign]
+        await p.engine.recover_swap(song)
+        row = await row_of(p, song)
+        assert row["isrc"] == (track.isrc if step == "committed" else release.tracks[0].isrc)
+        assert row["backing_song_id"] == (None if step == "committed" else "old-owned-recording")
+        await assert_in_step(p, made.folder)
+
+
+@pytest.mark.parametrize("cycle", ["chain", "two", "three", "three-late-failure"])
+@pytest.mark.parametrize("how", ["failed", "stopped"])
+async def test_refresh_renumbering_never_moves_onto_a_position_not_yet_freed(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cycle: str,
+    how: str,
+) -> None:
+    from shijhon.fill.refresh import Refresh
+
+    release = release_of(f"refresh-order-{cycle}-{how}", 3)
+    numbers = [2, 3, 1] if cycle.startswith("three") else [2, 1, 3] if cycle == "two" else [2, 3, 4]
+    fresh = dataclasses.replace(
+        release,
+        tracks=tuple(
+            dataclasses.replace(t, number=n) for t, n in zip(release.tracks, numbers, strict=True)
+        ),
+    )
+
+    class Catalog:
+        key = "test"
+
+        async def album(self, key: str) -> CatalogRelease:
+            return fresh
+
+    async with engine_for(navidrome, tmp_path) as p:
+        made = await p.engine.materialize(release)
+        refresh = Refresh(p.store, p.navidrome, p.engine, Catalog())  # type: ignore[arg-type]
+        retag = p.engine.retag
+        if how == "failed":
+
+            async def fail_second(song: str, *args: Any) -> bool:
+                if song == made.created[release.tracks[2 if cycle == "three" else 1].ref]:
+                    raise ReplaceError("track could not be rewritten")
+                return await retag(song, *args)
+
+            monkeypatch.setattr(p.engine, "retag", fail_second)
+            [result] = await refresh.refresh(made.album_id)
+            assert result.skipped
+            # The failure persists across refreshes: a temporary cycle-break position
+            # must not become the song's permanent number.
+            await refresh.refresh(made.album_id)
+            if cycle != "chain":
+                for track in release.tracks:
+                    row = await row_of(p, made.created[track.ref])
+                    assert row["track"] == track.number
+        else:
+
+            async def stop(at: str) -> None:
+                if at == "retag committed":
+                    raise _Stopped
+
+            p.engine.step = stop
+            with pytest.raises(_Stopped):
+                await refresh.refresh(made.album_id)
+            p.engine.step = None
+        await assert_in_step(p, made.folder)
+        rows = await p.store.fetchall("SELECT song_id, disc, track FROM placeholders")
+        positions = {(r["disc"], r["track"]) for r in rows}
+        assert len(positions) == 3
+        for row in rows:
+            song = await p.navidrome.song(row["song_id"])
+            assert song is not None and song["trackNumber"] == row["track"]
+        monkeypatch.undo()
+        await refresh.refresh(made.album_id)
+        for track in fresh.tracks:
+            row = await row_of(p, made.created[track.ref])
+            assert row["track"] == track.number
+        await assert_in_step(p, made.folder)
+
+
+@pytest.mark.parametrize("step", ["swapped", "verified", "committed"])
+async def test_restoring_a_blocked_cycle_mover_remains_in_step_when_stopped(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step: str,
+) -> None:
+    from shijhon.fill.refresh import Refresh
+
+    release = release_of("refresh-compensate-" + step, 3)
+    fresh = dataclasses.replace(
+        release,
+        tracks=tuple(
+            dataclasses.replace(t, number=n) for t, n in zip(release.tracks, [2, 3, 1], strict=True)
+        ),
+    )
+
+    class Catalog:
+        key = "test"
+
+        async def album(self, key: str) -> CatalogRelease:
+            return fresh
+
+    async with engine_for(navidrome, tmp_path) as p:
+        made = await p.engine.materialize(release)
+        first = made.created[release.tracks[0].ref]
+        third = made.created[release.tracks[2].ref]
+        retag = p.engine.retag
+
+        async def stopped(at: str) -> None:
+            if at == "retag " + step:
+                raise _Stopped
+
+        async def fail_and_stop(song: str, track: Any, *args: Any) -> bool:
+            if song == third:
+                raise ReplaceError("third track persistently failed")
+            if song == first and track.number == 1:
+                p.engine.step = stopped  # stop only during the compensating retag
+            return await retag(song, track, *args)
+
+        monkeypatch.setattr(p.engine, "retag", fail_and_stop)
+        refresh = Refresh(p.store, p.navidrome, p.engine, Catalog())  # type: ignore[arg-type]
+        with pytest.raises(_Stopped):
+            await refresh.refresh(made.album_id)
+        p.engine.step = None
+        await p.engine.recover_swap(first)
+        await assert_in_step(p, made.folder)
+        monkeypatch.undo()
+        await refresh.refresh(made.album_id)
+        for track in fresh.tracks:
+            assert (await row_of(p, made.created[track.ref]))["track"] == track.number
+        await assert_in_step(p, made.folder)
+
+
+async def test_refresh_resolves_backing_again_after_the_recording_changes(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+) -> None:
+    from shijhon.fill.refresh import Refresh
+
+    release = release_of("refresh-reback", 1)
+    fresh = dataclasses.replace(
+        release, tracks=(dataclasses.replace(release.tracks[0], isrc="ZZSHJ2600998"),)
+    )
+
+    class Catalog:
+        key = "test"
+
+        async def album(self, key: str) -> CatalogRelease:
+            return fresh
+
+    async with engine_for(navidrome, tmp_path) as p:
+        made = await p.engine.materialize(release)
+        song = next(iter(made.created.values()))
+        await p.engine.set_backing(song, "old-owned-recording")
+
+        class Backing:
+            async def back(self, pairs: Any, *args: Any) -> dict[str, str]:
+                assert (await row_of(p, song))["backing_song_id"] is None
+                assert pairs == [(fresh.tracks[0], song)]
+                return {song: "new-owned-recording"}
+
+        p.engine.backing = Backing()  # type: ignore[assignment]
+        refresh = Refresh(p.store, p.navidrome, p.engine, Catalog())  # type: ignore[arg-type]
+        [result] = await refresh.refresh(made.album_id)
+        assert result.updated == 1
+        assert (await row_of(p, song))["backing_song_id"] == "new-owned-recording"
+
+
+async def test_materialization_killed_after_exclusive_publication_is_recovered(
+    navidrome: NavidromeInstance,
+    tmp_path: Path,
+) -> None:
+    key = "r-exclusive-link"
+    release = release_of(key, 2)
+    state = tmp_path / "state"
+    staging = Layout(navidrome.music, "_shijhon").staging
+    before = set(staging.glob("*.flac"))
+    await kill_at(navidrome, state, "placeholder linked", action="materialize", key=key, count=2)
+    # Startup deliberately keeps recent stages: another writer may still use them.
+    # Once stale, even the link left between publication and unlink is swept.
+    for path in set(staging.glob("*.flac")) - before:
+        os.utime(path, (time.time() - 7200, time.time() - 7200))
+    async with restarted(navidrome, state) as p:
+        folder = folder_of(p, release)
+        assert await assert_in_step(p, folder) == {}
+        assert set(staging.glob("*.flac")) <= before
+        made = await p.engine.materialize(release)
+        assert len(made.created) == 2
+        await assert_in_step(p, folder)

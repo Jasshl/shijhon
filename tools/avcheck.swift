@@ -59,15 +59,23 @@ func checkPlayback(_ url: URL, mime: String?, timeout: Double) async -> [String:
     let playing = await waitUntil(timeout) {
         item.status == .failed || player.currentTime().seconds >= 1.0
     }
+    result["status"] = item.status == .readyToPlay ? "readyToPlay"
+        : item.status == .failed ? "failed" : "unknown"
+    let position = player.currentTime().seconds
+    result["current_time"] = position.isFinite ? position : -1
+    let duration = item.duration.seconds
+    result["duration"] = duration.isFinite ? duration : -1
     if item.status == .failed || !playing {
         result["play"] = false
         result["error"] = item.error.map { "\($0.localizedDescription)" } ?? "timed out"
+        if let error = item.error as NSError? {
+            result["error_domain"] = error.domain
+            result["error_code"] = error.code
+        }
         return result
     }
     result["play"] = true
     result["start_seconds"] = ((now() - started) * 1000).rounded() / 1000
-    let duration = item.duration.seconds
-    result["duration"] = duration.isFinite ? duration : -1
     guard duration.isFinite, duration > 4 else {
         result["seek"] = false
         result["error"] = "unknown duration"
@@ -84,6 +92,7 @@ func checkPlayback(_ url: URL, mime: String?, timeout: Double) async -> [String:
         player.currentTime().seconds >= duration / 2 + 0.5
     }
     result["seek"] = finished && advanced
+    result["seek_time"] = player.currentTime().seconds
     result["seek_seconds"] = ((now() - seekStarted) * 1000).rounded() / 1000
     player.pause()
     return result

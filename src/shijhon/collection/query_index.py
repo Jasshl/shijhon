@@ -30,7 +30,7 @@ from shijhon.proxy.params import RestCall
 
 Spawn = Callable[[Callable[[], Coroutine[Any, Any, None]]], None]
 Kind = str
-QUERY_REVISION = 2  # previous pair-sorted keys could alias different repeated scalar filters
+QUERY_REVISION = 3  # annotation-filtered generations carry invalidation metadata
 
 
 class IndexPending(Exception):
@@ -128,6 +128,30 @@ def digest(value: object) -> str:
     ).hexdigest()
 
 
+def annotation_filtered(query: object) -> bool:
+    """Queries whose membership/order depends on native per-user annotations."""
+    if not isinstance(query, (tuple, list)) or not query:
+        return False
+    if query[0] in ("getStarred", "getStarred2"):
+        return True
+    pairs = (
+        query[2] if query[0] == "native" and len(query) > 2 else query[1] if len(query) > 1 else ()
+    )
+    if not isinstance(pairs, (tuple, list)):
+        return False
+    for pair in pairs:
+        if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+            continue
+        name, value = pair
+        if name == "type" and value in ("starred", "highest", "frequent", "recent"):
+            return True
+        if name in ("starred", "rating", "min_rating", "max_rating"):
+            return True
+        if name == "_sort" and value in ("rating", "play_count", "play_date", "starred_at"):
+            return True
+    return False
+
+
 def native_tag_id(name: str, value: str) -> str:
     """Pinned 0.64.2 model/id.NewTagID; identity only, never a security digest."""
     number = int.from_bytes(
@@ -148,7 +172,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS queries (
  key TEXT PRIMARY KEY, owner TEXT NOT NULL, facts TEXT NOT NULL, created REAL NOT NULL,
  updated REAL NOT NULL, used REAL NOT NULL, state TEXT NOT NULL, rows INTEGER NOT NULL DEFAULT 0,
- total INTEGER, envelope TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT ''
+ total INTEGER, envelope TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '',
+ annotation_filtered INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS query_owner ON queries(owner,used);
 CREATE TABLE IF NOT EXISTS slots (
@@ -196,9 +221,12 @@ class QueryIndex:
         self.attempted: dict[str, float] = {}
         self.failed: dict[str, float] = {}
         self.jobs: dict[str, tuple[anyio.Event, anyio.CancelScope]] = {}
+        self.retiring: set[tuple[anyio.Event, anyio.CancelScope]] = set()
         self.lanes: dict[str, str] = {}
         # key -> the lanes of the requests waiting for its build ("": a request without one)
         self.waiting: dict[str, list[str]] = {}
+        self.annotation_jobs: set[str] = set()
+        self.job_owners: dict[str, str] = {}
         self.job_lanes: dict[str, str] = {}  # a search's build -> the lane that began it
         self.opened = False
         self.closed = False
@@ -240,6 +268,12 @@ class QueryIndex:
             conn.execute("PRAGMA max_page_count=" + str((self.budgets.bytes - (4 << 20)) // 8192))
             conn.execute("PRAGMA main.journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            if "annotation_filtered" not in {
+                r[1] for r in conn.execute("PRAGMA table_info(queries)")
+            }:
+                conn.execute(
+                    "ALTER TABLE queries ADD COLUMN annotation_filtered INTEGER NOT NULL DEFAULT 0"
+                )
             conn.execute("DELETE FROM queries WHERE state<>'ready'")
         # Retain a connection so every 500-row writer does not close the last WAL
         # connection and checkpoint the whole cache. No transaction stays open.
@@ -247,7 +281,7 @@ class QueryIndex:
 
     async def close(self) -> None:
         self.closed = True
-        jobs = list(self.jobs.values())
+        jobs = [*self.jobs.values(), *self.retiring]
         for _, scope in jobs:
             scope.cancel()
         with anyio.CancelScope(shield=True), anyio.move_on_after(5):
@@ -303,6 +337,58 @@ class QueryIndex:
 
             await anyio.to_thread.run_sync(invalidate)
 
+    async def annotations_changed(self, owner: str, *, every: bool = False) -> None:
+        """Retire annotation-filtered views; refresh other views while serving them.
+        ``every``: retire all of the owner's views (a star or a rating: the next answer
+        shows it; playback only marks the others stale, so browsing stays warm).
+
+        Detach slots, rather than cascading through every cached answer under the
+        global writer lock. Obsolete generations are reclaimed by ordinary eviction.
+        Publishing checks their state in the same transaction, so old builds cannot
+        restore a retired view. Cancellation never waits on another owner's scheduler.
+        """
+        await self.open()
+        async with self.scheduling:
+
+            def retire() -> list[str]:
+                with closing(self._connect()) as conn, conn:
+                    keys = [
+                        str(row[0])
+                        for row in conn.execute(
+                            "SELECT s.key FROM slots s JOIN queries q ON q.key=s.generation"
+                            " WHERE q.owner=?",
+                            (owner,),
+                        )
+                    ]
+                    conn.execute("UPDATE queries SET updated=0 WHERE owner=?", (owner,))
+                    conn.execute(
+                        "UPDATE queries SET state='obsolete' WHERE owner=?"
+                        + ("" if every else " AND annotation_filtered=1"),
+                        (owner,),
+                    )
+                    conn.execute(
+                        "DELETE FROM slots WHERE generation IN"
+                        " (SELECT key FROM queries WHERE owner=? AND state='obsolete')",
+                        (owner,),
+                    )
+                    return keys
+
+            keys = await anyio.to_thread.run_sync(retire)
+            for key in keys:
+                self.attempted.pop(key, None)
+                self.failed.pop(key, None)
+            for key, job in list(self.jobs.items()):
+                if self.job_owners.get(key) == owner and (every or key in self.annotation_jobs):
+                    job[1].cancel()
+                    # A new request can build immediately, even during slow cleanup.
+                    self.jobs.pop(key, None)
+                    self.retiring.add(job)
+                    self.job_owners.pop(key, None)
+                    self.annotation_jobs.discard(key)
+                    self.job_lanes.pop(key, None)
+                    self.attempted.pop(key, None)
+                    self.failed.pop(key, None)
+
     async def has_ready(self, binding: Binding, query: object) -> bool:
         await self.open()
         row = await anyio.to_thread.run_sync(self._state, binding.key(query))
@@ -355,15 +441,21 @@ class QueryIndex:
                 if lane:
                     self._supersede(lane, key)
                 if len(self.jobs) >= self.budgets.workers * 4:
+                    if row is not None and row["state"] == "ready":
+                        return key  # retain the complete view even when refresh cannot queue
                     raise IndexPending()
                 event, scope = anyio.Event(), anyio.CancelScope()
                 self.jobs[key] = (event, scope)
+                self.job_owners[key] = binding.owner_id
+                filtered = annotation_filtered(query)
+                if filtered:
+                    self.annotation_jobs.add(key)
                 if lane:
                     self.job_lanes[key] = lane
 
                 async def build() -> None:
                     await self._build(
-                        key, binding, fetch, validate, event, scope, structural, page_size
+                        key, binding, fetch, validate, event, scope, structural, page_size, filtered
                     )
 
                 self.spawn(build)
@@ -452,6 +544,7 @@ class QueryIndex:
         scope: anyio.CancelScope,
         structural: bool,
         page_size: int,
+        filtered: bool = False,
     ) -> None:
         temporary = secrets.token_hex(16)
         self.progress[key] = temporary
@@ -460,7 +553,7 @@ class QueryIndex:
                 async with self.slots:
                     await validate()
                     async with self.lock:
-                        await anyio.to_thread.run_sync(self._begin, temporary, binding)
+                        await anyio.to_thread.run_sync(self._begin, temporary, binding, filtered)
                     offset, expected = 0, None
                     batch: list[SourcePage] = []
                     while True:
@@ -537,12 +630,17 @@ class QueryIndex:
                             await anyio.to_thread.run_sync(self._discard, temporary)
                     except (sqlite3.Error, OSError):
                         pass
-                    self.jobs.pop(key, None)
-                    self.job_lanes.pop(key, None)
-                    self.progress.pop(key, None)
+                    if self.jobs.get(key, (None,))[0] is event:
+                        self.jobs.pop(key, None)
+                        self.job_owners.pop(key, None)
+                        self.annotation_jobs.discard(key)
+                        self.job_lanes.pop(key, None)
+                    if self.progress.get(key) == temporary:
+                        self.progress.pop(key, None)
+                    self.retiring.discard((event, scope))
                     event.set()
 
-    def _begin(self, key: str, binding: Binding) -> None:
+    def _begin(self, key: str, binding: Binding, filtered: bool = False) -> None:
         with closing(self._connect()) as conn, conn:
             # LRU eviction is bounded globally and per immutable owner. Active staging
             # generations count too; on disk no unbounded typeahead history accumulates.
@@ -559,14 +657,15 @@ class QueryIndex:
                 self._evict(conn, binding.owner_id)
             now = time.time()
             conn.execute(
-                "INSERT INTO queries(key,owner,facts,created,updated,used,state) "
-                "VALUES (?,?,?,?,?,?,'indexing')",
-                (key, binding.owner_id, binding.facts, now, now, now),
+                "INSERT INTO queries(key,owner,facts,created,updated,used,state,"
+                "annotation_filtered) "
+                "VALUES (?,?,?,?,?,?,'indexing',?)",
+                (key, binding.owner_id, binding.facts, now, now, now, filtered),
             )
 
     def _evict(self, conn: sqlite3.Connection, owner: str = "") -> None:
         victim = conn.execute(
-            "SELECT q.key FROM queries q WHERE q.state IN ('ready','failed') "
+            "SELECT q.key FROM queries q WHERE q.state IN ('ready','failed','obsolete') "
             + ("AND q.owner=? " if owner else "")
             + "AND NOT EXISTS (SELECT 1 FROM slots s JOIN json_each(?) j ON j.value=s.key "
             "WHERE s.generation=q.key) ORDER BY q.used LIMIT 1",
@@ -623,6 +722,10 @@ class QueryIndex:
         self, temporary: str, key: str, binding: Binding, structural: bool = False
     ) -> None:
         with closing(self._connect()) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            state = conn.execute("SELECT state FROM queries WHERE key=?", (temporary,)).fetchone()
+            if state is None or state[0] == "obsolete":
+                return
             self._facts(conn, binding)
             if structural:
                 self._foreign_facts(conn, temporary, binding)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import time
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -329,7 +330,7 @@ class Pages:
         )
 
     async def index(self, request: Request, session: Session) -> Response:
-        if request.method == "GET":
+        if request.method != "POST":
             return await self.render(session)
         try:
             form = request.state.form
@@ -379,7 +380,7 @@ class Pages:
 
     async def detail(self, request: Request, session: Session) -> Response:
         ident = request.path_params["ident"]
-        if request.method == "GET":
+        if request.method != "POST":
             return await self.render(session, ident=ident)
         try:
             service = self.service
@@ -390,7 +391,9 @@ class Pages:
                     # The owner's own record: no connection or agent grant is needed.
                     await service.requests.forget_edits(session.user_id, ident)
                     return self.dashboard._see(f"/playlists/describe/{ident}")
-                await service.requests.guard(mix)
+                action = request.state.form.get("action", "")
+                if action not in ("pause", "discard"):
+                    await service.requests.guard(mix)
                 run = (await service.repo.runs(ident))[0]
                 spec = Definition.model_validate_json(mix["definition"])
                 action = request.state.form.get("action", "")
@@ -420,7 +423,8 @@ class Pages:
                         await service.repo.pause(ident)
                     else:
                         await service.repo.store.execute(
-                            "UPDATE playlist_mixes SET enabled=1 WHERE id=?", [ident]
+                            "UPDATE playlist_mixes SET enabled=1,due=? WHERE id=?",
+                            [time.time() + spec.interval, ident],
                         )
                 else:
                     raise PlaylistError("This action is no longer available. Reload the page.")

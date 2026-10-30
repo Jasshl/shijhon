@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 from typing import Any
+from urllib.parse import urlencode
 
 import anyio
 import pytest
@@ -56,7 +57,7 @@ def test_requested_counts_and_first_pages() -> None:
     assert _wanted(call("query=x")) == {"artist": 20, "album": 20, "song": 20}
     assert _wanted(call("query=x&albumOffset=20&songCount=0")) == {"artist": 20}
     assert _wanted(call("query=x&songCount=5000")) == {}  # a sync, not a search
-    assert _wanted(call("query=x&albumCount=many")) == {}
+    assert _wanted(call("query=x&albumCount=many")) == {"artist": 20, "album": 20, "song": 20}
 
 
 def test_a_library_album_hides_its_card_whatever_its_year_and_size() -> None:
@@ -306,7 +307,7 @@ def test_look_alikes_that_are_not_twins_stay() -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("twins", [Twins.EXPLICIT, Twins.BOTH])
 async def test_hidden_library_songs_stand_once_per_song_and_per_recording(twins: Twins) -> None:
-    """Review finding 7: catalog songs linked to library songs the caller's selection hides
+    """Catalog songs linked to library songs the caller's selection hides
     stand for them once - one entry per library song and per recording (ISRC) -, and
     clean/explicit twins among them follow the twins setting, as other catalog songs do."""
     door = CatalogTrack(CatalogRef("demo", "a"), "Open Door", "Mara Vance", 200_000, isrc="ZZ01")
@@ -330,3 +331,15 @@ async def test_hidden_library_songs_stand_once_per_song_and_per_recording(twins:
     found = await views._missing_songs([door, again, isrc, clean, explicit], [], shown)
     expected = ["a", "d", "e"] if twins is Twins.BOTH else ["a", "e"]
     assert sorted(t.ref.id for t in found) == expected
+
+
+@pytest.mark.parametrize("value", [" 10", "1_0", "\u0663", str(2**63), "9" * 5000])
+def test_search_counts_use_navidrome_defaults_for_unreadable_numbers(value: str) -> None:
+    assert _wanted(call(urlencode({"albumCount": value, "songCount": "0"}))) == {
+        "artist": 20,
+        "album": 20,
+    }
+    assert _wanted(call(urlencode({"albumOffset": value, "songCount": "0"}))) == {
+        "artist": 20,
+        "album": 20,
+    }

@@ -1,4 +1,4 @@
-"""Independent review regressions at the final retained-file mutation boundary."""
+"""Regressions at the final retained-file mutation boundary."""
 
 from __future__ import annotations
 

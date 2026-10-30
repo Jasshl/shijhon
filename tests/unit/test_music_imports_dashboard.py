@@ -129,6 +129,7 @@ async def imports_dashboard():
         return Session("test", "Listener", "csrf", 9999999999, "immutable-owner")
 
     dashboard._session = MethodType(session, dashboard)
+    dashboard._checked_form = MethodType(RealDashboard._checked_form, dashboard)
     dashboard._personal_page = MethodType(RealDashboard._personal_page, dashboard)
     app = Starlette(routes=[Mount("/shijhon", routes=Pages(dashboard).routes())])
     async with httpx.AsyncClient(

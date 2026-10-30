@@ -22,11 +22,22 @@ from shijhon.delivery.bulk import (
     effective_capacity,
 )
 from shijhon.delivery.download_first import DownloadFirst
+from shijhon.delivery.intercept import Interceptor, _NoTurn
 from shijhon.delivery.limits import UserLimits
 from shijhon.delivery.netpolicy import Reach
 from shijhon.delivery.pacing import OPENINGS, PLAY, Limits
-from shijhon.delivery.playback import Deliverer, NoSource, Opened, PlaybackSettings, Track
+from shijhon.delivery.playback import (
+    Deliverer,
+    Departure,
+    NoSource,
+    Opened,
+    PlaybackSettings,
+    Track,
+    _Changed,
+    _wrong_key,
+)
 from shijhon.delivery.sources import Source, SourceRegistry, StoredSource
+from shijhon.proxy.params import RestCall
 from shijhon.store import Store
 from tests.harness.library import tone
 
@@ -54,11 +65,13 @@ class Server:
         self.bodies: list[Body] = []
         self.cached = False
         self.expired = False
+        self.streams_asked = anyio.Event()
         self.streams = anyio.Event()
         self.streams.set()
         self.flowing = False  # bodies send all at once (else the rest once ``tail`` is set)
         self.limited_streams = 0  # the first link requests answer 429 (Retry-After: 1)
         self.stream_status: int | None = None  # link requests answer this status
+        self.transport = "none"
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request)
@@ -85,12 +98,14 @@ class Server:
                 return httpx.Response(429, headers={"retry-after": "1"})
             if self.stream_status is not None:
                 return httpx.Response(self.stream_status)
+            self.streams_asked.set()
             await self.streams.wait()
             return httpx.Response(
                 200,
                 json={
                     "url": str(request.url.copy_with(path="/audio", query=None)),
                     "quality": "low",
+                    "manifest": self.transport,
                 },
             )
         assert path == "/audio"
@@ -227,6 +242,116 @@ async def test_cached_variant_is_bound_and_expiry_never_resolves_normally(tmp_pa
             await bulk.open(track(2), "ann")
         assert not any(path.startswith(("/resolve", "/stream/")) for path in servers[0].paths())
         assert not bulk._active
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("refusal", ["hls", "dash", "wrong recording"])
+async def test_cached_variants_apply_recording_and_transport_checks(
+    tmp_path: Path, refusal: str
+) -> None:
+    async with world(tmp_path, cached=True) as (bulk, sources, servers):
+        source, server = sources[0], servers[0]
+        if refusal == "wrong recording":
+            bulk.deliverer._wrong[_wrong_key(source, track(1))] = bulk.deliverer.clock() + 60
+        else:
+            server.transport = refusal
+            assert bulk.deliverer.dash is None
+        with pytest.raises(NoSource):
+            await bulk.open(track(1), "ann")
+        assert not server.bodies and not bulk._active
+        assert "/audio" not in server.paths()
+        assert not any(path.startswith(("/resolve", "/stream/")) for path in server.paths())
+        if refusal == "wrong recording":
+            assert not any(path.startswith("/cached-stream/") for path in server.paths())
+
+
+@pytest.mark.anyio
+async def test_cooling_download_sources_have_an_explicit_exclusion(tmp_path: Path) -> None:
+    async with world(tmp_path) as (bulk, sources, servers):
+        bulk.deliverer.registry.cool_down(sources[0].id, 60)
+        with pytest.raises(NoSource, match="0: cooling down") as failure:
+            await bulk.open(track(1), "ann")
+        assert "no enabled source" not in str(failure.value)
+        assert not servers[0].calls
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", ["deadline", "request turn", "read timeout", "503", "404"])
+@pytest.mark.parametrize("background", [False, True])
+async def test_manifest_failures_pause_background_work_only_when_temporary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, background: bool
+) -> None:
+    async with world(tmp_path) as (bulk, sources, servers):
+        source, server = sources[0], servers[0]
+        bulk.deliverer.settings.availability_timeout_seconds = 0.03
+        assert source.pace is not None
+        if failure == "request turn":
+            source.pace.configure(Limits(0.01, 1, 0), fill=True)
+            await source.pace.request()
+        handle = server.handle
+        failed = False
+
+        async def answer(request: httpx.Request) -> httpx.Response:
+            nonlocal failed
+            if request.url.path == "/manifest.json" and not failed:
+                failed = True
+                if failure == "deadline":
+                    await anyio.sleep_forever()
+                if failure == "read timeout":
+                    raise httpx.ReadTimeout("invented timeout")
+                if failure in ("503", "404"):
+                    return httpx.Response(int(failure))
+            return await handle(request)
+
+        monkeypatch.setattr(source.http._transport, "handler", answer)
+        ruled_out: set[int] | None = set() if background else None
+        choices, excluded = await bulk._choices(track(1), ruled_out)
+        assert choices == []
+        if failure == "request turn":
+            assert source.stats.errors_since_success == 0
+        if background and failure != "404":
+            assert ruled_out == set() and excluded == []
+            # Its next check succeeds: it was paused, not ruled out for this song.
+            source.pace.configure(Limits(0, 4, 0), fill=True)
+            monkeypatch.setattr(bulk_module, "_LOOK_AGAIN", 0.01)
+            plan = bulk.plan(track(1), "ann", background=True)
+            plan.choices, plan.ruled_out = choices, ruled_out
+            with anyio.fail_after(2):
+                with bulk.urgent(plan):
+                    admission = await bulk.admit(plan)
+                    assert admission is not None
+                    opened = await bulk.attempt(admission)
+                    assert opened is not None
+            await opened.close()
+        else:
+            reason = (
+                "temporarily unavailable"
+                if failure == "503"
+                else "could not be read"
+                if failure == "404"
+                else "timed out"
+            )
+            assert len(excluded) == 1 and reason in excluded[0]
+            if background:
+                assert ruled_out == {source.id}
+
+
+@pytest.mark.anyio
+async def test_unreadable_temporary_manifests_use_the_background_pause_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bulk_module, "PAUSED_WAIT", 0.08)
+    monkeypatch.setattr(bulk_module, "_LOOK_AGAIN", 0.03)
+    async with world(tmp_path) as (bulk, sources, servers):
+
+        async def unavailable(request: httpx.Request) -> httpx.Response:
+            servers[0].calls.append(request)
+            return httpx.Response(503)
+
+        monkeypatch.setattr(sources[0].http._transport, "handler", unavailable)
+        with anyio.fail_after(2), pytest.raises(NoSource, match="awaiting a manifest"):
+            await bulk.open(track(1), "ann", background=True)
+        assert len(servers[0].calls) >= 2 and not bulk._active
 
 
 @pytest.mark.anyio
@@ -959,3 +1084,169 @@ async def test_a_preparation_whose_choice_is_disabled_waits_for_a_paused_add_on(
         assert len(waited) == 1 and len(servers[1].bodies) == 1
         await waited[0].close()
         await first.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("head", [False, True])
+@pytest.mark.parametrize("cached", [False, True])
+async def test_continuing_download_refuses_a_new_encode_after_link_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, head: bool, cached: bool
+) -> None:
+    async with world(tmp_path, cached=cached) as (bulk, sources, servers):
+        server = servers[0]
+        original = server.handle
+        tag = '"first"'
+
+        async def handle(request: httpx.Request) -> httpx.Response:
+            response = await original(request)
+            if cached and request.url.path == "/cached" and tag == '"first"':
+                return httpx.Response(200, json={"available": False})
+            if request.url.path == "/audio":
+                response.headers["etag"] = tag
+            return response
+
+        monkeypatch.setattr(sources[0].http._transport, "handler", handle)
+        first = await bulk.open(track(1), "ann")
+        await first.close()
+        pin = bulk._pins[track(1).key][0]
+        assert pin.etag == tag
+        pin.created -= bulk.deliverer.settings.pin_ttl_seconds + 1
+        tag = '"another-encode"'
+        for _ in range(2):
+            with pytest.raises(_Changed):
+                await bulk.open(
+                    track(1), "ann", head=head, range_header=None if head else "bytes=10-"
+                )
+            assert server.calls[-1].headers["if-match"] == '"first"'
+            assert bulk._pins[track(1).key][0].etag == '"first"'
+        fetcher = DownloadFirst(bulk.deliverer, None, None, tmp_path, bulk=bulk)
+        interceptor = Interceptor(None, bulk.deliverer, fetcher, None, None)
+        call = RestCall("download", "GET", b"/rest/download", b"", [(b"range", b"bytes=10-")])
+        refused = await interceptor._opening(call, track(1), False, ("ann", "device")).open(
+            Departure()
+        )
+        assert refused.status == 412 and refused.body is None
+        assert not bulk._active
+
+
+@pytest.mark.anyio
+async def test_head_applies_the_same_accept_test_as_get(tmp_path: Path) -> None:
+    async with world(tmp_path) as (bulk, _, _):
+        seen = []
+
+        def refuse(kind: str | None, kbps: int | None) -> str:
+            seen.append((kind, kbps))
+            return "below the requested minimum"
+
+        with pytest.raises(NoSource, match="_Refused"):
+            await bulk.open(track(1), "ann", head=True, accept=refuse)
+        assert seen and not bulk._active
+
+
+@pytest.mark.anyio
+async def test_manifest_deadlines_count_toward_patience_and_cooldown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with world(tmp_path) as (bulk, sources, servers):
+        bulk.deliverer.settings.availability_timeout_seconds = 0.06
+        bulk.deliverer.settings.cooldown_errors = 1
+        bulk.deliverer.settings.cooldown_seconds = 0.1
+        monkeypatch.setattr(bulk_module, "PAUSED_WAIT", 0.14)
+        monkeypatch.setattr(bulk_module, "_LOOK_AGAIN", 0.01)
+
+        async def handle(request: httpx.Request) -> httpx.Response:
+            servers[0].calls.append(request)
+            await anyio.sleep_forever()
+            raise AssertionError("unreachable")
+
+        monkeypatch.setattr(sources[0].http._transport, "handler", handle)
+        began = time.monotonic()
+        with anyio.fail_after(1), pytest.raises(NoSource, match="stayed paused"):
+            await bulk.open(track(1), "ann", background=True)
+        assert time.monotonic() - began < 0.3
+        assert sources[0].stats.errors_since_success >= 1
+        assert len(servers[0].calls) <= 2
+
+
+@pytest.mark.anyio
+async def test_quality_download_turn_ends_at_open_and_only_byte_zero_spends_allowance(
+    tmp_path: Path,
+) -> None:
+    async with world(tmp_path) as (bulk, _, _):
+        limits = UserLimits(downloads=1, downloads_per_hour=1, clock=lambda: 0.0)
+        fetcher = DownloadFirst(bulk.deliverer, None, None, tmp_path, limits=limits, bulk=bulk)
+        interceptor = Interceptor(None, bulk.deliverer, fetcher, None, None)
+        call = RestCall("download", "GET", b"/rest/download", b"", [])
+        first = await interceptor._opening(call, track(1), False, ("ann", "device")).open(
+            Departure()
+        )
+        assert bulk._active and not fetcher._waiting
+        assert limits._users["ann"].allowance == 0
+        assert limits._users["ann"].downloads.value == 1
+        # The hourly allowance is exhausted; probes and resumed ranges still open.
+        for head, headers in ((True, []), (False, [(b"range", b"bytes=10-")])):
+            call.headers = headers
+            with anyio.fail_after(1):
+                later = await interceptor._opening(call, track(1), head, ("ann", "device")).open(
+                    Departure()
+                )
+            await later.close()
+            assert limits._users["ann"].allowance == 0
+        await first.close()
+        assert not bulk._active
+
+
+@pytest.mark.anyio
+async def test_quality_download_caps_admission_wait_and_checks_departure(tmp_path: Path) -> None:
+    async with world(tmp_path) as (bulk, _, servers):
+        limits = UserLimits(downloads=1)
+        fetcher = DownloadFirst(bulk.deliverer, None, None, tmp_path, limits=limits, bulk=bulk)
+        interceptor = Interceptor(None, bulk.deliverer, fetcher, None, None)
+        bulk.deliverer.settings.max_wait_seconds = 0.03
+        call = RestCall("download", "GET", b"/rest/download", b"", [])
+        opening = interceptor._opening(call, track(1), False, ("ann", "device"))
+        async with fetcher.turn("other", "ann"):
+            with anyio.fail_after(1), pytest.raises(_NoTurn, match="wait cap"):
+                await opening.open(Departure())
+        with pytest.raises(_NoTurn, match="client left"):
+            await opening.open(Departure(at=1.0))
+        assert not servers[0].calls and not bulk._active and not fetcher._waiting
+
+
+@pytest.mark.anyio
+async def test_stream_waiting_on_a_quality_download_gets_its_own_turn_at_open(
+    tmp_path: Path,
+) -> None:
+    async with world(tmp_path) as (bulk, _, servers):
+        limits = UserLimits(downloads=1, downloads_per_hour=10, clock=lambda: 0.0)
+        fetcher = DownloadFirst(bulk.deliverer, None, None, tmp_path, limits=limits, bulk=bulk)
+        interceptor = Interceptor(None, bulk.deliverer, fetcher, None, None)
+        call = RestCall("download", "GET", b"/rest/download", b"", [])
+        servers[0].streams = anyio.Event()
+        replies = []
+        joined = anyio.Event()
+
+        async def download() -> None:
+            replies.append(
+                await interceptor._opening(call, track(1), False, ("ann", "device")).open(
+                    Departure()
+                )
+            )
+
+        async def stream() -> None:
+            async with fetcher.turn(track(1).key, "ann") as turn:
+                assert not turn.waited and turn.after is None
+                joined.set()
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(download)
+            with anyio.fail_after(2):
+                await servers[0].streams_asked.wait()
+            group.start_soon(stream)
+            await anyio.sleep(0.02)
+            assert not joined.is_set()
+            servers[0].streams.set()
+            with anyio.fail_after(1):
+                await joined.wait()
+        assert replies and bulk._active  # the client has not read the body yet
+        await replies[0].close()

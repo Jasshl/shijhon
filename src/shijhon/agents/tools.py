@@ -33,7 +33,13 @@ from shijhon.downloads.model import (
     PreparationError,
 )
 from shijhon.playlists.facts import Facts, tag_key
-from shijhon.playlists.model import Connection, Definition, Model, PlaylistError
+from shijhon.playlists.model import (
+    Connection,
+    Definition,
+    Model,
+    PlaylistError,
+    UpstreamUnavailable,
+)
 from shijhon.playlists.prompt import context
 from shijhon.playlists.requests import PlaylistRequest, RequestError, SetupRequired
 from shijhon.playlists.resolve import native_track
@@ -110,7 +116,13 @@ class Tools:
                 data = {"ok": True, **await operation()}
             failed = False
         except (PlaylistError, PreparationError, ValidationError, TimeoutError) as exc:
-            status = exc.status if isinstance(exc, RequestError) else 400
+            status = (
+                exc.status
+                if isinstance(exc, RequestError)
+                else 503
+                if isinstance(exc, UpstreamUnavailable)
+                else 400
+            )
             data = {
                 "ok": False,
                 "error": {
@@ -120,6 +132,7 @@ class Tools:
                         404: "not_found",
                         409: "conflict",
                         424: "setup_required",
+                        503: "temporarily_unavailable",
                     }.get(status, "request_unavailable"),
                     "message": str(exc)
                     if isinstance(exc, (PlaylistError, PreparationError))
@@ -581,13 +594,19 @@ class Tools:
 
         async def check() -> None:
             await self.auth("history")
-            if await self.service.repo.connection(str(token.subject)) != connection:
+            if not connection.same_settings(await self.service.repo.connection(str(token.subject))):
                 raise RequestError(
                     "The history connection changed. Read its current settings again."
                 )
 
         data = await context(
-            self.service, connection, history=True, library=False, limit=limit, authorize=check
+            self.service,
+            connection,
+            history=True,
+            library=False,
+            limit=limit,
+            history_days=self.service.settings.history_days,
+            authorize=check,
         )
         return {
             **data,
@@ -806,7 +825,11 @@ class Tools:
         )
         async with self.service.changes:
             ident, created = await self.service.requests.create(
-                str(token.subject), idempotency_key, request, creator=self.grant(token)
+                str(token.subject),
+                idempotency_key,
+                request,
+                creator=self.grant(token),
+                scopes=token.scopes,
             )
             return {
                 "created": created,

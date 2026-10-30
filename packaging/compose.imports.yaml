@@ -1,6 +1,6 @@
 # Optional retained-original uploads. Provision MUSIC_IMPORTS_DIR first, with write
 # permission for PUID:PGID, and include it in backups. Both services see identical files.
-# Use with: docker compose -f compose.yaml -f compose.imports.yaml up -d
+# Set COMPOSE_FILE=compose.yaml:compose.imports.yaml in .env, then docker compose up -d.
 services:
   navidrome:
     volumes:

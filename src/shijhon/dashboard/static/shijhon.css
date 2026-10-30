@@ -2889,7 +2889,7 @@ progress::-moz-progress-bar {
 .playlist-settings > summary .more-changed {
   overflow-wrap: anywhere;
 }
-.playlist-disconnect {
+.playlist-forget {
   margin-top: var(--space-3);
 }
 .playlist-admin .rows {

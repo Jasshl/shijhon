@@ -542,20 +542,23 @@ def test_the_file_is_read_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     path.write_text('[catalog]\nkind = "two"\ntoken = "two-token"\n')
     readings = 0
 
-    class Changing(module.TomlConfigSettingsSource):
-        def _read_file(self, file_path: Any) -> dict[str, Any]:
-            nonlocal readings
-            readings += 1
-            data: dict[str, Any] = super()._read_file(file_path)
-            path.write_text('[catalog]\nkind = "one"\ntoken = "one-SECRET"\n')  # meanwhile
-            return data
+    load = module.tomllib.load
 
-    monkeypatch.setattr(module, "TomlConfigSettingsSource", Changing)
+    def changing(stream: Any) -> dict[str, Any]:
+        nonlocal readings
+        readings += 1
+        data: dict[str, Any] = load(stream)
+        path.write_text('[catalog]\nkind = "one"\ntoken = "one-SECRET"\n')  # meanwhile
+        return data
+
+    monkeypatch.setattr(module.tomllib, "load", changing)
     monkeypatch.setenv("SHIJHON_CATALOG__KIND", "two")
     settings = load_settings(path)
     assert readings == 1 and settings.catalog.kind == "two"
     assert settings.catalog.token.get_secret_value() == "two-token"  # type: ignore[attr-defined]
-    assert load_settings(tmp_path / "missing.toml").catalog.kind == "two"  # no file: defaults
+    with pytest.raises(FileNotFoundError):
+        load_settings(tmp_path / "missing.toml")
+    assert load_settings(None).catalog.kind == "two"  # no file requested: defaults
 
 
 def test_adapter_settings_without_a_kind_are_nobody_s(

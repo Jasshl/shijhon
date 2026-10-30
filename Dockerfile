@@ -1,6 +1,8 @@
 # Shijhon: the proxy in front of an unmodified Navidrome. Build with
 #   docker build -t shijhon .            (docker buildx build --platform linux/amd64 … elsewhere)
-# Base images are pinned by digest (multi-platform indexes, checked 2026-09-28).
+# Base images are pinned to multi-platform index digests. To refresh a pin, inspect
+# the tag with `docker buildx imagetools inspect <image>:<tag>` and use its Digest below.
+# Keep both Python stages on the same digest.
 FROM ghcr.io/astral-sh/uv:0.10.12@sha256:72ab0aeb448090480ccabb99fb5f52b0dc3c71923bffb5e2e26517a1c27b7fec AS uv
 
 # Catalog adapters are separate packages (docs/deployment.md, "Catalog adapters"). Two

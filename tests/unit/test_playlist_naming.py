@@ -249,6 +249,7 @@ def test_post_generation_guards_prevent_freezing_a_new_name(tmp_path: Path, stop
                 "guarded-name",
                 PlaylistRequest(name="", prompt="quiet", count=1),
                 creator=digest(token),
+                scopes=["create", "status"],
             )
             first = (await service.repo.runs(ident))[0]
             if stop == "paused":

@@ -103,7 +103,8 @@ class CompleteAlbums:
                 await self.fills.any_shown()
             ):
                 return result  # no album entries, or none shown complete: nothing to count
-            if await ctx.caller() is None:
+            caller = await ctx.caller()
+            if caller is None:
                 return result  # current credentials and library grant before metadata work
             # A ready reply of the selected library (catalog additions to a search): sent
             # as it came unless a count changes, also a refusal's encoded bytes and headers.
@@ -111,7 +112,9 @@ class CompleteAlbums:
             if isinstance(result, Forward | None):
                 if ctx.refusal is not None:
                     return result  # Navidrome refused the credentials: its answer
-                answer = await library_answer(self.upstream, result.call if result else call)
+                answer = await library_answer(
+                    self.upstream, result.call if result else call, caller=caller
+                )
                 if answer is None:
                     return result  # Navidrome unreachable: the forward says so
             else:
@@ -177,7 +180,7 @@ class CompleteAlbums:
         decision, why = await self.fills.view(album_id, (caller.username, call.client))
         if (decision is None or decision.release is None) and not why:
             return as_it_is  # nothing to add or to log: the answer is not read
-        answer = await library_answer(self.upstream, call)
+        answer = await library_answer(self.upstream, call, caller=caller)
         if answer is None:
             return as_it_is
         found = await answer.parsed("album")

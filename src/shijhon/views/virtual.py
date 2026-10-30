@@ -15,12 +15,13 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 import anyio
 
 from shijhon.catalog.artwork import ArtworkCache, ArtworkIndex, raster_type
-from shijhon.catalog.base import Catalog, CatalogError, addresses_for_clients
+from shijhon.catalog.base import Catalog, CatalogError, UnrecognizedArtwork, client_artwork_template
 from shijhon.catalog.editions import dedupe_editions
 from shijhon.catalog.model import CatalogRef, Twins, artwork_url
 from shijhon.proxy.app import Forward, Handler, HandlerResult, RequestContext
@@ -223,8 +224,7 @@ class VirtualViews:
         except CatalogError as exc:
             return catalog_error(call, exc, self.checker.server)
         info = {"notes": "", "musicBrainzId": "", "lastFmUrl": ""}
-        if addresses_for_clients(catalog):  # (else: the cover by its ID, through Shijhon)
-            info.update(image_urls(release.artwork_template))
+        info.update(image_urls(await client_artwork_template(catalog, release.artwork_template)))
         return self._ok(call, {"albumInfo": info})
 
     # --- artists -------------------------------------------------------------------------
@@ -239,11 +239,12 @@ class VirtualViews:
             releases = dedupe_editions(await catalog.artist_releases(cid.ref.id), twins=self.twins)
         except CatalogError as exc:
             return catalog_error(call, exc, self.checker.server)
+        client_template = await client_artwork_template(catalog, artist.artwork_template)
         entry = artist_entry(
-            artist,
+            replace(artist, artwork_template=client_template),
             releases,
             library=await self._library(),
-            addresses=addresses_for_clients(catalog),
+            addresses=True,
         )
         # The page asked for, whatever its albums link to.
         entry.update({"id": str(cid), "coverArt": f"ar-{cid}"})
@@ -264,8 +265,7 @@ class VirtualViews:
         except CatalogError as exc:
             return catalog_error(call, exc, self.checker.server)
         info: dict[str, Any] = {"biography": "", "musicBrainzId": "", "lastFmUrl": ""}
-        if addresses_for_clients(catalog):
-            info.update(image_urls(artist.artwork_template))
+        info.update(image_urls(await client_artwork_template(catalog, artist.artwork_template)))
         info["similarArtist"] = []
         key = "artistInfo2" if call.name == "getArtistInfo2" else "artistInfo"
         return self._ok(call, {key: info})
@@ -386,7 +386,8 @@ class VirtualViews:
         self, catalog: Catalog, cid: CatalogId, size: int, steps: dict[str, Any]
     ) -> tuple[bytes, str]:
         """The item's cover: from the artwork shown with it (kept on disk), else
-        asked of the catalog - also when the remembered artwork is gone (404, 410).
+        asked of the catalog - also when the remembered artwork is gone (404, 410) or
+        refused by the current catalog (for example after changing its source).
         ``steps``: what it took, for the log."""
         started = time.perf_counter()
         remembered = await self.artwork.find(cid.kind, cid.ref) if self.artwork else None
@@ -395,7 +396,7 @@ class VirtualViews:
             try:
                 return await self._image(catalog, url, steps)
             except CatalogError as exc:
-                if exc.kind != "not_found":
+                if exc.kind != "not_found" and not isinstance(exc, UnrecognizedArtwork):
                     raise  # a passing failure: the address stays, the client tries again
                 assert self.artwork is not None
                 self.artwork.forget(cid.kind, cid.ref)  # it no longer loads: asked again

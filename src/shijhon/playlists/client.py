@@ -11,7 +11,7 @@ from pydantic import SecretStr
 
 from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
 from shijhon.navidrome.client import NavidromeService
-from shijhon.playlists.model import PlaylistError
+from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 
 
 class OwnerAuthorization(Protocol):
@@ -74,7 +74,9 @@ class OwnerClient:
         except AccessDenied:
             raise PlaylistError("The connected owner cannot access this library.") from None
         except AccessUnavailable:
-            raise PlaylistError("The connected owner's identity could not be verified.") from None
+            raise UpstreamUnavailable(
+                "The connected owner's identity could not be verified."
+            ) from None
 
     async def validate(self, connection: OwnerAuthorization) -> None:
         # Credential proof comes before service-account identity/grant work, including
@@ -130,14 +132,22 @@ class OwnerClient:
                 content=urlencode([*auth, *params]),
                 headers={"content-type": "application/x-www-form-urlencoded"},
             )
+            if reply.status_code in (401, 403):
+                raise PlaylistError("Navidrome rejected the connected owner authorization.")
+            if reply.status_code != 200:
+                raise UpstreamUnavailable("Navidrome is temporarily unavailable. Try again later.")
             envelope = reply.json()["subsonic-response"]
-            if reply.status_code != 200 or envelope.get("status") != "ok":
+            if not isinstance(envelope, dict) or envelope.get("status") not in ("ok", "failed"):
                 raise ValueError
-            if not isinstance(envelope, dict):
-                raise ValueError
+            if envelope["status"] == "failed":
+                raise PlaylistError("Navidrome could not complete the owner-authenticated request.")
             return envelope
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
-            raise PlaylistError(
+        except httpx.HTTPError:
+            raise UpstreamUnavailable(
+                "Navidrome is temporarily unavailable. Try again later."
+            ) from None
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise UpstreamUnavailable(
                 "Navidrome could not complete the owner-authenticated request."
             ) from None
 

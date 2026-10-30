@@ -532,7 +532,9 @@ def test_a_complete_search_answers_at_once_while_both_index_workers_are_busy(
 
     async def hold() -> None:
         for holder in holders:
-            index.slots.acquire_on_behalf_of_nowait(holder)
+            # Earlier requests can still have background builds finishing. Wait for
+            # their slots before deliberately occupying both for this scenario.
+            await index.slots.acquire_on_behalf_of(holder)
 
     async def release() -> None:
         for holder in holders:

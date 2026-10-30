@@ -222,7 +222,6 @@ class Repository:
         ordering = {
             "title": "title COLLATE NOCASE, item_key",
             "artist": "artist COLLATE NOCASE,title COLLATE NOCASE,item_key",
-            "newest": "newest DESC,item_key",
         }[query.sort]
         # Rows, totals, ownership and full-group badges share one SQLite snapshot.
         join = joined(owner, profile_id, library)

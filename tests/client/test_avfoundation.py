@@ -168,6 +168,32 @@ def test_owned_track_through_the_proxy(avcheck: Path, world: DeliveryWorld) -> N
     assert result["exit"] == 0, why(world, avcheck, result)
 
 
+def test_faststart_aac_for_a_flac_placeholder(
+    avcheck: Path, world: DeliveryWorld, addon: FakeAddon
+) -> None:
+    song, tracks, audio = world.placeholder_track(
+        "avf-aac", [addon], seconds=20, fmt="m4a", content_type="audio/mp4"
+    )
+    faststart = world.tmp / "faststart.m4a"
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(audio),
+            "-c:a", "copy", "-movflags", "+faststart", str(faststart),
+        ],
+        check=True,
+    )  # fmt: skip
+    tracks[addon].audio = faststart
+    metadata = world.nd.client().ok("getSong", {"id": song})["song"]
+    assert metadata["suffix"] == "flac" and metadata["contentType"] == "audio/flac"
+    for mime in (None, metadata["contentType"]):
+        args = ["--stream", url(world, "stream", id=song)]
+        if mime:
+            args += ["--mime", mime]
+        result = run(avcheck, *args)
+        assert result["exit"] == 0, why(world, avcheck, result)
+        assert result["current_time"] >= 1 and result["seek_time"] > result["duration"] / 2
+
+
 def test_lower_bitrate_request_behaves_like_an_owned_track(
     avcheck: Path, world: DeliveryWorld, addon: FakeAddon
 ) -> None:

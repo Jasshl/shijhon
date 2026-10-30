@@ -408,3 +408,20 @@ def test_the_export_is_read_when_both_sources_are_configured(tmp_path: Path) -> 
     assert found is not None and found.export and found.path == tmp_path / "u"
     assert configured(None, tmp_path / "n").export is False  # type: ignore[union-attr]
     assert configured(None, None) is None
+
+
+def test_export_request_identity_detects_atomic_replacement_in_same_timestamp_tick(tmp_path):
+    request = tmp_path / "usage.request"
+    assert export_module._asked(request) is None
+    request.write_text("first-request")
+    first = export_module._asked(request)
+    assert first is not None
+    staged = tmp_path / "next-request"
+    staged.write_text("other-request")  # same length; mtime alone cannot distinguish it
+    os.utime(staged, ns=(first[1], first[1]))
+    os.replace(staged, request)
+    second = export_module._asked(request)
+    assert second != first and second[1:] == first[1:]
+    request.write_text("a-longer-request")
+    os.utime(request, ns=(first[1], first[1]))
+    assert export_module._asked(request) != second

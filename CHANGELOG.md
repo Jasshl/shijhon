@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0
+
+- Use an add-on as your catalog with complete album details (disc and track numbers,
+  release kinds, song and ISRC lookups and complete discographies) through an optional
+  [extension of the add-on protocol](docs/reference/add-on-protocol.md#the-full-catalog-extension).
+  Confirm its catalog identity on the **Catalog** page ([catalogs](docs/catalogs.md)).
+- Use Mornye extensions as add-ons, including as your catalog, with the separate
+  [Shijhon Mornye extension bridge](https://github.com/Jasshl/shijhon-mornye-bridge). It
+  is not affiliated with Mornye.
+- **Discard** on a music import now deletes the uploaded files that were not added to
+  the library and frees their space; files skipped or left out of a finished import are
+  deleted too. Imports stay tied to their library when import limits or paths change.
+- Show stars and ratings in apps' lists at once, and keep lists fast while you play
+  music.
+- Keep agent connections working when an agent retries a token refresh within
+  20 seconds.
+- Rename the Playlists page's **Disconnect** to **Forget my playlist settings and
+  history**.
+- Fix issues from a review of the whole project, among them: an add-on's own headers no
+  longer follow redirects to other servers; agent connections limited to fewer
+  permissions cannot read private playlists; errors no longer show server paths;
+  library writes never replace a file already there; clean and explicit versions stay
+  apart; names such as "Feathers" are no longer split as a featured artist; a missing
+  or unreadable `--config` file is refused instead of starting empty.
+- Upgrading migrates the database to schema 31: take a backup first
+  ([upgrades](docs/deployment.md#upgrades)).
+
 ## 0.2.1
 
 - Speed up music uploads and library updates for large import batches.

@@ -41,6 +41,8 @@ Require a nonblank prompt or a nonempty `tracks` list whose length equals `count
 Each track requires nonblank `artist` and `title`, at most 300 characters each;
 `album` defaults to `""` and permits 300, `version` defaults to `""` and permits 100.
 No IDs, URLs, model configuration or actions are accepted as track fields.
+Explicit tracks must respect `max_per_artist` (artist names are normalized as during
+generation); an over-limit list is rejected before a request is created.
 Explicit tracks preserve order, require manual cadence and both context flags
 false, cannot save refresh instructions, and make no model call even if an original
 prompt is retained. `version` is a literal recording qualifier, such as `Live` or
@@ -57,21 +59,23 @@ the literal `"Described playlist"`. Omitting `name` uses that default;
 it does not opt into automatic naming. Original input and replay hashes never change.
 
 References relate a prompt to music the user already has: pass playlist IDs from
-`get_native_playlists` or song IDs from `search_library` instead of pasting their
-songs into `prompt`. IDs are 1..100 characters of letters, digits, `_`, `.`, `:` and
-`-`, without repeats; explicit tracks cannot use references. Choosing references needs
-the token's `library` grant but no `use_library` boolean. Without explicit references,
-the server takes up to three of the user's own playlists whose names the prompt
-mentions (whole words, ignoring case; a one-word name only in quotes or next to
-"playlist" or "mix"), but only while the token's grant includes `library`, checked again
-at every generation and scheduled refresh. Without it, no playlist is listed or read and
-status shows no reference; losing it while a playlist found by name is in use stops that
-generation. References are read at every generation, including refreshes; one that
-cannot be read fails the run with its ID, while a playlist found by name is skipped.
-`exclude_reference` removes the songs of the references the caller chose; songs of a
-playlist found by name are not removed, and the model is told to avoid repeating them
-unless the prompt asks for them. Reference fields left at their defaults are not part of
-the replay hash; the HTTP client sends them only when supplied.
+`get_native_playlists` or song IDs from `search_library` instead of pasting their songs
+into `prompt`. IDs are 1..100 characters of letters, digits, `_`, `.`, `:` and `-`,
+without repeats; explicit tracks cannot use references. Choosing references needs the
+token's `library` grant but no `use_library` boolean. Without explicit references, the
+server takes up to three of the user's own playlists whose names the prompt mentions
+(whole words, ignoring case; a one-word name only in quotes or next to "playlist" or
+"mix"), but only if the submitting token includes `library` and the current connection
+still grants it, checked again at every generation and scheduled refresh. The request
+keeps the submitting token's scope ceiling; later consent cannot broaden that ceiling.
+Without it, no playlist is listed or read and status shows no reference; losing it while
+a playlist found by name is in use stops that generation. References are read at every
+generation, including refreshes; one that cannot be read fails the run with its ID,
+while a playlist found by name is skipped. `exclude_reference` removes the songs of the
+references the caller chose; songs of a playlist found by name are not removed, and the
+model is told to avoid repeating them unless the prompt asks for them. Reference fields
+left at their defaults are not part of the replay hash; the HTTP client sends them only
+when supplied.
 
 Minimal one-time prompt input file:
 
@@ -135,7 +139,11 @@ socket timeout; JSON responses are limited to 1 MiB. No redirects are followed,
 including same-origin redirects. The client ignores environment proxy settings.
 
 Errors: `400` bad input, `401` invalid token, `403` forbidden scope/context, `409`
-changed input under an existing key. The client prints fixed error messages rather
+changed input under an existing key, `413` oversized body, `415` unsupported media
+type, `424` missing required setup, and `429` too many active requests. These errors
+do not create a new request. `503` means a temporary upstream/server failure; keep
+the same input and key for recovery. A Navidrome outage does not revoke OAuth
+credentials or require new consent. The client prints fixed error messages rather
 than HTTP response bodies or exception details; it redacts the bearer token from
 decoded successful responses too. It exits 1 on client/HTTP failures, 2 on invalid
 CLI arguments, and 0 when a JSON status or context was read successfully. Exit 0

@@ -365,12 +365,13 @@ def _sync(path: Path) -> None:
         os.close(fd)
 
 
-def _asked(request: Path) -> int:
-    """When Shijhon last asked for an export (0: never)."""
+def _asked(request: Path) -> tuple[int, int, int] | None:
+    """The request file Shijhon last published (None: never)."""
     try:
-        return request.stat().st_mtime_ns
+        stat = request.stat()
+        return stat.st_ino, stat.st_mtime_ns, stat.st_size
     except OSError:
-        return 0
+        return None
 
 
 def run(navidrome_db: Path, out: Path, *, every: float, once: bool = False) -> int:

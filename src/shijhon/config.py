@@ -1,8 +1,8 @@
 """Configuration: a TOML file plus ``SHIJHON_*`` environment overrides.
 
 Nested keys use a double underscore in the environment, for example
-``SHIJHON_NAVIDROME__URL``. Secrets can be given inline or as ``*_file`` paths so that
-deployments can keep them out of the configuration file.
+``SHIJHON_NAVIDROME__URL``. The Navidrome password can be given inline or through
+``navidrome.password_file`` so deployments can keep it out of the configuration file.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import functools
 import ipaddress
 import os
 import re
+import tomllib
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -33,7 +34,6 @@ from pydantic_settings import (
     InitSettingsSource,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
-    TomlConfigSettingsSource,
 )
 
 from shijhon.catalog import plugin
@@ -41,13 +41,13 @@ from shijhon.catalog import plugin
 
 class ServerSettings(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8765
+    port: int = Field(default=8765, ge=1, le=65535)
     # A request body that is not a form (the JSON client profile of getTranscodeDecision)
     # is read for the handlers up to this size; a larger one streams through behind them.
     # Forms are read as far as Navidrome reads them (10 MiB), whatever this says.
-    max_parsed_body_bytes: int = 1024 * 1024
+    max_parsed_body_bytes: int = Field(default=1024 * 1024, ge=0)
     # How long a successful credential check is reused (seconds).
-    credential_cache_seconds: float = 60.0
+    credential_cache_seconds: float = Field(default=60.0, ge=0, allow_inf_nan=False)
     # Navidrome's reverse-proxy user header (its ExtAuth.UserHeader). Never passed on to
     # Navidrome (nor Remote-User, its default) unless reverse_proxy_auth is on: then it goes
     # on from trusted_proxies only - users signed in by the proxy in front.
@@ -110,14 +110,14 @@ class NavidromeSettings(BaseModel):
     password: SecretStr | None = None
     password_file: Path | None = None
     # Library that holds the owned files and the placeholder folder.
-    library_id: int = 1
+    library_id: int = Field(default=1, ge=1)
     # Match Navidrome's Subsonic.ArtistParticipations when its default is changed.
     artist_participations: bool = False
     # The library root as Shijhon sees it on disk.
     library_path: Path | None = None
     # Client name Shijhon uses for its own Subsonic calls.
     client_name: str = "shijhon"
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
     # Navidrome's Scanner.PurgeMissing, when its configuration cannot be read (Navidrome's
     # DevUIShowConfig is off): placeholders are written only with "never".
     purge_missing: str = ""
@@ -656,7 +656,9 @@ class Settings(BaseSettings):
         return self._from_environment
 
     state_dir: Path = Path("var")
-    log_level: str = "INFO"
+    log_level: Literal[
+        "CRITICAL", "FATAL", "ERROR", "WARN", "WARNING", "INFO", "DEBUG", "NOTSET"
+    ] = "INFO"
     # Loggers logged at debug level whatever ``log_level`` says, e.g. ["shijhon.covers"]
     # (one line per catalog cover request: sizes, cache, times).
     log_debug: list[str] = Field(default_factory=list)
@@ -676,6 +678,11 @@ class Settings(BaseSettings):
     # owns the list: at startup add-ons are added, updated and ordered to match it, and
     # stored ones it no longer names are disabled. Not given: the stored list is kept.
     addons: list[AddonSettings] | None = None
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _log_level(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def _check(self) -> Settings:
@@ -765,7 +772,8 @@ def load_settings(config_file: Path | None = None, **overrides: Any) -> Settings
     reading (a file changed meanwhile cannot hand one kind's settings to another)."""
     file: dict[str, Any] = {}
     if config_file is not None:
-        file = dict(TomlConfigSettingsSource(Settings, toml_file=config_file).toml_data)
+        with config_file.expanduser().open("rb") as stream:
+            file = tomllib.load(stream)
 
     def read(model: type[Settings], data: dict[str, Any]) -> Settings:
         class _Settings(model):  # type: ignore[valid-type, misc]

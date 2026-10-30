@@ -102,10 +102,10 @@ def same_keys(a: Keys, b: Keys, *, tolerance_ms: int = TOLERANCE_MS) -> bool:
     if a.recording_id and b.recording_id:
         return a.recording_id == b.recording_id and _versions_agree(a, b)
     if a.isrcs and b.isrcs:
-        return bool(a.isrcs & b.isrcs)
+        return bool(a.isrcs & b.isrcs) and _versions_agree(a, b)
     if not timed:
         return False
-    if a.title != b.title or not _versions_agree(a, b):
+    if not a.title or a.title != b.title or not _versions_agree(a, b):
         return False
     return not a.artists or not b.artists or bool(a.artists & b.artists)
 

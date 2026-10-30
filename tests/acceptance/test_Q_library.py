@@ -281,7 +281,7 @@ def test_the_pass_mode_changes_from_its_next_run_or_after_a_restart(
         assert started.status_code == 303
         page = admin.get("library").text
         assert "becomes a dry run when Shijhon restarts" in page
-        assert "after Shijhon restarts: library pass (Library)." in page  # the restart banner
+        assert "after Shijhon restarts: Library pass (Library)." in page  # the restart banner
         assert passing.mode == "off"
         # Between dry run and on it changes from the next run.
         passing.mode = "dry_run"
@@ -299,7 +299,7 @@ def test_the_pass_mode_changes_from_its_next_run_or_after_a_restart(
         assert passing.mode == "dry_run"
         page = admin.get("library").text
         assert "fills nothing from its next run: dry runs until Shijhon restarts" in page
-        assert "after Shijhon restarts: library pass (Library)." in page  # off still waits
+        assert "after Shijhon restarts: Library pass (Library)." in page  # off still waits
         # On again before the restart: nothing waits any more.
         admin.submit("library", {"library_pass": "on"}, action="library/pass")
         assert passing.mode == "on"

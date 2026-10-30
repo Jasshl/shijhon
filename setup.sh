@@ -195,6 +195,12 @@ env_value() {
     esac
 }
 
+# Let Compose interpret an explicitly configured file set, including quoted values.
+env_has() {
+    [ -f "$env_file" ] && LC_ALL=C grep -q \
+        "^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1[[:space:]]*[=:]" "$env_file"
+}
+
 # This machine's address on the local network, when it can be told for certain: the address
 # of the interface the default route uses, if that is an Ethernet or Wi-Fi interface with a
 # private address. Otherwise nothing (a VPN, a virtual machine's own network, no network).
@@ -307,6 +313,37 @@ printf '%s\n' "$others" | sort -u |
         printf 'setup: %s\n' "the Compose project \"$project\" already has containers, from $other. This setup would take them over. Use that installation, or remove it first (docker compose down, in that folder)." >&2
         exit 1
     done || exit 1
+
+# Keep the running project's overlays when an earlier start used -f rather than
+# COMPOSE_FILE. An explicit COMPOSE_FILE in the shell or .env takes precedence.
+remember_compose_files=false
+compose_files=""
+if [ "${COMPOSE_FILE+set}" != set ] && ! env_has COMPOSE_FILE && [ -n "$others" ]; then
+    compose_files=$(docker ps -a --filter "label=com.docker.compose.project=$project" \
+        --format '{{.Label "com.docker.compose.project.config_files"}}') ||
+        fail "the project's Compose files could not be read ('docker ps' fails)"
+    # Unchanged containers can still name an earlier prefix of the file set.
+    # Keep the longest set only when it includes every other set in that order.
+    compose_files=$(printf '%s\n' "$compose_files" | awk '
+        NF { sets[$0] = 1; if (length($0) > length(longest)) longest = $0 }
+        END {
+            for (files in sets)
+                if (files != longest && index(longest, files ",") != 1) exit 1
+            print longest
+        }
+    ') || fail "the project's containers use conflicting Compose file sets. Set COMPOSE_FILE in packaging/.env to the files to use, then run ./setup.sh again."
+    if [ -n "$compose_files" ]; then
+        separator=${COMPOSE_PATH_SEPARATOR:-}
+        if [ -z "$separator" ] && [ -f "$env_file" ]; then
+            separator=$(env_value COMPOSE_PATH_SEPARATOR) ||
+                fail "COMPOSE_PATH_SEPARATOR in packaging/.env cannot be read"
+        fi
+        compose_files=$(printf '%s' "$compose_files" | tr ',' "${separator:-:}")
+        COMPOSE_FILE=$compose_files
+        export COMPOSE_FILE
+        remember_compose_files=true
+    fi
+fi
 
 # --- where the data is kept --------------------------------------------------------------
 
@@ -603,6 +640,14 @@ if ! $have_env; then
     did "packaging/.env written, the folder $music/_shijhon created"
 fi
 
+if $remember_compose_files; then
+    {
+        printf '\n'
+        env_line COMPOSE_FILE "$compose_files"
+    } >>"$env_file"
+    did "the running project's Compose files saved in packaging/.env"
+fi
+
 mkdir -p "$config_dir"
 if [ -f "$config_file" ]; then
     say "packaging/config/shijhon.toml exists: kept."
@@ -654,10 +699,14 @@ token_of() {
 
 say "Starting Navidrome ..."
 compose up -d navidrome || fail "Navidrome could not be started (the message above says why)"
-tries=0
-until compose exec -T navidrome curl -fsS -m 10 -o /dev/null http://127.0.0.1:4533/ping </dev/null 2>/dev/null; do
-    tries=$((tries + 1))
-    [ "$tries" -lt 120 ] || fail "Navidrome does not answer after two minutes: docker compose logs navidrome (in packaging/)"
+deadline=$(($(date +%s) + 120))
+while :; do
+    remaining=$((deadline - $(date +%s)))
+    [ "$remaining" -gt 0 ] || fail "Navidrome does not answer after two minutes: docker compose logs navidrome (in packaging/)"
+    [ "$remaining" -le 10 ] || remaining=10
+    if compose exec -T navidrome curl -fsS -m "$remaining" -o /dev/null http://127.0.0.1:4533/ping </dev/null 2>/dev/null; then
+        break
+    fi
     sleep 1
 done
 did "Navidrome started"
@@ -726,10 +775,14 @@ compose build || fail "Shijhon's image could not be built (the message above say
 say "Starting Shijhon ..."
 compose up -d ||
     fail "Shijhon could not be started (the message above says why; when it is the port, change SHIJHON_PORT in packaging/.env)"
-tries=0
-until compose exec -T shijhon python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/rest/ping.view', timeout=5)" </dev/null 2>/dev/null; do
-    tries=$((tries + 1))
-    [ "$tries" -lt 120 ] || fail "Shijhon does not answer after two minutes: docker compose logs shijhon (in packaging/)"
+deadline=$(($(date +%s) + 120))
+while :; do
+    remaining=$((deadline - $(date +%s)))
+    [ "$remaining" -gt 0 ] || fail "Shijhon does not answer after two minutes: docker compose logs shijhon (in packaging/)"
+    [ "$remaining" -le 5 ] || remaining=5
+    if compose exec -T shijhon python -c "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/rest/ping.view', timeout=int(sys.argv[1]))" "$remaining" </dev/null 2>/dev/null; then
+        break
+    fi
     sleep 1
 done
 

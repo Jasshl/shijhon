@@ -67,6 +67,11 @@ Directory options accept absolute paths with letters, digits, `_`, `.`, `/`, `@`
 and `-`; choose mountpoints without spaces. The module creates a dedicated `shijhon`
 user/group and the state directory. Give that
 user access to the configuration, existing library and placeholder/usage directories.
+With `usageExport.enable`, the exporter runs as this same `user` and `group`. Give it
+read and directory-traversal access to `usageExport.navidromeDataDirectory`, including
+`navidrome.db` and its WAL sidecars. This directory is normally private; grant access
+through a shared group or ACL, including access to newly created sidecars. The module
+binds it read-only for the exporter but does not grant filesystem permissions.
 For an existing installation set `user`, `group` and `createUser = false` to preserve its
 identity. Existing directory contents are never recursively chowned. The module creates
 no library, union mount, Navidrome instance, reverse proxy or backup job.

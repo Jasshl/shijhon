@@ -19,6 +19,7 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+import aiosqlite
 import anyio
 
 from shijhon.collection.contracts import Access, CollectionError, NativeAbsent
@@ -66,6 +67,7 @@ from shijhon.music_imports.overlap import (
     classify,
     quality_of,
 )
+from shijhon.music_imports.paths import Destinations
 from shijhon.music_imports.storage import Storage
 from shijhon.music_imports.upgrade import Upgrades
 from shijhon.quality import Minimum
@@ -148,10 +150,10 @@ _BELOW = (
 # already had or that join its albums (``?`` three times: the view).
 _SHOWN = (
     "(?=0 OR (?=1 AND (i.state IN ('rejected','excluded') OR i.warnings<>'[]'"
-    " OR i.outcome IN ('held','unsure','low_quality') OR " + _BELOW + "))"
+    " OR i.error='indexing' OR i.outcome IN ('held','unsure','low_quality') OR " + _BELOW + "))"
     " OR (?=2 AND (i.outcome IN"
     " ('linked','catalog_song','duplicate','held','unsure','copy','low_quality')"
-    " OR " + _BELOW + " OR i.upgraded_from<>'')))"
+    " OR i.error='indexing' OR " + _BELOW + " OR i.upgraded_from<>'')))"
 )
 _STATUS_COUNTS = (  # constant fragments only
     "SELECT j.id,j.state,j.revision,j.error,"  # noqa: S608
@@ -161,10 +163,11 @@ _STATUS_COUNTS = (  # constant fragments only
     "coalesce(sum(i.received_size>0 AND i.derived_from=''),0) AS received_files,"
     "coalesce(sum(CASE WHEN i.derived_from='' THEN i.received_size ELSE 0 END),0)"
     " AS received_bytes,"
-    "coalesce(sum(i.state IN ('eligible','placing','placed','complete')),0)"
+    "coalesce(sum(i.state IN ('eligible','placing','placed','complete')"
+    " AND i.error<>'indexing'),0)"
     " AS eligible_files,"
     "coalesce(sum(CASE WHEN i.state IN ('eligible','placing','placed','complete')"
-    " THEN i.expected_size ELSE 0 END),0) AS eligible_bytes,"
+    " AND i.error<>'indexing' THEN i.expected_size ELSE 0 END),0) AS eligible_bytes,"
     "coalesce(sum(i.state='complete'),0) AS complete_files,"
     "coalesce(sum(i.state='rejected'),0) AS rejected_files,"
     "coalesce(sum(i.state='excluded'),0) AS excluded_files,"
@@ -179,7 +182,8 @@ _STATUS_COUNTS = (  # constant fragments only
     "coalesce(sum(i.state IN ('matched','linked') AND i.outcome='catalog_song'),0)"
     " AS catalog_files,"
     "coalesce(sum(i.state='skipped' AND i.outcome='duplicate'),0) AS duplicate_files,"
-    "coalesce(sum(i.state='skipped' AND i.outcome='held'),0) AS held_files,"
+    "coalesce(sum((i.state='skipped' AND i.outcome='held')"
+    " OR (i.state='placed' AND i.error='indexing')),0) AS held_files,"
     "coalesce(sum(i.derived_from<>'' AND i.state<>'discarding'),0) AS copy_files,"
     "coalesce(sum(i.derived_from='' AND i.outcome='unsure'),0) AS unsure_files,"
     "coalesce(sum(i.state='copying'),0) AS copying_files,"
@@ -189,7 +193,9 @@ _STATUS_COUNTS = (  # constant fragments only
 )
 _STATUS_ITEMS = (  # constant fragments only
     "SELECT i.id,i.client_key,i.display_path AS path,i.expected_size AS size,"  # noqa: S608
-    "i.state,i.attempt,i.warnings,i.error,i.digest AS sha256,i.song_id,i.outcome,"
+    "i.state,i.attempt,i.warnings,i.error,i.digest AS sha256,i.song_id,"
+    "CASE WHEN i.error='indexing' THEN 'held'"
+    " ELSE i.outcome END AS outcome,"
     "i.match,i.distinct_song AS distinct_song,coalesce(d.state,'') AS copy_state,"
     "coalesce(json_extract(CASE WHEN json_valid(i.facts) THEN i.facts END,"
     "'$.keep_files'),0) AS keep_files,"
@@ -208,15 +214,34 @@ _STATUS_ITEMS = (  # constant fragments only
 # (``discarding``: ``MusicImports._discard_copies``).
 _RELEASE_UNPLACED = (
     "UPDATE music_import_items SET reserved_size="
-    "CASE WHEN state='linked' AND outcome IN ('linked','low_quality') THEN reserved_size"
+    "CASE WHEN received_cleanup='deleted' THEN 0"
+    " WHEN state='linked' AND outcome IN ('linked','low_quality') THEN reserved_size"
     " WHEN state='discarding' THEN reserved_size ELSE received_size END"
     " WHERE job_id=? AND state NOT IN ('uploading','placing','placed','complete')"
+)
+
+# Terminal jobs cannot publish these rows again. Preserve every placed/uncertain
+# file, its retained source, audio link, upgrade intent/history and removal receipt.
+# The item's ordinary state and received_size stay intact for its frozen report.
+_UNPUBLISHED = (
+    "i.received_cleanup<>'deleted' AND i.received_cleanup_error=''"
+    " AND ((j.state='cancelled' AND i.state IN"
+    " ('declared','received','eligible','rejected','excluded','skipped','matched',"
+    " 'copying','joined'))"
+    " OR (j.state='done' AND i.state IN ('rejected','excluded','skipped')))"
+    " AND i.upgrade='' AND i.upgraded_from='' AND i.song_id='' AND i.track_key=''"
+    " AND NOT EXISTS(SELECT 1 FROM music_import_links l WHERE l.item_id=i.id)"
+    " AND NOT EXISTS(SELECT 1 FROM music_import_removal_items r WHERE r.item_id=i.id)"
+    " AND NOT EXISTS(SELECT 1 FROM music_import_items d WHERE d.derived_from<>''"
+    " AND d.derived_from=i.id AND (d.state IN ('placing','placed','complete')"
+    " OR d.upgrade<>'' OR d.upgraded_from<>''))"
 )
 
 COPY_SLACK = 1024**2  # a copy's tags may be larger than the original's
 _DEFAULT_LIMITS = ImportLimits()
 PUBLISH_BATCH_FILES = 500
 PUBLISH_BATCH_BYTES = 1024**3
+RECEIVED_CLEANUP_BATCH = 500
 AUDIO_TRIES = 10  # an import's audio for a catalog song: attempts that had to wait
 AUDIO_RETRY = 30.0  # seconds before such an attempt is made again (times the attempts)
 IDLE_SECONDS = 60.0  # the worker looks for work it postponed at least this often
@@ -347,6 +372,9 @@ class MusicImports:
         # The placeholder engine's way to put an import's audio in place of the catalog
         # song it matched (``catalog_audio.py``).
         self.catalog_audio = catalog_audio
+        # Removal/restoration supplies its initiating actor's authorization for deferred
+        # audio; ordinary publication always uses the importing account.
+        self.audio_authorize: Callable[[str, str], Awaitable[None]] = self._audio_actor
         # Navidrome's settings checked right before a published file is replaced (keeping
         # a missing file's identity), raising when they refuse (``PlaceholderWrites``).
         self.write_gate = write_gate
@@ -361,11 +389,10 @@ class MusicImports:
             imports_folder=imports_folder,
             managed_folder=managed_folder,
         )
+        # The checked root marker and root_id identify the physical storage. A local
+        # mount path and admission budgets do not change that library or its folders.
         self.config_id = hashlib.sha256(
-            json.dumps(
-                [library_id, str(library_path), imports_folder, managed_folder, asdict(limits)],
-                sort_keys=True,
-            ).encode()
+            json.dumps([library_id, imports_folder]).encode()
         ).hexdigest()
         self._locks, self._worker = KeyedLocks(), anyio.Lock()
         self._uploads: set[str] = set()
@@ -388,6 +415,28 @@ class MusicImports:
         assert row
         await anyio.to_thread.run_sync(self.storage.open, row["id"], self.library_id)
         try:
+            # The verified root includes the installation, library, device/inode and
+            # imports folder. Earlier budgets and local mount paths are irrelevant.
+            # Keep each frozen review valid while changing its binding atomically.
+            async with (
+                self.store.transaction() as conn,
+                conn.execute(
+                    "SELECT id,config_id,fingerprint FROM music_import_jobs"
+                    " WHERE library_id=? AND root_id=? AND config_id<>?",
+                    [self.library_id, self.storage.root_id, self.config_id],
+                ) as cursor,
+            ):
+                while jobs := await cursor.fetchmany(50):
+                    for job in jobs:
+                        fingerprint = job["fingerprint"]
+                        if fingerprint and fingerprint == await self._fingerprint(
+                            job["id"], conn=conn, config_id=job["config_id"]
+                        ):
+                            fingerprint = await self._fingerprint(job["id"], conn=conn)
+                        await conn.execute(
+                            "UPDATE music_import_jobs SET config_id=?,fingerprint=? WHERE id=?",
+                            [self.config_id, fingerprint, job["id"]],
+                        )
             # Every unfinished attempt restarts from zero. Discard its private bytes
             # before declaring it retryable, whether Stop precedes or follows restart.
             while True:
@@ -404,6 +453,8 @@ class MusicImports:
                     await self._discard_upload(dict(item), item["attempt"], "interrupted")
             # Copies a new review gave up before a stop: their bytes, then their rows.
             while await self._discard_copies():
+                pass
+            while await self._release_unpublished(pending_only=True):
                 pass
             async with self.store.transaction() as conn:
                 await conn.execute(
@@ -443,6 +494,9 @@ class MusicImports:
                 raise ImportError("storage", "The dedicated imports root is unavailable.")
             self.storage.check()
 
+    async def _audio_actor(self, owner: str, job_id: str) -> None:
+        await self._actor(owner)
+
     async def _job(self, owner: str, ident: str, *, write: bool = True) -> dict[str, Any]:
         await self._actor(owner, write=write)
         row = await self.store.fetchone(
@@ -455,7 +509,7 @@ class MusicImports:
         if write and (job["root_id"] != self.storage.root_id or job["config_id"] != self.config_id):
             raise ImportError(
                 "configuration_changed",
-                "Import storage or limits changed. Restore its configuration.",
+                "The import library or folders changed. Restore its configuration.",
             )
         return job
 
@@ -512,12 +566,22 @@ class MusicImports:
         return await self.status(owner_id, ident)
 
     async def _capacity(self, owner: str, added: int = 0) -> None:
+        # Quotas include every retained copy. Free space subtracts only future bytes:
+        # unreceived items, upgrades still being made, and catalog audio not in place.
+        # Committed upgrades and pinned catalog audio already occupy the filesystem.
         totals = await self.store.fetchone(
             "SELECT coalesce(sum(i.reserved_size),0) AS global_bytes,"
             "coalesce(sum(CASE WHEN j.owner_id=? THEN i.reserved_size ELSE 0 END),0) AS"
             " owner_bytes,"
-            "coalesce(sum(max(0,i.reserved_size-i.received_size)),0) AS pending_bytes"
-            " FROM music_import_items i JOIN music_import_jobs j ON j.id=i.job_id",
+            "coalesce(sum(CASE WHEN i.received_size=0 THEN i.reserved_size ELSE 0 END"
+            " + CASE WHEN json_extract(nullif(i.upgrade,''),'$.phase')='carry'"
+            " THEN coalesce(json_extract(i.upgrade,'$.reserved'),0) ELSE 0 END"
+            " + CASE WHEN i.received_size>0 AND l.reserved>0"
+            " AND NOT coalesce(p.state='delivered' AND p.import_item=i.id,0)"
+            " THEN l.reserved ELSE 0 END),0) AS pending_bytes"
+            " FROM music_import_items i JOIN music_import_jobs j ON j.id=i.job_id"
+            " LEFT JOIN music_import_links l ON l.item_id=i.id"
+            " LEFT JOIN placeholders p ON p.song_id=l.song_id",
             [owner],
         )
         assert totals
@@ -584,13 +648,21 @@ class MusicImports:
                     if previous_node and (previous_node != (exact, False) or leaf):
                         raise ImportError("path_collision", "File paths conflict in this import.")
                     nodes[key] = exact, leaf
+            destinations = Destinations()
             async with self.store.transaction() as conn:
                 cursor = await conn.execute(
-                    "SELECT display_path FROM music_import_items WHERE job_id=?", [job_id]
+                    "SELECT display_path,source_name FROM music_import_items"
+                    " WHERE job_id=? AND derived_from=''",
+                    [job_id],
                 )
                 try:
                     while page := await cursor.fetchmany(MANIFEST_PAGE_SIZE):
                         for row in page:
+                            batch_prefix = "batch-" + job_id + "/"
+                            if row["source_name"].startswith(batch_prefix):
+                                destinations.remember(
+                                    row["display_path"], row["source_name"][len(batch_prefix) :]
+                                )
                             for key, exact, leaf in _path_nodes(row["display_path"]):
                                 incoming = nodes.get(key)
                                 if incoming and (incoming != (exact, False) or leaf):
@@ -599,6 +671,10 @@ class MusicImports:
                                     )
                 finally:
                     await cursor.close()
+            final_names = {
+                entry.client_key: "batch-" + job_id + "/" + destinations.allocate(entry.path)
+                for entry in sorted(entries, key=lambda entry: scanner_ignored_path(entry.path))
+            }
             count = await self.store.fetchone(
                 "SELECT count(*) AS n,coalesce(sum(expected_size),0) AS b"
                 " FROM music_import_items WHERE job_id=?",
@@ -629,24 +705,17 @@ class MusicImports:
                     for entry in entries:
                         asset = secrets.token_hex(16)
                         fmt = entry.path.rsplit(".", 1)[-1].lower()
-                        ignored = scanner_ignored_path(entry.path)
-                        supported = fmt in FORMATS and not ignored
+                        supported = fmt in FORMATS
                         error, warnings = "", []
-                        if ignored:
-                            error = "native_ignored"
-                            warnings = [
-                                "The stock Navidrome scanner ignores this filename or folder. "
-                                "No original was uploaded or published."
-                            ]
-                        elif fmt in NATIVE_REJECTED:
+                        if fmt in NATIVE_REJECTED:
                             error, warnings = "native_unsupported", [NATIVE_REJECTED[fmt]]
                         elif not supported:
                             error = "unsupported"
                         await conn.execute(
                             "INSERT INTO music_import_items"
                             "(id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
-                            "expected_digest,state,staging_name,final_name,error,warnings)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "expected_digest,state,staging_name,final_name,source_name,error,warnings)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             [
                                 secrets.token_hex(16),
                                 asset,
@@ -658,7 +727,8 @@ class MusicImports:
                                 entry.sha256,
                                 "declared" if supported else "rejected",
                                 asset + ".part",
-                                "batch-" + job_id + "/" + entry.path,
+                                final_names[entry.client_key],
+                                final_names[entry.client_key],
                                 error,
                                 json.dumps(warnings),
                             ],
@@ -1359,9 +1429,10 @@ class MusicImports:
         planned: tuple[str, str] | None = None
         if tags is not None:
             try:
-                await self._capacity(owner, item["expected_size"] + COPY_SLACK)
                 await self._verify(item)
-                planned = await self._plan_copy(job, item)
+                async with self._locks.hold("admission"):
+                    await self._capacity(owner, item["expected_size"] + COPY_SLACK)
+                    planned = await self._plan_copy(job, item)
                 result = await self._retag(item, planned[1], tags, artist)
             except ImportError as exc:
                 if exc.code not in ("bytes_limit", "space", "invalid_audio"):
@@ -1465,7 +1536,9 @@ class MusicImports:
         process: anyio.abc.Process | None = None
         try:
             target = self.storage.copy_target(name)
-            with anyio.fail_after(self.limits.validation_seconds * 4):
+            with anyio.fail_after(
+                self.limits.validation_seconds * 4 + item["expected_size"] / (1024 * 1024)
+            ):
                 process = await anyio.open_process(
                     [sys.executable, "-m", "shijhon.music_imports.retag", str(source), str(target)],
                     pass_fds=(source, target),
@@ -1537,7 +1610,7 @@ class MusicImports:
             [job_id],
         )
         await conn.execute(
-            "UPDATE music_import_items SET final_name='batch-'||job_id||'/'||display_path"  # noqa: S608
+            "UPDATE music_import_items SET final_name=source_name"  # noqa: S608
             " WHERE job_id=? AND state='joined'" + unplaced,
             [job_id, job_id],
         )
@@ -1683,20 +1756,26 @@ class MusicImports:
             self._wake.set()
         return await self.status(owner_id, job_id)
 
-    async def _fingerprint(self, job_id: str) -> str:
+    async def _fingerprint(
+        self, job_id: str, *, conn: aiosqlite.Connection | None = None, config_id: str | None = None
+    ) -> str:
         hashed = hashlib.sha256()
-        hashed.update(self.config_id.encode())
+        hashed.update((self.config_id if config_id is None else config_id).encode())
         cursor = ""
         while True:
-            rows = await self.store.fetchall(
+            query = (
                 "SELECT id,asset_id,expected_size,digest,final_name,state,warnings,outcome,"
                 "match,distinct_song,derived_from,"
                 "coalesce(json_extract(CASE WHEN json_valid(facts) THEN facts END,"
                 "'$.keep_files'),0) AS keep_files"
                 " FROM music_import_items WHERE job_id=? AND id>? AND state<>'discarding'"
-                " ORDER BY id LIMIT 500",
-                [job_id, cursor],
+                " ORDER BY id LIMIT 500"
             )
+            if conn is None:
+                rows = await self.store.fetchall(query, [job_id, cursor])
+            else:
+                async with conn.execute(query, [job_id, cursor]) as page:
+                    rows = list(await page.fetchall())
             if not rows:
                 break
             for row in rows:
@@ -1853,7 +1932,82 @@ class MusicImports:
                 _RELEASE_UNPLACED,
                 [job_id],
             )
+        self.poke()
         return await self.status(owner_id, job_id)
+
+    async def _release_unpublished(self, *, pending_only: bool = False) -> bool:
+        """Clean one batch; a refused item keeps its bytes/quota and cannot block others.
+
+        Startup clears empty receipts in bulk and finishes only recorded deletions.
+        New filesystem work belongs to the worker. Cancellation still leaves a durable
+        pending intent; ordinary failures are recorded per item without disabling imports.
+        """
+        try:
+            return await self._cleanup_unpublished(pending_only=pending_only)
+        except Exception as exc:
+            # Even a failure recording a refusal must not kill startup/the worker.
+            log.warning("unpublished import cleanup waits: %s", type(exc).__name__)
+            return False
+
+    async def _cleanup_unpublished(self, *, pending_only: bool) -> bool:
+        binding = [self.library_id, self.storage.root_id, self.config_id]
+        await self.store.execute(
+            "UPDATE music_import_items SET received_cleanup='deleted',reserved_size=0"  # noqa: S608
+            " WHERE received_size=0 AND received_cleanup='' AND id IN"
+            " (SELECT i.id FROM music_import_items i JOIN music_import_jobs j ON j.id=i.job_id"
+            " WHERE j.library_id=? AND j.root_id=? AND j.config_id=? AND " + _UNPUBLISHED + ")",
+            binding,
+        )
+        pending = " AND i.received_cleanup='pending'" if pending_only else ""
+        row = await self.store.fetchone(
+            "SELECT j.id FROM music_import_jobs j JOIN music_import_items i ON i.job_id=j.id"  # noqa: S608
+            " WHERE j.library_id=? AND j.root_id=? AND j.config_id=? AND "
+            + _UNPUBLISHED
+            + pending
+            + " ORDER BY j.created,i.id LIMIT 1",
+            binding,
+        )
+        if row is None:
+            return False
+        async with self._locks.hold(row["id"]):
+            rows = await self.store.fetchall(
+                "SELECT i.id,i.staging_name FROM music_import_items i"  # noqa: S608
+                " JOIN music_import_jobs j ON j.id=i.job_id WHERE j.id=? AND "
+                + _UNPUBLISHED
+                + pending
+                + " ORDER BY i.id LIMIT ?",
+                [row["id"], RECEIVED_CLEANUP_BATCH],
+            )
+            if rows:
+                placeholders = ",".join("?" for _ in rows)
+                await self.store.execute(
+                    "UPDATE music_import_items SET received_cleanup='pending' WHERE id IN ("  # noqa: S608
+                    + placeholders
+                    + ")",
+                    [item["id"] for item in rows],
+                )
+            for item in rows:
+                try:
+                    await anyio.to_thread.run_sync(
+                        self.storage.discard_unpublished, item["staging_name"]
+                    )
+                except Exception as exc:
+                    # Public ImportError messages are safe; OS errors can contain paths.
+                    reason = str(exc) if isinstance(exc, ImportError) else type(exc).__name__
+                    await self.store.execute(
+                        "UPDATE music_import_items SET received_cleanup_error=? WHERE id=?",
+                        [reason, item["id"]],
+                    )
+                    log.warning(
+                        "unpublished import cleanup refused for item %s: %s", item["id"], reason
+                    )
+                    continue
+                await self.store.execute(
+                    "UPDATE music_import_items SET received_cleanup='deleted',reserved_size=0"
+                    " WHERE id=? AND received_cleanup='pending'",
+                    [item["id"]],
+                )
+        return bool(rows)
 
     async def resume(self, owner_id: str, job_id: str) -> dict[str, Any]:
         async with self._locks.hold(job_id):
@@ -1866,10 +2020,17 @@ class MusicImports:
                     if job["resume_state"] == "checking"
                     else "uploading"
                 )
-                await self.store.execute(
-                    "UPDATE music_import_jobs SET state=?,error='' WHERE id=? AND state='paused'",
-                    [state, job_id],
-                )
+                async with self.store.transaction() as conn:
+                    await conn.execute(
+                        "UPDATE music_import_items SET error='' WHERE job_id=?"
+                        " AND state IN ('placed','joined') AND error='indexing'",
+                        [job_id],
+                    )
+                    await conn.execute(
+                        "UPDATE music_import_jobs SET state=?,error=''"
+                        " WHERE id=? AND state='paused'",
+                        [state, job_id],
+                    )
                 self._wake.set()
         return await self.status(owner_id, job_id)
 
@@ -2249,7 +2410,8 @@ class MusicImports:
         if self.catalog_audio is None:
             return False
         rows = await self.store.fetchall(
-            "SELECT l.item_id,l.song_id,l.owner_id,l.active,l.audio,l.reserved,i.staging_name,"
+            "SELECT l.item_id,l.job_id,l.song_id,l.owner_id,l.active,l.audio,l.reserved,"
+            "i.staging_name,"
             "i.final_name,i.facts,i.state,i.received_size,p.state AS placeholder_state"
             " FROM music_import_links l"
             " JOIN music_import_items i ON i.id=l.item_id"
@@ -2344,7 +2506,11 @@ class MusicImports:
             else:
                 try:
                     outcome = await self.catalog_audio.put(
-                        link["song_id"], link["item_id"], source, suffix
+                        link["song_id"],
+                        link["item_id"],
+                        source,
+                        suffix,
+                        authorize=lambda: self.audio_authorize(link["owner_id"], link["job_id"]),
                     )
                 finally:
                     os.close(source)
@@ -2715,7 +2881,7 @@ class MusicImports:
         # Recover already placed/uncertain originals before adding new approved ones.
         rows = await self.store.fetchall(
             "SELECT * FROM music_import_items WHERE job_id=?"
-            " AND state IN ('eligible','placing','placed')"
+            " AND state IN ('eligible','placing','placed') AND error<>'indexing'"
             " ORDER BY CASE WHEN state='eligible' THEN 1 ELSE 0 END,id LIMIT ?",
             [job_id, PUBLISH_BATCH_FILES],
         )
@@ -2736,23 +2902,43 @@ class MusicImports:
         await self._publishing(owner, job_id, revision=revision)
         await self.scan([self.storage.folder])
         await self._publishing(owner, job_id, revision=revision)
-        evidence: list[NativeFile] = []
+        evidence: list[tuple[dict[str, Any], NativeFile]] = []
         identities: set[str] = set()
         for item in batch:
-            native = await self._native_evidence(job, item)
+            try:
+                native = await self._native_evidence(job, item)
+            except ImportError as exc:
+                if exc.code != "indexing":
+                    raise
+                await self._hold_unindexed(item)
+                continue
             if native.song_id in identities:
                 raise ImportError("identity", "Navidrome reused an imported song identity.")
             identities.add(native.song_id)
-            evidence.append(native)
+            evidence.append((item, native))
         await self._publishing(owner, job_id, revision=revision)
         await self.refresh(owner, self.library_id)
         await self._publishing(owner, job_id, revision=revision)
-        for item, native in zip(batch, evidence, strict=True):
-            await self._credit(job, item, native)
+        for item, native in evidence:
+            try:
+                await self._credit(job, item, native)
+            except ImportError as exc:
+                if exc.code != "indexing":
+                    raise
+                await self._hold_unindexed(item)
+
+    async def _hold_unindexed(self, item: dict[str, Any]) -> None:
+        await self.store.execute(
+            "UPDATE music_import_items SET error='indexing'"
+            " WHERE (id=? AND state='placed') OR (id=? AND state='joined')",
+            [item["id"], item.get("derived_from", "")],
+        )
 
     async def tick(self) -> bool:
         """Check one private file or publish/reconcile one bounded approved batch."""
         async with self._worker:
+            if await self._release_unpublished():
+                return True
             row = await self.store.fetchone(
                 "SELECT * FROM music_import_jobs WHERE state IN"
                 " ('checking','approved','publishing')"
@@ -2796,10 +2982,18 @@ class MusicImports:
                     pending = await self.store.fetchone(
                         "SELECT 1 FROM music_import_items WHERE job_id=?"
                         " AND state IN ('eligible','placing','placed','matched','catalog')"
-                        " LIMIT 1",
+                        " AND error<>'indexing' LIMIT 1",
                         [job["id"]],
                     )
                     if not pending:
+                        if await self.store.fetchone(
+                            "SELECT 1 FROM music_import_items WHERE job_id=?"
+                            " AND state='placed' AND error='indexing' LIMIT 1",
+                            [job["id"]],
+                        ):
+                            raise ImportError(
+                                "indexing", "Some retained files are not indexed yet."
+                            )
                         await self._publishing(job["owner_id"], job["id"])
                         await self.store.execute(
                             "UPDATE music_import_jobs SET state='done',error='' WHERE id=?"

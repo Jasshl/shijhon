@@ -295,6 +295,10 @@ class Client:
                 403: "Token does not permit this request or the requested context.",
                 404: "Request was not found or is not accessible to this token.",
                 409: "Idempotency-Key conflicts with earlier input; retain the original request.",
+                413: "Request body is too large; reduce the input.",
+                415: "Unsupported media type; send application/json.",
+                424: "Required playlist setup is missing; check the connection settings.",
+                429: "Too many playlist requests; try again later with the same input and key.",
             }
             if 300 <= status < 400:
                 raise ClientError("Redirect refused; check SHIJHON_URL.") from None

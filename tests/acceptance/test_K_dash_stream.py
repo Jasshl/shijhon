@@ -362,13 +362,13 @@ def test_a_seek_after_a_new_link_gets_the_same_bytes_or_is_refused(
     assert fresh.status_code == 200 and fresh.headers["etag"] != etag
 
 
-def test_a_new_link_while_the_file_is_fetched_goes_on_with_it_unprobed(
+def test_a_new_link_while_the_file_is_fetched_reprobes_and_keeps_its_bytes(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon], dash: Dash
 ) -> None:
     """The link expires while the file's segments are still being fetched: a seek takes a
     new link, whose manifest offers the same representation - the segments still missing
-    come from it (the old link's answer 403 now), no size is asked for again, and the
-    bytes and the ETag are the play's."""
+    come from it (the old link's answer 403 now). Its sizes and validators are probed
+    afresh, while the bytes and served ETag remain the play's."""
     a, _ = a_and_b
     world.services.deliverer.settings.dash_segments_at_once = 1
     folder = dash_audio("s-relink-fill", LONG)
@@ -387,7 +387,7 @@ def test_a_new_link_while_the_file_is_fetched_goes_on_with_it_unprobed(
     _, segments = expected(folder)
     assert seek.content == segments[-1][-300:]
     assert len(a.requests("stream")) == 2 and len(a.requests("mpd")) == 2
-    assert len(probes(a)) == len(names)  # sizes asked for once, of the first link
+    assert len(probes(a)) == 2 * len(names)  # each link has its own size/validator probes
     assert {r["generation"] for r in media(a) if r["name"] == names[-1]} == {2}
     whole = stream(world, song)
     assert whole.content[:100] == first.content and whole.content.endswith(segments[-1])

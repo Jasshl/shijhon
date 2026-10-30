@@ -4,6 +4,7 @@ decisions, with fakes (the real swaps are in tests/acceptance/test_music_import_
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,11 @@ class FakeEngine:
         self.calls: list[tuple[str, Any]] = []
         self.refuse: str | None = None
 
+    @contextmanager
+    def guard_writes(self, authorize):
+        self.authorize = authorize
+        yield
+
     async def placeholder_row(self, song_id: str) -> Any:
         return self.row
 
@@ -49,6 +55,8 @@ class FakeEngine:
         return 0
 
     async def replace_with_delivered(self, song_id: str, delivered: Any = None, **kw: Any) -> str:
+        if getattr(self, "authorize", None):
+            await self.authorize()
         self.calls.append(("replace", kw))
         if self.refuse:
             raise ReplaceError(self.refuse)
@@ -57,6 +65,8 @@ class FakeEngine:
         return "x" + kw["suffix"]
 
     async def revert_to_placeholder(self, song_id: str, **kw: Any) -> bool:
+        if getattr(self, "authorize", None):
+            await self.authorize()
         self.calls.append(("revert", kw))
         assert self.row is not None
         if not _revertible(self.row, kw.get("pinned"), kw.get("only_if_missing", False)):
@@ -67,27 +77,52 @@ class FakeEngine:
 
 def test_putting_an_imports_audio_in_never_overwrites_what_is_there() -> None:
     async def main() -> None:
+        async def authorize():
+            pass
+
         silent = FakeEngine({"state": "placeholder", "import_item": None})
-        assert await CatalogSongAudio(silent).put("s", "item", 7, ".mp3") == "placed"
+        assert (
+            await CatalogSongAudio(silent).put("s", "item", 7, ".mp3", authorize=authorize)
+            == "placed"
+        )
         assert silent.calls == [("replace", {"source_fd": 7, "suffix": ".mp3", "pin": "item"})]
-        assert await CatalogSongAudio(silent).put("s", "item", 7, ".mp3") == "placed"  # again
+        assert (
+            await CatalogSongAudio(silent).put("s", "item", 7, ".mp3", authorize=authorize)
+            == "placed"
+        )  # again
         assert len(silent.calls) == 1
         # Downloaded audio is a cache: back to the placeholder, then the import's audio.
         cached = FakeEngine({"state": "delivered", "import_item": None})
-        assert await CatalogSongAudio(cached).put("s", "item", 7, ".flac") == "placed"
+        assert (
+            await CatalogSongAudio(cached).put("s", "item", 7, ".flac", authorize=authorize)
+            == "placed"
+        )
         assert [c[0] for c in cached.calls] == ["revert", "replace"]
         # Another import's own audio stays.
         other = FakeEngine({"state": "delivered", "import_item": "earlier"})
-        assert await CatalogSongAudio(other).put("s", "item", 7, ".mp3") == "kept"
+        assert (
+            await CatalogSongAudio(other).put("s", "item", 7, ".mp3", authorize=authorize) == "kept"
+        )
         assert other.calls == []
         # Not a catalog song any more; a refused swap; a download that got there first.
-        assert await CatalogSongAudio(FakeEngine(None)).put("s", "item", 7, ".mp3") == "failed"
+        assert (
+            await CatalogSongAudio(FakeEngine(None)).put(
+                "s", "item", 7, ".mp3", authorize=authorize
+            )
+            == "failed"
+        )
         refused = FakeEngine({"state": "placeholder", "import_item": None})
         refused.refuse = "the song ID changed; the placeholder was restored"
-        assert await CatalogSongAudio(refused).put("s", "item", 7, ".mp3") == "failed"
+        assert (
+            await CatalogSongAudio(refused).put("s", "item", 7, ".mp3", authorize=authorize)
+            == "failed"
+        )
         raced = FakeEngine({"state": "placeholder", "import_item": None})
         raced.refuse = "already replaced"
-        assert await CatalogSongAudio(raced).put("s", "item", 7, ".mp3") == "pending"
+        assert (
+            await CatalogSongAudio(raced).put("s", "item", 7, ".mp3", authorize=authorize)
+            == "pending"
+        )
         # Taking it out: only this import's own audio.
         assert not await CatalogSongAudio(other).take("s", "item")
         assert await CatalogSongAudio(silent).take("s", "item")

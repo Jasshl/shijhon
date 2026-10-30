@@ -37,14 +37,14 @@
 {% endif %}
 {% for item in extra.withheld %}
 <div class="notice notice-warn" role="status">
-  <p class="notice-title">Not sent: {{ item.label|lower }}</p>
-  <p>“{{ item.label }}” comes from the configuration file or the environment, set for the {{ item.address|lower }} named there. The <a href="#{{ item.id }}">{{ item.address|lower }}</a> saved here is on another host, so it is not sent there. Set the two together in the configuration file, or remove the one saved here.</p>
+  <p class="notice-title">Not sent: {{ item.label }}</p>
+  <p>“{{ item.label }}” comes from the configuration file or the environment, set for the {{ item.address }} named there. The <a href="#{{ item.id }}">{{ item.address }}</a> saved here is on another host, so it is not sent there. Set the two together in the configuration file, or remove the one saved here.</p>
 </div>
 {% endfor %}
 {% for item in extra.displaced %}
 <div class="notice notice-warn" role="status">
-  <p class="notice-title">Not sent: {{ item.label|lower }}</p>
-  <p>“{{ item.label }}” was saved here for another {{ item.address|lower }} than the one in use, which is on another host, so it is not sent there. <a href="#{{ item.id }}">Enter it again</a> if this one needs it; saving this page removes the old value.</p>
+  <p class="notice-title">Not sent: {{ item.label }}</p>
+  <p>“{{ item.label }}” was saved here for another {{ item.address }} than the one in use, which is on another host, so it is not sent there. <a href="#{{ item.id }}">Enter it again</a> if this one needs it; saving this page removes the old value.</p>
 </div>
 {% endfor %}
 <section class="group" aria-labelledby="status-title">
@@ -73,10 +73,12 @@
   <div class="group-head"><h2 id="status-title">Status</h2></div>
   <div class="rows">
     <div class="row status-row">
-{% if not extra.configured %}
+{% if not extra.running and not extra.configured %}
       <p class="status"><span class="led led-off" aria-hidden="true"></span><span>Off: no AudioMuse-AI address is set</span></p>
 {% elif not extra.running %}
       <p class="status"><span class="led" aria-hidden="true"></span><span>Not connected yet: sound analysis starts when Shijhon restarts</span></p>
+{% elif not extra.configured %}
+      <p class="status"><span class="led" aria-hidden="true"></span><span>Sound analysis is still running; it turns off after Shijhon restarts</span></p>
 {% elif not extra.status %}
       <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>The status could not be read</span></p>
 {% elif extra.status.reachable %}
@@ -124,6 +126,9 @@
 {% endif %}
 <form method="post" action="{{ prefix }}/{{ page }}" novalidate>
   <input type="hidden" name="csrf" value="{{ csrf }}">
+{% if page == "catalog" and extra.identity_addon is defined %}
+  <input type="hidden" name="identity-addon" value="{{ extra.identity_addon }}">
+{% endif %}
 {% if shown_kind %}
   <input type="hidden" name="{{ shown_kind[0] }}" value="{{ shown_kind[1] }}">
 {% endif %}

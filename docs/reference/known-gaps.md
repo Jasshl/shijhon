@@ -86,12 +86,14 @@
 
 ## API parity and security
 
-- JSONP answers and answers to `HEAD` are Navidrome's own: a catalog item asked for as
-  JSONP gets Navidrome's "not found".
+- JSONP answers and answers to `HEAD` apply personal library filtering, but omit catalog
+  additions and complete counts before preparation
+  ([library visibility](library-visibility.md#reads-covered-by-the-adapters)). A catalog
+  item asked for as JSONP gets Navidrome's "not found".
 - "Audio unavailable" errors carry `type: "shijhon"` and no `serverVersion`. Extended
   answers lose `ETag` and `Last-Modified`.
 - An add-on's JSON answer is decompressed before its size is checked: the 1 MiB limit
   applies to the decompressed data as it arrives.
 - The marks of saved values (which host a value belongs to, which may be shown) are
-  unsalted hashes alongside the values. The CI workflow pins its actions to tags, not
-  commits.
+  unsalted hashes alongside the values.
+- The CI workflow pins its actions to tags, not commits.

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import secrets
 import time
 from typing import Any
 
+import anyio
 from pydantic import SecretStr
 
 from shijhon.playlists.model import AIModels, AIPreferences, Connection, Definition, PlaylistError
@@ -111,6 +114,16 @@ class Repository:
                     " (SELECT id FROM playlist_mixes WHERE owner=?) AND state!='published'",
                     [old.user_id],
                 )
+            cursor = await db.execute(
+                "SELECT connection,generation FROM playlist_owners WHERE id=?", [connection.user_id]
+            )
+            saved = await cursor.fetchone()
+            generation = (
+                saved["generation"]
+                if saved
+                and connection.same_settings(Connection.model_validate_json(saved["connection"]))
+                else secrets.token_hex(16)
+            )
             await db.execute(
                 "INSERT INTO playlist_owners(id,username,connection,generation)"
                 " VALUES (?,?,?,?)"
@@ -120,7 +133,7 @@ class Repository:
                     connection.user_id,
                     connection.username,
                     connection.stored(),
-                    secrets.token_hex(16),
+                    generation,
                 ],
             )
 
@@ -146,12 +159,51 @@ class Repository:
         )
         return ident
 
+    async def create_discovery(
+        self, owner: str, key: str, definition: Definition, *, enable_after: bool = False
+    ) -> str:
+        """Save one creation and its first run atomically; retries reuse that creation."""
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
+            raise PlaylistError("Reload the discovery mix form before submitting.")
+        original = json.dumps([definition.model_dump(), enable_after], sort_keys=True)
+        input_hash = hashlib.sha256(original.encode()).hexdigest()
+        async with self.store.transaction() as db:
+            cursor = await db.execute(
+                "SELECT id,input_hash FROM playlist_discovery_requests"
+                " WHERE owner=? AND request_key=?",
+                [owner, key],
+            )
+            old = await cursor.fetchone()
+            if old:
+                if old["input_hash"] != input_hash:
+                    raise PlaylistError("This mix key was already used with different input.")
+                return str(old["id"])
+            ident, run = secrets.token_hex(12), secrets.token_hex(12)
+            await db.execute(
+                "INSERT INTO playlist_mixes(id,owner,definition) VALUES (?,?,?)",
+                [ident, owner, definition.model_dump_json()],
+            )
+            await db.execute(
+                "INSERT INTO playlist_discovery_requests(id,owner,request_key,input_hash)"
+                " VALUES (?,?,?,?)",
+                [ident, owner, key, input_hash],
+            )
+            data = {
+                "publish_after_generation": not definition.review_before_publishing,
+                "enable_after": enable_after and bool(definition.interval),
+            }
+            await db.execute(
+                "INSERT INTO playlist_runs(id,mix,created,state,data) VALUES (?,?,?,'queued',?)",
+                [run, ident, time.time(), json.dumps(data)],
+            )
+        return ident
+
     async def run(self, ident: str) -> dict[str, Any]:
         row = await self.store.fetchone("SELECT * FROM playlist_runs WHERE id=?", [ident])
         if not row:
             raise PlaylistError("This run is no longer available.")
         data = dict(row)
-        data["data"] = json.loads(data["data"])
+        data["data"] = await anyio.to_thread.run_sync(json.loads, data["data"])
         return data
 
     async def runs(self, mix: str) -> list[dict[str, Any]]:
@@ -200,7 +252,7 @@ class Repository:
     async def update(self, run: str, state: str, data: dict[str, Any], error: str = "") -> None:
         await self.store.execute(
             "UPDATE playlist_runs SET state=?,data=?,error=? WHERE id=?",
-            [state, json.dumps(data), error, run],
+            [state, await anyio.to_thread.run_sync(json.dumps, data), error, run],
         )
 
     async def pause(self, mix: str) -> None:

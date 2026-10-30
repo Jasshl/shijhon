@@ -250,3 +250,22 @@ async def test_complete_bytes_tags_ids_private_staging_and_same_bytes_linked_can
         await caller.http.aclose()
         await native.aclose()
         await store.close()
+
+
+async def test_pinned_scanner_dot_directories(navidrome_factory):
+    nd = navidrome_factory()
+    from tests.unit.test_music_imports import audio
+
+    paths = [
+        "Visible/Song.flac",
+        ".Hidden/Song.flac",
+        "Visible/.Nested/Song.flac",
+        "..Double/Song.flac",
+    ]
+    for name in paths:
+        path = nd.music / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(audio())
+    await anyio.to_thread.run_sync(lambda: nd.scan(full=True))
+    rows = (await anyio.to_thread.run_sync(lambda: nd.native("GET", "song"))).json()
+    assert {r["path"] for r in rows} == {"Visible/Song.flac", "..Double/Song.flac"}

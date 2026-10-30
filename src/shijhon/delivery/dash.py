@@ -74,7 +74,7 @@ from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
 from shijhon.delivery import mpd, pacing, segmented
-from shijhon.delivery.netpolicy import denied
+from shijhon.delivery.netpolicy import USER_AGENT, denied
 from shijhon.delivery.pacing import AddonPace
 from shijhon.delivery.segmented import Probe, Served
 
@@ -891,6 +891,15 @@ class Dash:
                 log.info("DASH from %s: a new link to another file than the one served", link.name)
                 self._drop(stream)
                 return False
+            found = await segmented.probed(
+                len(plan.media),
+                lambda n: self._probe(link, plan.media[n], limited),
+                min(PROBES_AT_ONCE, 2 * max(1, stream.at_once)),
+            )
+            if found is None or tuple(p.size for p in found) != stream.file.layout.sizes:
+                self._drop(stream)
+                return False
+            stream.file.validators = tuple(p.validator for p in found)
             stream.link, stream.plan = link, plan
             if stream.spare is link:
                 stream.spare = None
@@ -904,7 +913,13 @@ class Dash:
         that one - the same representation, or it is dropped - and asks again."""
         link, part = stream.link, stream.plan.media[index]
         try:
-            data = await self._retried(link, part, stream.limited, limit=MAX_SEGMENT_BYTES)
+            data = await self._retried(
+                link,
+                part,
+                stream.limited,
+                limit=MAX_SEGMENT_BYTES,
+                validator=stream.file.validators[index],
+            )
         except DashError as exc:
             if exc.kind != "expired":
                 raise
@@ -1258,17 +1273,24 @@ class Dash:
         *,
         limit: int,
         into: AsyncFile[bytes] | None = None,
+        validator: str | None = None,
     ) -> bytes | int:
         """``_part``, asked for once more after an HTTP 5xx or a broken connection."""
         start = await into.tell() if into is not None else 0
         try:
-            return await self._part(link, part, limited, limit=limit, into=into)
-        except _Broken:
+            return await self._part(
+                link, part, limited, limit=limit, into=into, validator=validator
+            )
+        except (_Broken, DashError) as exc:
+            if isinstance(exc, DashError) and exc.kind != "changed":
+                raise
             if into is not None:
                 await into.seek(start)
                 await into.truncate()
         try:
-            return await self._part(link, part, limited, limit=limit, into=into)
+            return await self._part(
+                link, part, limited, limit=limit, into=into, validator=validator
+            )
         except _Broken as exc:
             raise DashError("error", f"{exc}, asked twice") from None
 
@@ -1280,6 +1302,7 @@ class Dash:
         *,
         limit: int,
         into: AsyncFile[bytes] | None = None,
+        validator: str | None = None,
         seen: list[str] | None = None,
         too_large: str = "a segment over the size limit",
     ) -> bytes | int:
@@ -1292,6 +1315,9 @@ class Dash:
         async def read(response: httpx.Response, begun: Callable[[], None]) -> None:
             nonlocal size
             _check(response, part, limited)
+            tag = response.headers.get("etag", "")
+            if validator is not None and _STRONG.fullmatch(tag) and tag != validator:
+                raise DashError("changed", "a segment changed since its probe")
             if seen is not None:
                 seen.append(str(response.url))
             async for chunk in response.aiter_bytes():
@@ -1322,10 +1348,11 @@ class Dash:
         call at its first bytes): an audio opening at the add-on until then, through its
         client and limits; the link's headers for the link's own origin only. Its
         failures as ``DashError`` (``_Broken``: an HTTP 5xx or a broken connection)."""
-        headers = {"accept-encoding": "identity"}
+        headers = httpx.Headers({"user-agent": USER_AGENT, "accept-encoding": "identity"})
         private: tuple[str, ...] = ()
         if pacing.origin(part.url) == pacing.origin(link.url):  # the link's headers: there only
-            headers = {**link.headers, **headers}
+            headers.update(link.headers)
+            headers["accept-encoding"] = "identity"
             private = tuple(link.headers)
         if part.first is not None:
             headers["range"] = f"bytes={part.first}-{part.last}"

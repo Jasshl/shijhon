@@ -36,6 +36,10 @@ kind = "example"          # the adapter's name
 
 ## The catalog of an add-on
 
+The separate [Shijhon Mornye extension bridge](https://github.com/Jasshl/shijhon-mornye-bridge)
+makes Mornye extensions usable as add-ons, including catalogs when an extension supplies
+them. It is not affiliated with Mornye.
+
 An add-on that has a catalog of its own (a search, albums, artists) can be the
 catalog, with nothing to install. On the Catalog page choose **An add-on's catalog**
 and save, choose the add-on and save again, and press **Restart Shijhon**. Or:
@@ -47,13 +51,48 @@ addon = "My add-on"       # its name, as on the Add-ons page or in [[addons]]
 ```
 
 - Catalog requests count against that add-on's [limits](add-ons.md#limits): a search, an
-  album and an artist page take one request each.
-- Shijhon keeps what it learned from the catalog under the add-on's name. Renaming the
-  add-on, or choosing another one, starts over: what is in your library stays and plays,
+  album and an artist page take one request each, plus any release pages.
+- Without a confirmed identity, Shijhon keeps what it learned under the add-on's name.
+  Renaming the add-on, or choosing another one, starts over: what is in your library stays and plays,
   and albums not filled yet are matched again. If you set an add-on up so that its
   catalog changes, rename it too.
-- It has less to go on than an adapter's catalog:
+- An add-on with the optional [full-catalog extension](reference/add-on-protocol.md#the-full-catalog-extension)
+  can supply disc and track numbers, release kinds, version flags, song and ISRC
+  lookups, and paged discographies. Add-ons without it have the limits in
   [known-issues.md](known-issues.md#the-catalog-of-an-add-on).
+
+A full-catalog add-on can declare a stable catalog identity: a key and optional region.
+The Catalog page reads the chosen add-on's manifest and shows “This add-on says its
+catalog is …”. Check the claim, select **Confirm this identity** and save, then restart
+Shijhon. When you choose another add-on, its claim is shown before it is saved. In a
+configuration file, confirm it yourself:
+
+```toml
+[catalog]
+kind = "addon"
+addon = "My add-on"
+identity = "examplemusic.us"  # the declared key.region; key alone without a region
+```
+
+Confirm an identity only when the add-on uses that catalog's own item IDs with the same
+meaning. This lets you move from an adapter to an add-on, or between add-ons, while
+keeping the catalog key and region: saved matches and catalog lists continue under
+the same scope. While an adapter is still the configured catalog, an add-on declaring
+the same key gets no direct catalog IDs: it is looked up like any add-on.
+No image rebuild is needed to choose an add-on. Before catalog requests, including
+cached answers, a confirmed catalog checks its manifest again when the last check is
+at least five minutes old. An answer naming a different item also triggers a check.
+Checks share one request, run at background urgency and wait at most two seconds
+(or the catalog timeout, if shorter). A failed check keeps the last known declaration
+and waits five minutes before another age-based attempt. Once a changed or missing
+claim is read, catalog requests fail safely and views answer from the library until
+you check and confirm the identity on the Catalog page. Nothing is re-keyed silently;
+changes between checks cannot be detected immediately. Library music stays in place.
+
+Leaving the identity empty keeps today's name-based items. The page offers to confirm
+any declared identity. Confirming later changes the catalog key, so matches and saved
+catalog lists start over. Library music stays and plays. Artwork addresses reach apps
+only if the add-on opts in, and only for public HTTPS hosts; other artwork uses cover IDs.
 
 Playlist imports also search the catalogs of other enabled add-ons that have one, for
 entries that neither your library nor the configured catalog has

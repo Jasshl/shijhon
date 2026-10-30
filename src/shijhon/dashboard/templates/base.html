@@ -49,7 +49,7 @@
 <div class="content">
 {% if pending %}
 <div class="banner" role="status">
-  <p><strong>Restart needed.</strong> {{ pending|length }} saved setting{{ "s apply" if pending|length != 1 else " applies" }} after Shijhon restarts: {% for item in pending %}{{ item.label|lower }} ({{ item.page }}){{ ", " if not loop.last }}{% endfor %}.</p>
+  <p><strong>Restart needed.</strong> {{ pending|length }} saved setting{{ "s apply" if pending|length != 1 else " applies" }} after Shijhon restarts: {% for item in pending %}{{ item.label }} ({{ item.page }}){{ ", " if not loop.last }}{% endfor %}.</p>
 {% if can_restart %}
   <form method="post" action="{{ prefix }}/restart">
     <input type="hidden" name="csrf" value="{{ csrf }}">

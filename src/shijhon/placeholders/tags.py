@@ -16,7 +16,7 @@ the scan (the album did not split) remains the final authority.
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -205,9 +205,9 @@ def mapped(raw: Tags, aliases: Iterable[str]) -> list[str]:
 
 def album_tags_of(path: Path) -> Tags:
     """The album-level tags of an owned file, as logical name -> merged values."""
-    raw = raw_tags(path)
-    tags = {name: mapped(raw, aliases) for name, aliases in ALBUM_TAGS.items()}
-    return {name: values for name, values in tags.items() if values}
+    from shijhon.music_imports import tagmap  # (it reads this module)
+
+    return tagmap.album_tags_at(path)
 
 
 # --- building placeholder tags ---------------------------------------------------------
@@ -259,7 +259,7 @@ def placeholder_tags(
         comments["isrc"] = [track.isrc]
     if track.explicit:
         comments["itunesadvisory"] = ["1"]
-    elif release.clean:  # clients show the clean edition's tracks as clean
+    elif track.clean or release.clean:  # a clean track or edition
         comments["itunesadvisory"] = ["2"]
     comments[MARKER_TRACK] = [str(track.ref)]
     comments[MARKER_RELEASE] = [str(release.ref)]
@@ -370,7 +370,6 @@ _MP4_ATOMS = {
     "artist": "\xa9ART",
     "album": "\xa9alb",
     "albumartist": "aART",
-    "releasedate": "\xa9day",
     "genre": "\xa9gen",
     "albumsort": "soal",
     "albumartistsort": "soaa",
@@ -386,7 +385,8 @@ _MP4_FREEFORM = {
     "originaldate": "ORIGINALDATE",
     "isrc": "ISRC",
 }
-_MP4_SKIP = {"tracknumber", "tracktotal", "discnumber", "disctotal", "compilation", "date"}
+_MP4_SKIP = {"tracknumber", "tracktotal", "discnumber", "disctotal", "compilation",
+             "date", "releasedate"}  # fmt: skip
 
 
 # Delivered audio's containers, by family: Vorbis comments, ID3, MPEG-4 here; APEv2 (Monkey's
@@ -491,6 +491,7 @@ def _write_mp4(audio: MP4, comments: Mapping[str, list[str]], fileobj: Any = Non
         else:
             name = _MP4_FREEFORM.get(key, key.upper())
             tags[f"----:com.apple.iTunes:{name}"] = [MP4FreeForm(v.encode()) for v in values]
+    write_mp4_dates(tags, comments)
     number = int((comments.get("tracknumber") or ["0"])[0] or 0)
     total = int((comments.get("tracktotal") or ["0"])[0] or 0)
     tags["trkn"] = [(number, total)]
@@ -500,6 +501,23 @@ def _write_mp4(audio: MP4, comments: Mapping[str, list[str]], fileobj: Any = Non
     if comments.get("compilation", ["0"])[0] not in ("", "0"):
         tags["cpil"] = True
     _save(audio, fileobj)
+
+
+def write_mp4_dates(tags: Any, comments: Mapping[str, Sequence[str]]) -> None:
+    """Keep recording and release dates separate in the names TagLib reads.
+
+    TagLib reads ©day as DATE ahead of RECORDINGDATE for the song's year. With both
+    dates, RELEASEDATE keeps the album identity; without a release date, RECORDINGDATE
+    alone preserves its absence. Shared by deliveries and imports joining an album.
+    """
+    recording = comments.get("date")
+    released = comments.get("releasedate")
+    if recording:
+        tags["----:com.apple.iTunes:RECORDINGDATE"] = [MP4FreeForm(v.encode()) for v in recording]
+    if released:
+        tags["\xa9day"] = list(recording or released)
+        if recording:
+            tags["----:com.apple.iTunes:RELEASEDATE"] = [MP4FreeForm(v.encode()) for v in released]
 
 
 _ID3_FRAMES = {

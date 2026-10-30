@@ -18,6 +18,7 @@ from shijhon.access import Principal
 from shijhon.catalog.model import CatalogRef, CatalogRelease, CatalogTrack, release_from_data
 from shijhon.collection.contracts import Actor, CollectionError
 from shijhon.collection.history import MAX_PENDING, History, queue_pending, recordable
+from shijhon.collection.query_index import QueryIndex
 from shijhon.collection.reader import CallerLibrary
 from shijhon.collection.reasons import Reasons
 from shijhon.placeholders.engine import MaterializeError
@@ -28,7 +29,7 @@ from shijhon.proxy.app import Forward, HandlerResult, RequestContext
 from shijhon.proxy.auth import CREDENTIAL_PARAMS, subsonic_answer
 from shijhon.proxy.params import RestCall, header
 from shijhon.proxy.responses import callback_refused, subsonic_error
-from shijhon.proxy.upstream import Receive, Send, Upstream, relay, request_headers
+from shijhon.proxy.upstream import Receive, Send, Upstream, relay, request_headers, send_bytes
 from shijhon.views.answers import LibraryAnswer, captured, raw_library_answer
 from shijhon.views.commits import Commits
 from shijhon.views.ids import CatalogId
@@ -102,6 +103,7 @@ class CollectionRequests:
         self.library_id = str(commits.navidrome.library_id)
         # The account's favorites, for the albums they bring into its Original imported library.
         self.reasons: Reasons | None = None
+        self.query_index: QueryIndex | None = None
         self._wake = anyio.Event()
 
     async def _tracks(
@@ -112,7 +114,8 @@ class CollectionRequests:
         cap: int | None = _MAX_TRACKS,
     ) -> list[CatalogTrack] | None:
         """The catalog recordings the values name, from Shijhon's placeholder ledger; None
-        when there are more than ``cap``."""
+        when there are more than ``cap``. Deferred actions use ``cap=None`` to read every
+        page in their recording transaction, loading each release's metadata once."""
         found: dict[str, CatalogTrack] = {}
         releases: dict[str, dict[str, CatalogTrack]] = {}
         for key, value in values:
@@ -123,10 +126,11 @@ class CollectionRequests:
             album_ref = str(cid.ref) if cid and cid.kind == "al" else ""
             native = value if cid is None else ""
             sql = (
-                "SELECT r.data,t.track_ref FROM releases r JOIN track_links t"
+                "SELECT r.ref,t.track_ref FROM releases r JOIN track_links t"
                 " ON t.release_ref=r.ref WHERE"
                 " (?<>'' AND t.track_ref=?) OR (?<>'' AND r.ref=?) OR"
-                " (?<>'' AND t.owned=0 AND (t.song_id=? OR (? AND r.album_id=?))) LIMIT 501"
+                " (?<>'' AND t.owned=0 AND (t.song_id=? OR (? AND r.album_id=?)))"
+                " ORDER BY t.release_ref,t.track_ref LIMIT ? OFFSET ?"
             )
             params = [
                 song_ref,
@@ -138,21 +142,36 @@ class CollectionRequests:
                 key in ("id", "albumId"),
                 native,
             ]
-            if db is None:
-                rows = await self.store.fetchall(sql, params)
-            else:
-                async with db.execute(sql, params) as cursor:
-                    rows = list(await cursor.fetchall())
-            for row in rows:
-                data = str(row["data"])
-                if data not in releases:
-                    release = release_from_data(json.loads(data))
-                    releases[data] = {str(t.ref): t for t in release.tracks}
-                track = releases[data].get(str(row["track_ref"]))
-                if track:
-                    found[str(track.ref)] = track
-                if cap is not None and len(found) > cap:
-                    return None
+            offset = 0
+            page_size = _MAX_TRACKS + 1 if cap is not None else _MAX_TRACKS
+            while True:
+                page = [*params, page_size, offset]
+                if db is None:
+                    rows = await self.store.fetchall(sql, page)
+                else:
+                    async with db.execute(sql, page) as cursor:
+                        rows = list(await cursor.fetchall())
+                for row in rows:
+                    ref = str(row["ref"])
+                    if ref not in releases:
+                        query = "SELECT data FROM releases WHERE ref=?"
+                        if db is None:
+                            saved = await self.store.fetchone(query, [ref])
+                        else:
+                            async with db.execute(query, [ref]) as cursor:
+                                saved = await cursor.fetchone()
+                        if saved is None:
+                            continue
+                        release = release_from_data(json.loads(saved["data"]))
+                        releases[ref] = {str(t.ref): t for t in release.tracks}
+                    track = releases[ref].get(str(row["track_ref"]))
+                    if track:
+                        found[str(track.ref)] = track
+                    if cap is not None and len(found) > cap:
+                        return None
+                if len(rows) < page_size:
+                    break
+                offset += len(rows)
         return list(found.values())
 
     def _read_call(self, original: RestCall, ident: str) -> RestCall:
@@ -165,9 +184,10 @@ class CollectionRequests:
             "getSong", "GET", b"/rest/getSong", urlencode(params).encode(), headers, None
         )
 
-    async def _verify(self, original: RestCall, tracks: Sequence[CatalogTrack]) -> bool:
+    async def _verify(self, original: RestCall, tracks: Sequence[CatalogTrack]) -> bool | None:
+        """True: exact recordings; False: a confirmed mismatch; None: unavailable."""
         limiter = anyio.CapacityLimiter(4)
-        accepted: list[bool] = []
+        accepted: list[bool | None] = []
 
         async def one(track: CatalogTrack) -> None:
             async with limiter:
@@ -179,16 +199,87 @@ class CollectionRequests:
                     self.upstream, self._read_call(original, ident), max_bytes=128 * 1024
                 )
                 parsed = await answer.parsed("song") if answer else None
-                accepted.append(
-                    bool(parsed and parsed[1].get("id") == ident and _matches(track, parsed[1]))
-                )
+                if parsed is not None:
+                    accepted.append(parsed[1].get("id") == ident and _matches(track, parsed[1]))
+                elif answer is not None and answer.status in (401, 403, 404):
+                    accepted.append(False)
+                else:
+                    envelope = (
+                        subsonic_answer(
+                            httpx.Response(answer.status, headers=answer.headers), answer.body
+                        )
+                        if answer is not None
+                        else None
+                    )
+                    error = envelope.get("error") if envelope else None
+                    refused = isinstance(error, dict) and error.get("code") in (40, 50, 70)
+                    accepted.append(False if refused else None)
 
         async with anyio.create_task_group() as group:
             for track in tracks:
                 group.start_soon(one, track)
-        return len(accepted) == len(tracks) and all(accepted)
+        if False in accepted:
+            return False
+        return True if len(accepted) == len(tracks) and all(accepted) else None
 
     async def __call__(
+        self, call: RestCall, ctx: RequestContext, result: HandlerResult
+    ) -> HandlerResult:
+        result = await self._attribute(call, ctx, result)
+        if (
+            self.query_index is None
+            or call.name not in ("star", "unstar", "setRating", "scrobble", "reportPlayback")
+            or ctx.head
+            or callback_refused(call)
+            or await ctx.caller() is None
+            or (principal := self._principal(ctx)) is None
+        ):
+            return result
+        annotation = call.name in ("star", "unstar", "setRating")
+        submitted = call.name == "scrobble" and (call.get("submission") or "true").lower() in (
+            "true",
+            "1",
+            "t",
+        )
+        # Navidrome 0.64.2 increments only on stopped, above its duration threshold,
+        # with scrobbling enabled. Confirm the count rather than guessing that threshold.
+        stopped = (
+            call.name == "reportPlayback"
+            and call.get("state") == "stopped"
+            and (call.get("ignoreScrobble") or "false").lower() in ("false", "0", "f")
+        )
+        if not (annotation or submitted or stopped):
+            return result
+        forwarded = result.call if isinstance(result, Forward) else call
+        before = await self._play_count(forwarded) if stopped else None
+        answer = await self._answer(forwarded, result)
+        if answer is None:
+            return subsonic_error(
+                call, 0, "The library request could not be verified.", self.commits.server()
+            )
+        if _accepted(answer):
+            if annotation:
+                await self.query_index.annotations_changed(principal.user_id, every=True)
+            elif submitted or (
+                before is not None
+                and (after := await self._play_count(forwarded)) is not None
+                and after != before
+            ):
+                await self.query_index.annotations_changed(principal.user_id)
+        return answer.reply()
+
+    async def _play_count(self, call: RestCall) -> int | None:
+        ident = call.get("mediaId")
+        if not ident:
+            return None
+        answer = await raw_library_answer(
+            self.upstream, self._read_call(call, ident), max_bytes=128 * 1024
+        )
+        parsed = await answer.parsed("song") if answer else None
+        count = parsed[1].get("playCount", 0) if parsed and parsed[1].get("id") == ident else None
+        return count if type(count) is int and count >= 0 else None
+
+    async def _attribute(
         self, call: RestCall, ctx: RequestContext, result: HandlerResult
     ) -> HandlerResult:
         keys = _ACTIONS.get(call.name)
@@ -228,10 +319,13 @@ class CollectionRequests:
                 return
             try:
                 with anyio.fail_after(5):
-                    if await self._verify(call, tracks):
+                    verified = await self._verify(call, tracks)
+                    if verified is True:
                         await self.history.record_catalog(
                             _actor(principal), self.library_id, tracks
                         )
+                    elif verified is None:
+                        await self._queue(owner, values)
             except Exception as exc:
                 # An accepted native mutation must never be sent a second time merely
                 # because attribution failed. Keep the already captured native answer, and
@@ -243,37 +337,54 @@ class CollectionRequests:
         if call.name == "download":
 
             async def downloaded(receive: Receive, send: Send) -> None:
-                async def sending(message: Any) -> None:
-                    if (
-                        message["type"] == "http.response.start"
-                        and message["status"] in (200, 206)
-                        and header(message.get("headers", []), b"content-type").split(";", 1)[0]
-                        in (
-                            "audio/flac",
-                            "audio/mpeg",
-                            "audio/mp4",
-                            "audio/aac",
-                            "audio/ogg",
-                            "audio/x-flac",
-                            "audio/wav",
-                            "audio/x-wav",
-                            "application/octet-stream",
-                        )
-                    ):
+                async def recording() -> None:
+                    with anyio.CancelScope(shield=True):
                         await record()
-                    await send(message)
 
-                if result is not None and not isinstance(result, Forward):
-                    await result(receive, sending)
-                else:
-                    response = await self.upstream.send(
-                        forwarded.http_method,
-                        forwarded.raw_path,
-                        forwarded.query,
-                        request_headers(forwarded.headers),
-                        forwarded.body,
-                    )
-                    await relay(response, receive, sending)
+                async def sending(message: Any) -> None:
+                    try:
+                        await send(message)
+                    finally:
+                        if (
+                            message["type"] == "http.response.start"
+                            and message["status"] in (200, 206)
+                            and header(message.get("headers", []), b"content-type").split(";", 1)[0]
+                            in (
+                                "audio/flac",
+                                "audio/mpeg",
+                                "audio/mp4",
+                                "audio/aac",
+                                "audio/ogg",
+                                "audio/x-flac",
+                                "audio/wav",
+                                "audio/x-wav",
+                                "application/octet-stream",
+                            )
+                        ):
+                            group.start_soon(recording)
+
+                async with anyio.create_task_group() as group:
+                    if result is not None and not isinstance(result, Forward):
+                        await result(receive, sending)
+                    else:
+                        try:
+                            response = await self.upstream.send(
+                                forwarded.http_method,
+                                forwarded.raw_path,
+                                forwarded.query,
+                                request_headers(forwarded.headers),
+                                forwarded.body,
+                            )
+                        except httpx.HTTPError as exc:
+                            log.warning("navidrome unreachable: %s", type(exc).__name__)
+                            await send_bytes(
+                                send,
+                                502,
+                                b"Navidrome is unreachable\n",
+                                [(b"content-type", b"text/plain")],
+                            )
+                            return
+                        await relay(response, receive, sending)
 
             return downloaded
         answer = await self._answer(forwarded, result)
@@ -336,10 +447,13 @@ class CollectionRequests:
             elif tracks:
                 try:
                     with anyio.fail_after(5):
-                        if await self._verify(call, tracks):
+                        verified = await self._verify(call, tracks)
+                        if verified is True:
                             await self.history.record_catalog(
                                 _actor(principal), self.library_id, tracks
                             )
+                        elif verified is None:
+                            await self._queue(principal.user_id, values)
                 except Exception as exc:
                     log.warning("collection request attribution failed: %s", type(exc).__name__)
                     await self._queue(principal.user_id, values)

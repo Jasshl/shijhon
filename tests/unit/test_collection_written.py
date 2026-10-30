@@ -263,7 +263,7 @@ async def reading(index: QueryIndex, binding: Binding, key: str, mode: str) -> l
 async def test_an_addition_reaches_cached_facts_also_when_never_extended(
     tmp_path: Path,
 ) -> None:
-    """Review finding 2: the source's addition commits before the cached facts take it in;
+    """The source's addition commits before the cached facts take it in;
     a stop between the two (no ``extend``) must not hide the song for good."""
     store = await Store.open(tmp_path / "written.db")
     service = Collection(store, FakeAccess([song(1, path="Original/1.flac")]))
@@ -302,7 +302,7 @@ async def test_an_addition_reaches_cached_facts_also_when_never_extended(
 async def test_a_combined_binding_whose_library_was_empty_takes_additions_in(
     tmp_path: Path,
 ) -> None:
-    """Review finding 6: facts are extended by the libraries their binding declares, also
+    """Facts are extended by the libraries their binding declares, also
     when the configured library had no songs and another library's edges are there."""
     store = await Store.open(tmp_path / "written.db")
     service = Collection(store, FakeAccess([]))
@@ -338,7 +338,7 @@ async def test_a_combined_binding_whose_library_was_empty_takes_additions_in(
 async def test_a_song_whose_placeholder_record_went_is_never_added_as_an_original(
     library: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Review finding 1: an answer about a song whose placeholder record is gone - never
+    """An answer about a song whose placeholder record is gone - never
     there, of a release being taken out, or removed while the addition was prepared - is
     not added, and never as an original."""
     store, service = library
@@ -384,7 +384,7 @@ class Refusing(Navidrome):
 async def test_a_refusal_or_failure_stops_the_addition_and_holds_nothing_against_the_songs(
     library: Any, code: int, status: int, again: bool
 ) -> None:
-    """Review finding 3: credentials refused (code 40) or Navidrome failing (503) stop the
+    """Credentials refused (code 40) or Navidrome failing (503) stop the
     whole addition after the reads under way; no song is skipped for later callers, and
     after a refusal another account's request may try again at once."""
     store, service = library

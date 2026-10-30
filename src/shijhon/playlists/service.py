@@ -149,7 +149,7 @@ class Playlists:
         if connection is None:
             raise PlaylistError("Connect your playlist account first.")
         await self.client.validate(connection)
-        if await self.repo.connection(owner_id) != connection:
+        if not connection.same_settings(await self.repo.connection(owner_id)):
             raise PlaylistError("The saved playlist authorization changed.")
         return connection
 
@@ -263,7 +263,7 @@ class Playlists:
 
     async def _ai_connection(self, connection: Connection) -> Connection:
         current = await self.connection(connection.user_id)
-        if current != connection:
+        if not connection.same_settings(current):
             raise PlaylistError("The saved AI connection changed. Generate the playlist again.")
         principal = await self.client.principal(current)
         if current.use_shared_ai:
@@ -317,27 +317,30 @@ class Playlists:
     async def tick(self) -> None:
         # The application writer lock excludes another process; a single worker excludes
         # competing playlist writes. A missed interval causes one refresh, never a backlog.
-        async with self.changes:
-            due = await self.repo.store.fetchall(
-                "SELECT * FROM playlist_mixes WHERE enabled=1 AND due<=?", [time.time()]
-            )
-            for row in due:
-                definition = Definition.model_validate_json(row["definition"])
-                if not definition.interval:
-                    continue
-                try:
-                    await self.repo.enqueue(row["id"], automatic=True)
-                except PlaylistError:
-                    continue
-                await self.repo.store.execute(
-                    "UPDATE playlist_mixes SET due=? WHERE id=?",
-                    [time.time() + definition.interval, row["id"]],
+        # Recheck schedules between rounds, including while imports keep requeuing.
+        while True:
+            async with self.changes:
+                due = await self.repo.store.fetchall(
+                    "SELECT * FROM playlist_mixes WHERE enabled=1 AND due<=?", [time.time()]
                 )
-        # Each waiting run gets one turn per round, oldest first: an import that requeues
-        # itself after a bounded batch (slow add-on catalogs) cannot hold up the others.
-        while pending := await self.repo.store.fetchall(
-            "SELECT id FROM playlist_runs WHERE state IN ('queued','publishing') ORDER BY created"
-        ):
+                for row in due:
+                    definition = Definition.model_validate_json(row["definition"])
+                    if not definition.interval:
+                        continue
+                    try:
+                        await self.repo.enqueue(row["id"], automatic=True)
+                    except PlaylistError:
+                        continue
+                    await self.repo.store.execute(
+                        "UPDATE playlist_mixes SET due=? WHERE id=?",
+                        [time.time() + definition.interval, row["id"]],
+                    )
+            pending = await self.repo.store.fetchall(
+                "SELECT id FROM playlist_runs WHERE state IN ('queued','publishing')"
+                " ORDER BY created"
+            )
+            if not pending:
+                break
             for row in pending:
                 await self.process(row["id"])
 
@@ -385,7 +388,9 @@ class Playlists:
                     async with self.changes:
                         current = await self.repo.run(ident)
                         connected = await self.repo.connection(connection.user_id)
-                        if current["state"] != "generating" or connected != connection:
+                        if current["state"] != "generating" or not connection.same_settings(
+                            connected
+                        ):
                             if current["state"] == "generating":
                                 raise PlaylistError(
                                     "The connection changed. Generate the playlist again.",
@@ -429,7 +434,7 @@ class Playlists:
                     connected = await self.repo.connection(connection.user_id)
                     if current["state"] != "publishing":
                         return
-                    if connected != connection:
+                    if not connection.same_settings(connected):
                         raise PlaylistError(
                             "The connection changed. Retry with the current connection."
                         )
@@ -481,7 +486,7 @@ class Playlists:
                 self.requests.usable_ai(connection)
 
             async def authorize() -> None:
-                if await self.repo.connection(connection.user_id) != connection:
+                if not connection.same_settings(await self.repo.connection(connection.user_id)):
                     raise PlaylistError(
                         "The connection changed. Retry with the current connection."
                     )
@@ -881,7 +886,7 @@ class Playlists:
             approved = {r["ref"]: r["fingerprint"] for r in data.get("releases", [])}
 
             async def authorize() -> None:
-                if await self.repo.connection(connection.user_id) != connection:
+                if not connection.same_settings(await self.repo.connection(connection.user_id)):
                     raise PlaylistError(
                         "The connection changed. Retry with the current connection."
                     )

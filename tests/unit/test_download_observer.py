@@ -422,3 +422,43 @@ async def test_final_surviving_interest_withdrawn_during_inspection_prevents_pla
     assert limits._users["owner"].allowance == 0
     assert fetcher._waiting == {} and not fetcher._locks.held("native-song")
     assert [path async for path in anyio.Path(tmp_path).iterdir()] == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("quota", [False, True])
+async def test_a_duplicate_requeues_if_its_leader_was_cancelled_before_its_turn(
+    tmp_path: Path, quota: bool
+) -> None:
+    limits = UserLimits(downloads=0 if quota else 1, downloads_per_hour=1 if quota else 0)
+    fetcher = DownloadFirst(None, SimpleNamespace(), None, tmp_path, limits=limits)
+    scopes: list[anyio.CancelScope] = []
+    leader_done, duplicate_in = anyio.Event(), anyio.Event()
+
+    async def leader() -> None:
+        with anyio.CancelScope() as scope:
+            scopes.append(scope)
+            async with fetcher.turn("song", "owner"):
+                raise AssertionError("the leader must stay queued")
+        leader_done.set()
+
+    async def duplicate() -> None:
+        async with fetcher.turn("song", "owner"):
+            duplicate_in.set()
+
+    with anyio.fail_after(2):
+        async with anyio.create_task_group() as group:
+            async with limits.download("owner") as give_back:
+                group.start_soon(leader)
+                while (waiting := fetcher._waiting.get(("owner", "song"))) is None:
+                    await anyio.lowlevel.checkpoint()
+                group.start_soon(duplicate)
+                while waiting.done.statistics().tasks_waiting == 0:
+                    await anyio.lowlevel.checkpoint()
+                scopes[0].cancel()
+                await leader_done.wait()
+                with anyio.move_on_after(0.03) as blocked:
+                    await duplicate_in.wait()
+                assert blocked.cancelled_caught
+                give_back()
+            await duplicate_in.wait()
+    assert not fetcher._waiting

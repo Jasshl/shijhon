@@ -190,6 +190,7 @@ class FakeAddon:
                     "params": dict(request.query_params),
                     "range": request.headers.get("range"),
                     "if_match": request.headers.get("if-match"),
+                    "x_key": request.headers.get("x-key"),
                     "user_agent": request.headers.get("user-agent"),
                     "at": time.monotonic(),
                     **extra,
@@ -283,12 +284,22 @@ class FakeAddon:
                 return self._limited()
             if status is not None:
                 return JSONResponse({"error": "unavailable"}, status_code=status)
-            path = endpoint if endpoint == "search" else f"{endpoint}/{ident}"
+            path = (
+                request.url.path.strip("/")
+                if endpoint == "catalog"
+                else endpoint
+                if endpoint == "search"
+                else f"{endpoint}/{ident}"
+            )
             if path in held.answers:
                 return JSONResponse(held.answers[path])
             if endpoint == "search":
                 return JSONResponse(held.search(term))
-            answer = held.album(ident) if endpoint == "album" else held.artist(ident)
+            if endpoint == "catalog":
+                handler = getattr(held, "catalog_request", None)
+                answer = handler(path, request.query_params.get("cursor", "")) if handler else None
+            else:
+                answer = held.album(ident) if endpoint == "album" else held.artist(ident)
             if answer is None:
                 return JSONResponse({"error": "not found"}, status_code=404)
             return JSONResponse(answer)
@@ -523,6 +534,9 @@ class FakeAddon:
             Route("/availability", api(availability)),
             Route("/stream/{id}", api(stream)),
             Route("/search", api(catalog)),
+            Route("/catalog/track/{id:path}", api(catalog)),
+            Route("/catalog/isrc/{id:path}", api(catalog)),
+            Route("/catalog/artist/{id}/releases", api(catalog)),
             Route("/album/{id:path}", api(catalog)),
             Route("/artist/{id:path}", api(catalog)),
             Route("/img/{rest:path}", image),

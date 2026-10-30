@@ -43,11 +43,11 @@
     <div class="form-actions"><button{% if not connected %} class="btn-primary"{% endif %}>Save connection</button></div>
   </form>
 {% if connected %}
-  <details class="confirm playlist-disconnect">
-    <summary class="btn btn-danger btn-small"><span class="if-closed">Disconnect…</span><span class="if-open">Stay connected</span></summary>
+  <details class="confirm playlist-forget">
+    <summary class="btn btn-danger btn-small"><span class="if-closed">Forget my playlist settings and history…</span><span class="if-open">Keep them</span></summary>
     <div class="confirm-body">
-      <p>Disconnect and forget your mix settings and listening history? Native playlists and library files stay in place.</p>
-      <form method="post" action="{{ prefix }}/playlists/disconnect"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-danger-fill">Disconnect and forget mix settings/history</button></form>
+      <p>Forget your playlist settings, discovery mixes and listening history? This also clears your Downloads authorization: unfinished preparation pauses until you reconnect on Downloads. Navidrome playlists and library files stay in place.</p>
+      <form method="post" action="{{ prefix }}/playlists/forget"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn-danger-fill">Forget playlist settings and history</button></form>
     </div>
   </details>
 {% endif %}
@@ -62,7 +62,7 @@
       <label>AI service<select name="ai_mode"><option value="shared"{% if ai_mode != 'none' %} selected{% endif %}>Shared service (default)</option><option value="none"{% if ai_mode == 'none' %} selected{% endif %}>No AI</option></select></label>
       <label data-show-for="ai_mode" data-values="shared">Your model<select name="preferred_model"><option value=""{% if not ai_choices.model %} selected{% endif %}>Administrator's default{% if ai_choices.default_model %} ({{ ai_choices.default_model }}){% endif %}</option>{% for name in ai_choices.allowed_models %}<option value="{{ name }}"{% if ai_choices.model == name %} selected{% endif %}>{{ name }}</option>{% endfor %}{% if ai_choices.model and ai_choices.model not in ai_choices.allowed_models %}<option value="{{ ai_choices.model }}" selected>{{ ai_choices.model }} (no longer approved)</option>{% endif %}</select></label>
     </div>
-    <p class="field-help">{% if shared_ai_available %}Your model must still be approved when a playlist runs.{% else %}An administrator must set up the shared service before you can use it.{% endif %} Your history and mix instructions stay your own. Separate personal AI connections are planned for later.</p>
+    <p class="field-help">{% if shared_ai_available %}Your model must still be approved when a playlist runs.{% else %}An administrator must set up the shared service before you can use it.{% endif %} Your history and mix instructions stay your own.</p>
     <div class="form-actions"><button>Save your AI preferences</button></div>
   </form>
 </section>
@@ -164,7 +164,7 @@
   <p class="group-help">Saving makes a new selection and publishes it, unless Review before publishing is on under Advanced settings.</p>
   <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/{{ mix.id }}">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="version" value="{{ mix_version }}">
-    {{ rules(definition, mix.enabled) }}
+    {{ rules(rules_definition, rules_enabled) }}
     <div class="form-actions"><button class="btn-primary" data-direct-label="Save rules and publish" data-review-label="Save rules and preview">{{ 'Save rules and preview' if definition.review_before_publishing else 'Save rules and publish' }}</button></div>
   </form>
 </details>
@@ -199,7 +199,7 @@
 {% if mixes %}<ul class="rows playlist-list">{% for item in mixes %}<li><a href="{{ prefix }}/playlists/{{ item.id }}">{{ item.definition.name }}</a><span>{{ item.definition.count }} tracks</span><span class="tag{{ ' tag-set' if item.enabled }}">{{ 'Refreshing' if item.enabled else 'Paused' }}</span></li>{% endfor %}</ul>{% else %}<p class="empty">No discovery mixes yet. Make one below.</p>{% endif %}
 </section>
 <section class="group" id="new-mix" aria-labelledby="new-mix-title"><div class="group-head"><h2 id="new-mix-title">New discovery mix</h2><p class="group-help">Publishes a playlist you can listen to in your music app. Refreshing it on a schedule is optional.{% if not history_user %} It needs your Last.fm username: add it under <a href="#settings">Connection and AI settings</a>.{% endif %}</p></div>
-  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists"><input type="hidden" name="csrf" value="{{ csrf }}">{{ rules(definition) }}<div class="form-actions"><button class="btn-primary" data-direct-label="Create and publish" data-review-label="Create preview">Create and publish</button></div></form>
+  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="request_key" value="{{ request_key }}">{{ rules(rules_definition, rules_enabled) }}<div class="form-actions"><button class="btn-primary" data-direct-label="Create and publish" data-review-label="Create preview">Create and publish</button></div></form>
 </section>
 <details class="more-settings playlist-settings" id="settings"><summary><span class="more-title">Connection and AI settings</span><span class="more-changed">Connected as {{ user }}{% if history_user %} · Last.fm {{ history_user }}{% endif %} · {{ 'No AI' if ai_mode == 'none' else 'Shared AI' if ai_mode == 'shared' else 'Private AI' }}</span></summary>
 {{ settings() }}

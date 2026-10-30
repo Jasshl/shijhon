@@ -178,3 +178,27 @@ async def test_saved_discographies(tmp_path: Path) -> None:
         assert await saved.get("k") is None  # unreadable: as if not saved
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("times_out", [False, True])
+async def test_first_artist_fetch_honors_backoff_even_without_a_cached_index(
+    times_out: bool,
+) -> None:
+    now = [1.0]
+    native = FakeNavidrome([])
+    native.failing = True
+    if times_out:
+        native.gate = anyio.Event()
+    artists = index(native, retry_seconds=10, first_wait_seconds=0.01, clock=lambda: now[0])
+    assert await artists.entries() == {}
+    assert await artists.entries() == {}
+    assert len(native.calls) == 1
+    # Waiting refreshes also honor the backoff under the lock.
+    await artists._refresh()
+    assert len(native.calls) == 1
+    now[0] = 12.0
+    native.gate, native.failing = None, False
+    native.artists = [{"id": "recovered", "name": "Glass Orchard"}]
+    assert await artists.ids() == {"glassorchard": "recovered"}
+    assert len(native.calls) == 2

@@ -92,7 +92,7 @@ MANIFEST_PAGE_SIZE = 500
 
 
 def scanner_ignored_path(path: str) -> bool:
-    """Paths the pinned scanner always ignores, regardless of its dot-folder setting."""
+    """Paths the pinned scanner ignores (including dot-directories)."""
     parts = path.split("/")
     ignored_folders = {
         "$recycle.bin",
@@ -104,7 +104,7 @@ def scanner_ignored_path(path: str) -> bool:
         ".streams",
         "lost+found",
     }
-    return (parts[-1].startswith(".") and not parts[-1].startswith("..")) or any(
+    return any(part.startswith(".") for part in parts) or any(
         part.casefold() in ignored_folders for part in parts[:-1]
     )
 

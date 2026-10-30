@@ -424,6 +424,7 @@ def test_inflight_revocation_stops_before_resolving_or_publishing(tmp_path: Path
                 "revocation-1",
                 PlaylistRequest(prompt="quiet music", count=1),
                 creator=digest(token),
+                scopes=["create", "status"],
             )
 
             async def ai(connection: Connection, prompt: str, **kwargs: Any) -> Any:

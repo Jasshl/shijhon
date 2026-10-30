@@ -7,8 +7,9 @@ import json
 import os
 import sys
 import textwrap
+import threading
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 
 import anyio
@@ -189,6 +190,301 @@ async def approved_batch(h, count=3):
         await h.service.receive("a", result["id"], item["id"], item["attempt"], chunks(data))
     result = await freeze(h, "a", result["id"])
     return await h.service.approve("a", result["id"], result["revision"], "approve")
+
+
+@pytest.mark.parametrize("change_before_upgrade", [False, True])
+async def test_old_binding_upgrades_then_limits_and_local_mount_can_change(
+    harness, change_before_upgrade
+):
+    from shijhon.music_imports.removal import ImportRemovals
+
+    h = harness
+    old_id = hashlib.sha256(
+        json.dumps(
+            ["1", str(h.root), "_imports", "_shijhon", asdict(h.limits)], sort_keys=True
+        ).encode()
+    ).hexdigest()
+    h.service.config_id = old_id  # Freeze the review with the actual pre-upgrade hash.
+    job = await reviewed(h)
+    if change_before_upgrade:
+        h.limits = replace(h.limits, max_owner_bytes=h.limits.max_owner_bytes * 2)
+        mounted = h.root / "before-upgrade"
+        mounted.mkdir()
+        await h.service.aclose()
+        (h.root / "_imports").rename(mounted / "_imports")
+        h.root = mounted
+    await h.service.aclose()
+    h.service = h.build()
+    await h.service.initialize()
+    row = await h.store.fetchone("SELECT config_id FROM music_import_jobs")
+    assert row[0] == h.service.config_id != old_id
+    # A second start uses new budgets and another mount path to the very same root.
+    await h.service.aclose()
+    mounted = h.root / "mounted"
+    mounted.mkdir()
+    (h.root / "_imports").rename(mounted / "_imports")
+    h.root = mounted
+    h.limits = replace(h.limits, max_owner_bytes=h.limits.max_owner_bytes * 2)
+    h.service = h.build()
+    await h.service.initialize()
+    await h.service.approve("a", job["id"], job["revision"], "approve")
+    assert await h.service.tick()
+    assert (await h.service.status("a", job["id"]))["state"] == "done"
+
+    async def allowed(*args):
+        return True
+
+    removal = ImportRemovals(h.service, usage=None, gate=allowed, administrator=allowed)
+    assert (await removal._job("a", job["id"]))["config_id"] == h.service.config_id
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_rebinding_preserves_review_integrity_and_is_atomic(
+    harness, monkeypatch, interrupted
+):
+    h = harness
+    h.service.config_id = "old-limit-binding"
+    job = await reviewed(h)
+    before = await h.store.fetchone("SELECT config_id,fingerprint FROM music_import_jobs")
+    await h.service.aclose()
+    h.service = h.build()
+    if interrupted:
+        fingerprint = h.service._fingerprint
+
+        async def stop_after_old_fingerprint(*args, **kwargs):
+            if "config_id" not in kwargs:
+                raise OSError("interrupted rebinding")
+            return await fingerprint(*args, **kwargs)
+
+        monkeypatch.setattr(h.service, "_fingerprint", stop_after_old_fingerprint)
+        with pytest.raises(OSError, match="interrupted rebinding"):
+            await h.service.initialize()
+        assert tuple(
+            await h.store.fetchone("SELECT config_id,fingerprint FROM music_import_jobs")
+        ) == tuple(before)
+        monkeypatch.undo()
+        h.service = h.build()
+    else:
+        await h.store.execute("UPDATE music_import_items SET warnings=?", ['["changed"]'])
+    await h.service.initialize()
+    if interrupted:
+        await h.service.approve("a", job["id"], job["revision"], "go")
+    else:
+        with pytest.raises(ImportError, match="file list changed"):
+            await h.service.approve("a", job["id"], job["revision"], "go")
+
+
+@pytest.mark.parametrize("mismatch", ["root", "library"])
+async def test_upgrade_does_not_adopt_unproven_old_binding(harness, mismatch):
+    h = harness
+    job = await declared(h)
+    old_id = "different-old-limits"
+    await h.store.execute(
+        "UPDATE music_import_jobs SET config_id=?,root_id=?,library_id=?",
+        [
+            old_id,
+            "other-root" if mismatch == "root" else h.service.storage.root_id,
+            "2" if mismatch == "library" else "1",
+        ],
+    )
+    await h.service.aclose()
+    h.service = h.build()
+    await h.service.initialize()
+    assert (await h.store.fetchone("SELECT config_id FROM music_import_jobs"))[
+        0
+    ] != h.service.config_id
+    with pytest.raises(ImportError) as refused:
+        await h.service.resume("a", job["id"])
+    assert refused.value.code == ("not_found" if mismatch == "library" else "configuration_changed")
+
+
+@pytest.mark.parametrize("terminal", ["cancelled", "done"])
+async def test_terminal_import_deletes_unpublished_bytes_and_releases_quota(
+    harness, terminal, monkeypatch
+):
+    h = harness
+    states = ["rejected", "excluded", "skipped"]
+    if terminal == "cancelled":
+        states += ["received", "eligible", "matched", "copying", "joined"]
+    job = await declared(h, [ManifestEntry(str(n), f"{n}.flac", 4) for n in range(len(states))])
+    for item, state in zip(job["items"], states, strict=True):
+        await h.service.receive("a", job["id"], item["id"], 0, chunks(b"abcd"))
+        await h.store.execute(
+            "UPDATE music_import_items SET state=? WHERE id=?", [state, item["id"]]
+        )
+    await h.store.execute("UPDATE music_import_jobs SET state=?", [terminal])
+    before = await h.store.fetchall("SELECT * FROM music_import_items ORDER BY id")
+    discarded = []
+    thread_id = threading.get_ident()
+    discard = h.service.storage.discard_unpublished
+
+    def in_thread(name):
+        assert threading.get_ident() != thread_id
+        discard(name)
+        discarded.append(name)
+
+    h.service.storage.discard_unpublished = in_thread
+    # A still-open review must retain its skipped bytes for another review.
+    await h.store.execute("UPDATE music_import_jobs SET state='review'")
+    assert not await h.service._release_unpublished()
+    await h.store.execute("UPDATE music_import_jobs SET state=?", [terminal])
+    monkeypatch.setattr(import_service, "RECEIVED_CLEANUP_BATCH", 2)
+    assert await h.service.tick()
+    assert (
+        await h.store.fetchone(
+            "SELECT count(*) FROM music_import_items WHERE received_cleanup='deleted'"
+        )
+    )[0] == 2
+    while await h.service.tick():
+        pass
+    after = await h.store.fetchall("SELECT * FROM music_import_items ORDER BY id")
+    assert len(discarded) == len(states)
+    for previous, current in zip(before, after, strict=True):
+        assert current["state"] == previous["state"]
+        assert current["received_size"] == previous["received_size"] == 4
+        assert current["digest"] == previous["digest"]
+        assert current["received_cleanup"] == "deleted" and current["reserved_size"] == 0
+        assert not (h.root / "_imports/.incoming" / current["staging_name"]).exists()
+    # Repeated Stop must not restore a reservation from the historic received count.
+    await h.service.cancel("a", job["id"])
+    assert not await h.service.tick()
+    assert (await h.store.fetchone("SELECT sum(reserved_size) FROM music_import_items"))[0] == 0
+    h.service.limits = replace(h.limits, max_owner_bytes=4, max_global_bytes=4)
+    next_job = await h.service.create("b", "next")
+    await h.service.declare("b", next_job["id"], "page", [ManifestEntry("new", "new.flac", 4)])
+
+
+@pytest.mark.parametrize(
+    "protection", ["placing", "placed", "complete", "upgrade", "history", "copy", "removal"]
+)
+async def test_cleanup_preserves_publication_recovery_and_undo_sources(harness, protection):
+    h = harness
+    job = await declared(h, [ManifestEntry("file", "one.flac", 4)])
+    item = job["items"][0]
+    await h.service.receive("a", job["id"], item["id"], 0, chunks(b"abcd"))
+    if protection in ("placing", "placed", "complete"):
+        await h.store.execute("UPDATE music_import_items SET state=?", [protection])
+    elif protection in ("upgrade", "history"):
+        await h.store.execute(
+            "UPDATE music_import_items SET upgrade='{}'"
+            if protection == "upgrade"
+            else "UPDATE music_import_items SET upgraded_from='{}'"
+        )
+    elif protection == "copy":
+        await h.store.execute(
+            "INSERT INTO music_import_items"
+            " (id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
+            "state,staging_name,final_name,derived_from)"
+            " VALUES (?,?,?,?,?,4,4,'placing',?,?,?)",
+            [
+                "copy",
+                "asset-copy",
+                job["id"],
+                "copy",
+                "copy.flac",
+                "c" * 32 + ".part",
+                "copy",
+                item["id"],
+            ],
+        )
+    else:
+        await h.store.execute(
+            "INSERT INTO music_import_removals(id,job_id,owner_id,state,include_used,created)"
+            " VALUES ('removal',?,'a','removing',0,0)",
+            [job["id"]],
+        )
+        await h.store.execute(
+            "INSERT INTO music_import_removal_items"
+            " (removal_id,item_id,song_id,reasons,use_key,remove_file)"
+            " VALUES ('removal',?,'','[]','key',1)",
+            [item["id"]],
+        )
+    await h.service.cancel("a", job["id"])
+    assert not await h.service._release_unpublished()
+    row = await h.service._item(job["id"], item["id"])
+    assert row["reserved_size"] == 4 and row["received_cleanup"] == ""
+    assert (h.root / "_imports/.incoming" / row["staging_name"]).read_bytes() == b"abcd"
+
+
+@pytest.mark.parametrize("failure", ["hardlink", "directory", "symlink", "io"])
+@pytest.mark.parametrize("at_startup", [False, True])
+async def test_cleanup_refusal_does_not_block_other_items_or_restart(
+    harness, failure, at_startup, monkeypatch, caplog
+):
+    h = harness
+    job = await declared(h, [ManifestEntry(str(n), f"{n}.flac", 4) for n in range(2)])
+    for item in job["items"]:
+        await h.service.receive("a", job["id"], item["id"], 0, chunks(b"abcd"))
+    rows = await h.store.fetchall("SELECT * FROM music_import_items ORDER BY id")
+    refused, other = rows
+    source = h.root / "_imports/.incoming" / refused["staging_name"]
+    if failure == "hardlink":
+        h.service.storage.place(refused["staging_name"], refused["final_name"])
+    elif failure in ("directory", "symlink"):
+        source.unlink()
+        if failure == "directory":
+            source.mkdir()
+        else:
+            source.symlink_to(h.root / "outside")
+    else:
+        from shijhon.music_imports.storage import Storage
+
+        def io_error(name):
+            if name == refused["staging_name"]:
+                raise OSError("private path must not enter logs")
+            Storage.discard_unpublished(h.service.storage, name)
+
+        monkeypatch.setattr(h.service.storage, "discard_unpublished", io_error)
+    await h.service.cancel("a", job["id"])
+    if at_startup:
+        await h.store.execute("UPDATE music_import_items SET received_cleanup='pending'")
+        await h.service.aclose()
+        h.service = h.build()
+        if failure == "io":
+            monkeypatch.setattr(h.service.storage, "discard_unpublished", io_error)
+        await h.service.initialize()
+    else:
+        assert await h.service.tick()
+    row = await h.service._item(job["id"], refused["id"])
+    assert row["reserved_size"] == 4 and row["received_cleanup"] == "pending"
+    assert row["received_cleanup_error"]
+    assert (await h.service._item(job["id"], other["id"]))["received_cleanup"] == "deleted"
+    assert "cleanup refused" in caplog.text and "private path" not in caplog.text
+    monkeypatch.undo()
+    await h.service.aclose()
+    h.service = h.build()
+    await h.service.initialize()
+    assert not await h.service.tick()  # A restart neither retries nor reorders refusals.
+    assert (await h.service._item(job["id"], refused["id"]))["reserved_size"] == 4
+    next_job = await reviewed(h, owner="b", key="unaffected")
+    await h.service.approve("b", next_job["id"], next_job["revision"], "go")
+    assert await h.service.tick()
+    assert (await h.service.status("b", next_job["id"]))["state"] == "done"
+
+
+async def test_startup_clears_empty_receipts_in_bulk_but_defers_new_deletions(harness, monkeypatch):
+    h = harness
+    job = await declared(h, [ManifestEntry(str(n), f"{n}.flac", 4) for n in range(100)])
+    for item in job["items"][:2]:
+        await h.service.receive("a", job["id"], item["id"], 0, chunks(b"abcd"))
+    await h.service.cancel("a", job["id"])
+    pending, deferred = job["items"][:2]
+    await h.store.execute(
+        "UPDATE music_import_items SET received_cleanup='pending' WHERE id=?", [pending["id"]]
+    )
+    await h.service.aclose()
+    h.service = h.build()
+    statements = []
+    await h.store.conn.set_trace_callback(statements.append)
+    await h.service.initialize()
+    await h.store.conn.set_trace_callback(None)
+    assert sum(sql == "COMMIT" for sql in statements) < 10
+    assert sum("SET received_cleanup='deleted'" in sql for sql in statements) < 10
+    rows = await h.store.fetchall("SELECT * FROM music_import_items")
+    assert sum(r["received_cleanup"] == "deleted" for r in rows) == 99
+    assert (await h.service._item(job["id"], deferred["id"]))["received_cleanup"] == ""
+    assert await h.service.tick()
+    assert (await h.service._item(job["id"], deferred["id"]))["reserved_size"] == 0
 
 
 async def test_private_receive_frozen_review_explicit_approval_and_owner_receipt(harness):
@@ -1191,7 +1487,10 @@ async def test_stop_during_batch_retains_placed_files_and_atomic_completed_recei
     assert len(paths) == (1 if boundary == "placement" else 3)
     assert all(p.read_bytes() == audio() for p in paths)
     assert (await h.service.resume("a", approved["id"]))["state"] == "cancelled"
-    assert not await h.service.tick()
+    while await h.service.tick():
+        pass
+    # Cleanup frees only files Stop prevented from being placed.
+    assert list((h.root / "_imports").rglob("*.flac")) == paths
 
 
 @pytest.mark.parametrize("boundary", ["placement", "scan", "refresh", "receipt"])
@@ -1780,3 +2079,198 @@ async def test_actual_receive_crash_restart_then_stop_does_not_orphan_partial_by
     finally:
         await h.service.aclose()
         await store.close()
+
+
+@pytest.mark.parametrize("stage", [b"", b'{"installation":', None])
+async def test_initial_root_marker_interrupted_before_publication_restarts(
+    harness, tmp_path, monkeypatch, stage
+):
+    from shijhon.music_imports.storage import Storage
+
+    library = tmp_path.resolve() / "new-library"
+    (library / "_imports").mkdir(parents=True)
+    storage = Storage(library, "_imports", "_shijhon")
+    if stage is not None:
+        (library / "_imports" / ".import-root.stage").write_bytes(stage)
+    rename = os.rename
+
+    def interrupted(source, target, **kwargs):
+        if source == ".import-root.stage":
+            assert not (library / "_imports" / ".import-root").exists()
+            assert json.loads((library / "_imports" / source).read_bytes())["installation"] == "new"
+            raise OSError("stopped before publication")
+        return rename(source, target, **kwargs)
+
+    monkeypatch.setattr(os, "rename", interrupted)
+    with pytest.raises(ImportError):
+        storage.open("new", "1")
+    monkeypatch.setattr(os, "rename", rename)
+    storage.open("new", "1")
+    storage.close()
+    assert not (library / "_imports" / ".import-root.stage").exists()
+    assert json.loads((library / "_imports" / ".import-root").read_bytes()) == {
+        "installation": "new",
+        "library": "1",
+        "version": 1,
+    }
+
+
+async def test_copy_capacity_and_reservation_share_admission(harness, monkeypatch):
+    h = harness
+    job = await reviewed(h)
+    item = await h.service._item(job["id"], job["items"][0]["id"])
+    await h.store.execute("UPDATE music_import_jobs SET state='checking' WHERE id=?", [job["id"]])
+    await h.store.execute("UPDATE music_import_items SET state='copying' WHERE id=?", [item["id"]])
+    checking, release, competitor = anyio.Event(), anyio.Event(), anyio.Event()
+    capacity = h.service._capacity
+    plan = h.service._plan_copy
+    called = False
+
+    async def source(*args):
+        return {"ALBUM": ("Night Letters",)}, "Tide Paper"
+
+    async def checked(owner, added=0):
+        nonlocal called
+        if not called:
+            called = True
+            await capacity(owner, added)
+            checking.set()
+            await release.wait()
+        else:
+            competitor.set()
+            await capacity(owner, added)
+
+    async def planned(*args):
+        assert not competitor.is_set()
+        return await plan(*args)
+
+    async def retag(*args):
+        return None
+
+    async def declare_other():
+        await checking.wait()
+        other = await h.service.create("b", "competitor")
+        await h.service.declare("b", other["id"], "page", [ManifestEntry("f", "Other.flac", 1)])
+
+    monkeypatch.setattr(h.service, "_copy_source", source)
+    monkeypatch.setattr(h.service, "_capacity", checked)
+    monkeypatch.setattr(h.service, "_plan_copy", planned)
+    monkeypatch.setattr(h.service, "_retag", retag)
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(h.service._copy, dict(job, owner_id="a"), item)
+        tasks.start_soon(declare_other)
+        await checking.wait()
+        await anyio.sleep(0.02)
+        assert not competitor.is_set()
+        release.set()
+    assert competitor.is_set()
+
+
+@pytest.mark.parametrize("size", [1024, 2 * 1024**3])
+async def test_album_copy_deadline_allows_time_for_its_bytes(harness, monkeypatch, size):
+    h = harness
+    job = await reviewed(h)
+    item = await h.service._item(job["id"], job["items"][0]["id"])
+    item["expected_size"] = size
+    timeout = []
+    fail_after = anyio.fail_after
+
+    def deadline(seconds):
+        timeout.append(seconds)
+        return fail_after(5)
+
+    monkeypatch.setattr(anyio, "fail_after", deadline)
+    result = await h.service._retag(
+        item, "c" * 32 + ".part", {"ALBUM": ("Night Letters",)}, "Tide Paper"
+    )
+    assert result
+    assert timeout[0] >= h.limits.validation_seconds * 4 + size / 1024**2
+
+
+async def test_unindexed_file_does_not_starve_other_files_or_later_batches(harness, monkeypatch):
+    h = harness
+    monkeypatch.setattr(import_service, "PUBLISH_BATCH_FILES", 2)
+    job = await approved_batch(h, count=5)
+    failed = min(job["items"], key=lambda i: i["id"])["id"]
+    item = await h.service._item(job["id"], failed)
+    relative = "_imports/" + item["final_name"]
+    lookup = h.service.native_lookup
+
+    async def missing(owner, library, path):
+        return None if path == relative else await lookup(owner, library, path)
+
+    monkeypatch.setattr(h.service, "native_lookup", missing)
+    for _ in range(5):
+        await h.service.tick()
+    status = await h.service.status("a", job["id"])
+    assert status["state"] == "paused" and status["error"] == "indexing"
+    assert status["complete_files"] == 4 and status["held_files"] == 1
+    assert status["checked_files"] == 5
+    overlaps = await h.service.status("a", job["id"], overlap_only=True)
+    assert overlaps["filtered_total"] == 1 and overlaps["items"][0]["id"] == failed
+    held = next(i for i in status["items"] if i["id"] == failed)
+    assert held["state"] == "placed" and held["song_id"] == "" and held["error"] == "indexing"
+    assert (h.root / relative).is_file()
+    assert len(await h.store.fetchall("SELECT * FROM collection_originals")) == 4
+    await h.service.resume("a", job["id"])
+    await h.service.tick()
+    assert (await h.service.status("a", job["id"]))["complete_files"] == 4
+    monkeypatch.setattr(h.service, "native_lookup", lookup)
+    await h.service.resume("a", job["id"])
+    await h.service.tick()
+    status = await h.service.status("a", job["id"])
+    assert status["state"] == "done" and status["complete_files"] == 5
+
+
+async def test_reimport_keeps_intact_received_copy_after_in_place_edit(harness):
+    h = harness
+    original = audio()
+    first = await reviewed(h)
+    await h.service.approve("a", first["id"], first["revision"], "publish")
+    await h.service.tick()
+    row = await h.store.fetchone("SELECT * FROM music_import_items WHERE job_id=?", [first["id"]])
+    path = h.root / "_imports" / row["final_name"]
+    with path.open("r+b") as edited:
+        edited.seek(100)
+        edited.write(bytes([original[100] ^ 1]))
+    second = await declared(h, key="intact-reimport")
+    item = second["items"][0]
+    await h.service.receive("a", second["id"], item["id"], 0, chunks(original))
+    await h.service.review("a", second["id"])
+    await h.service.tick()
+    status = await h.service.status("a", second["id"])
+    assert status["state"] == "paused" and status["error"] == "identity"
+    receipt = await h.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [item["id"]])
+    assert (h.root / "_imports" / ".incoming" / receipt["staging_name"]).read_bytes() == original
+    assert receipt["reserved_size"] == len(original)
+    assert not await h.store.fetchone(
+        "SELECT 1 FROM music_import_links WHERE job_id=?", [second["id"]]
+    )
+
+
+async def test_unindexed_album_copy_is_reported_on_its_received_original(harness):
+    h = harness
+    job = await reviewed(h)
+    original = job["items"][0]["id"]
+    await h.store.execute(
+        "UPDATE music_import_items SET state='joined',outcome='copy',warnings='[]' WHERE id=?",
+        [original],
+    )
+    await h.store.execute(
+        "INSERT INTO music_import_items"
+        " (id,asset_id,job_id,client_key,display_path,expected_size,reserved_size,"
+        "state,staging_name,final_name,derived_from,received_size)"
+        " VALUES ('copy','copy',?,'copy','Song.flac',1,1,'placed','copy','copy',?,1)",
+        [job["id"], original],
+    )
+    await h.service._hold_unindexed({"id": "copy", "derived_from": original})
+    await h.store.execute(
+        "UPDATE music_import_jobs SET state='paused',error='indexing' WHERE id=?", [job["id"]]
+    )
+    status = await h.service.status("a", job["id"], problems_only=True)
+    assert status["held_files"] == status["checked_files"] == status["filtered_total"] == 1
+    assert status["items"][0]["id"] == original
+    assert status["items"][0]["error"] == "indexing"
+    assert status["items"][0]["outcome"] == "held"
+    await h.service.resume("a", job["id"])
+    assert not await h.store.fetchone("SELECT 1 FROM music_import_items WHERE error='indexing'")

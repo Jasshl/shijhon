@@ -8,6 +8,10 @@ addon``, the way audio is taken from add-ons: through the add-on client
 request limit - a catalog request counts there like a lookup, and the song being
 played goes first.
 
+An add-on declaring ``fullcatalog`` also supports the optional full-catalog extension
+(documented in ``docs/reference/add-on-protocol.md``). The description below covers
+add-ons without that extension.
+
 **The requests** (``GET``, JSON; declared in the manifest as the resources ``search`` and
 ``catalog`` - an add-on without both is refused, with the reason):
 
@@ -100,22 +104,28 @@ answer from the library.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
+import logging
 import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote, unquote
 
 import anyio
 import httpx
 from async_lru import alru_cache
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from shijhon.catalog.artwork import ArtworkIndex
-from shijhon.catalog.base import CatalogError, SearchResults
+from shijhon.catalog.base import CatalogError, PartialReleases, SearchResults, UnrecognizedArtwork
 from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import (
+    ITEM_ID,
     CatalogArtist,
     CatalogRef,
     CatalogRelease,
@@ -130,6 +140,7 @@ from shijhon.delivery.addon import (
     SERVICE_TAG,
     Addon,
     AddonError,
+    FullCatalog,
     Manifest,
     catalog_key,
     item_id,
@@ -145,6 +156,11 @@ from shijhon.matching.normalize import credit_names, featured_names, fold, same_
 
 if TYPE_CHECKING:
     from shijhon.delivery.sources import Source, SourceRegistry
+
+log = logging.getLogger(__name__)
+MAX_RELEASE_PAGES = 50
+MAX_RELEASES = 5000
+IDENTITY_CHANGED = "the add-on's catalog identity changed: confirm it on the Catalog page"
 
 KIND = "addon"
 LABEL = "An add-on's catalog"
@@ -257,10 +273,32 @@ def artwork_address(key: str, *values: Any) -> str | None:
     return None
 
 
+def full_artwork(key: str, item: Mapping[str, Any]) -> str | None:
+    template = text(item.get("artworkTemplate"))
+    if template and "{w}" in template and "{h}" in template:
+        checked = artwork_address(key, template)
+        if checked:
+            address = template.split("#", 1)[0]
+            if not re.search(r"[{}]", address.replace("{w}", "").replace("{h}", "")):
+                # Carry the marked template in the fragment: dimension substitution
+                # stays verifiable even when the artwork index is read after restart.
+                return f"{address}#sht={quote(address, safe='')}&sh={_mark(key, address)}"
+    return artwork_address(key, item.get("artworkURL"), item.get("cover"))
+
+
 def unmarked(key: str, url: str) -> str | None:
     """The address to fetch for an artwork address the catalog ``key`` handed out; None
     for any other address."""
     address, _, mark = url.rpartition("#")
+    if mark.startswith("sht="):
+        original, _, signature = mark[4:].rpartition("&sh=")
+        template = unquote(original)
+        pattern = (
+            re.escape(template).replace(r"\{w\}", r"[0-9]{1,5}").replace(r"\{h\}", r"[0-9]{1,5}")
+        )
+        if signature == _mark(key, template) and re.fullmatch(pattern, address):
+            return address
+        return None
     return address if address and mark == _mark(key, address) else None
 
 
@@ -271,9 +309,17 @@ class Space:
 
     key: str
     service: str
+    full: bool = False
+    direct: bool = False
 
     def ref(self, own: Any, kind: str = "") -> CatalogRef | None:
         """The item of the add-on's own ID ``own`` (``kind``: "i" for an artist)."""
+        if self.direct:
+            return (
+                CatalogRef(self.key, own)
+                if isinstance(own, str) and ITEM_ID.fullmatch(own) and own not in (".", "..")
+                else None
+            )
         ident = tagged(self.service, own)
         if ident is None or len(kind) + len(ident) > MAX_ITEM_ID:
             return None
@@ -281,6 +327,8 @@ class Space:
 
     def own(self, item: str) -> str | None:
         """The add-on's own ID of an item of this service; None for any other."""
+        if self.direct:
+            return item if ITEM_ID.fullmatch(item) and item not in (".", "..") else None
         return untagged(self.service, item)
 
 
@@ -308,6 +356,57 @@ def credited(key: str, credit: str) -> tuple[CatalogRef, ...]:
     return tuple(refs)
 
 
+def _positive(value: Any) -> int | None:
+    return value if type(value) is int and value >= 1 else None
+
+
+def _genres(item: Mapping[str, Any]) -> tuple[str, ...]:
+    raw = item.get("genres")
+    return tuple(w for v in raw[:MAX_LISTED] if (w := _words(v))) if isinstance(raw, list) else ()
+
+
+def _artist_credits(
+    space: Space, item: Mapping[str, Any], credit: str
+) -> tuple[tuple[str, CatalogRef | None], ...]:
+    raw = item.get("artists")
+    listed = []
+    if isinstance(raw, list):
+        for artist in raw[:MAX_LISTED]:
+            if not isinstance(artist, Mapping):
+                continue
+            name = _words(artist.get("name")) or ""
+            ref = space.ref(artist.get("id"), _ARTIST_ITEM)
+            if name or (space.full and ref is not None):
+                listed.append((name, ref))
+    if not listed:
+        listed = [(name, None) for name in featured_names(credit) or ([credit] if credit else [])]
+    return tuple(listed)
+
+
+def _credits(
+    space: Space, item: Mapping[str, Any], credit: str
+) -> tuple[tuple[str, ...], tuple[CatalogRef, ...]]:
+    listed = _artist_credits(space, item, credit)
+    # Preserve unnamed positions beside named artists; references alone still use the
+    # textual credit when one is available.
+    names = tuple(name for name, _ in listed) if isinstance(item.get("artists"), list) else ()
+    if not any(names):
+        names = ()
+    refs = tuple(ref for _, ref in listed if ref is not None)
+    # A partial set cannot be paired by position. Confirmed catalogs resolve missing
+    # items by name in artists_of; name-keyed catalogs can carry that fallback directly.
+    if len(refs) != len(listed):
+        resolved = []
+        if not space.direct:
+            for name, ref in listed:
+                if ref is not None:
+                    resolved.append(ref)
+                else:
+                    resolved.extend(credited(space.key, name))
+        refs = tuple(resolved)
+    return names, refs
+
+
 def read_track(
     space: Space, item: Any, *, album: CatalogRelease | None = None, position: int = 0
 ) -> CatalogTrack | None:
@@ -322,18 +421,34 @@ def read_track(
     if ref is None or title is None or length is None:
         return None
     credit = _credit(item.get("artist")) or (album.artist if album is not None else "")
-    own = artwork_address(key, item.get("artworkURL"), item.get("cover"))
+    own = (
+        full_artwork(key, item)
+        if space.full
+        else artwork_address(key, item.get("artworkURL"), item.get("cover"))
+    )
+    names, refs = _credits(space, item, credit) if space.full else ((), credited(key, credit))
+    credit = credit or ", ".join(name for name in names if name)[:MAX_TEXT]
+    album_item = item.get("album")
+    album_ref = (
+        space.ref(album_item.get("id")) if space.full and isinstance(album_item, Mapping) else None
+    )
     return CatalogTrack(
         ref=ref,
         title=title,
         artist=credit,
         duration_ms=length,
-        number=position,
+        disc=(_positive(item.get("discNumber")) or 1) if space.full else 1,
+        number=(_positive(item.get("trackNumber")) or position) if space.full else position,
         isrc=_isrc(item.get("isrc")),
-        album=album.ref if album is not None else None,
-        artist_refs=credited(key, credit),
+        explicit=space.full and item.get("explicit") is True,
+        clean=space.full and item.get("clean") is True and item.get("explicit") is not True,
+        album=album.ref if album is not None else album_ref,
+        artists=names,
+        artist_refs=refs,
         album_title=album.title if album is not None else _credit(item.get("album")) or None,
-        release_date=album.release_date if album is not None else None,
+        genres=_genres(item) if space.full else (),
+        release_date=(_date(item) if space.full else None)
+        or (album.release_date if album is not None else None),
         artwork_template=own or (album.artwork_template if album is not None else None),
     )
 
@@ -353,17 +468,44 @@ def read_release(
         return None
     credit = _credit(item.get("artist")) or artist
     kind = _KIND.search(title)
+    release_kind = ReleaseKind(kind.group(1).lower()) if kind else ReleaseKind.ALBUM
+    if space.full and item.get("kind") in tuple(ReleaseKind) and item["kind"] != "album":
+        release_kind = ReleaseKind(item["kind"])
+    names, refs = _credits(space, item, credit) if space.full else ((), credited(key, credit))
+    credit = credit or ", ".join(name for name in names if name)[:MAX_TEXT]
     return CatalogRelease(
         ref=ref,
         title=title,
         artist=credit,
-        kind=ReleaseKind(kind.group(1).lower()) if kind else ReleaseKind.ALBUM,
+        kind=release_kind,
         release_date=_date(item),
         track_count=_count(_first(item, "trackCount", "totalTracks")),
-        artist_refs=credited(key, credit),
-        artwork_template=artwork_address(key, item.get("artworkURL"), item.get("cover")),
+        artists=names,
+        artist_refs=refs,
+        explicit=space.full and item.get("explicit") is True,
+        clean=space.full and item.get("clean") is True and item.get("explicit") is not True,
+        genres=_genres(item) if space.full else (),
+        label=_words(item.get("label")) if space.full else None,
+        upc=_words(item.get("upc")) if space.full else None,
+        artwork_template=full_artwork(key, item)
+        if space.full
+        else artwork_address(key, item.get("artworkURL"), item.get("cover")),
         numbered=False,  # (its tracks are counted in the order of its answer)
     )
+
+
+def _cursor(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) > 512:
+        log.warning("add-on catalog: artist releases cut at an invalid cursor")
+        return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        log.warning("add-on catalog: artist releases cut at an invalid cursor")
+        return None
+    return value
 
 
 def _other(data: Any, own: str) -> bool:
@@ -386,21 +528,39 @@ def read_album(space: Space, own: str, data: Any) -> CatalogRelease:
         raise CatalogError("invalid", "the add-on answered with another album")
     listed = data.get("tracks")
     listed = listed if isinstance(listed, list) else []
+    numbered = (
+        space.full
+        and bool(listed)
+        and all(
+            isinstance(t, Mapping)
+            and _positive(t.get("discNumber"))
+            and _positive(t.get("trackNumber"))
+            for t in listed[:MAX_TRACKS]
+        )
+    )
     tracks: dict[str, CatalogTrack] = {}
     for position, item in enumerate(listed[:MAX_TRACKS], start=1):
         track = _item(lambda item=item, position=position: read_track(  # type: ignore[misc]
             space, item, album=release, position=position
         ))  # fmt: skip
         if track is not None:
+            if not numbered:
+                track = replace(track, disc=1, number=position)
             tracks.setdefault(track.ref.id, track)
     count = release.track_count if release.track_count is not None else len(listed)
     return replace(
         release,
         tracks=tuple(tracks.values()),
+        numbered=bool(numbered),
         track_count=count,
-        # Every track it lists and says it has must be there: one left out, a list shorter
-        # than its count, or no list at all, and it is never filled into an owned album.
-        incomplete=not tracks or len(tracks) < max(len(listed), count),
+        # Full catalogs can override the advertised count, never unread listed tracks.
+        incomplete=not tracks
+        or len(tracks) < len(listed)
+        or (
+            data["incomplete"]
+            if space.full and type(data.get("incomplete")) is bool
+            else len(tracks) < count
+        ),
     )
 
 
@@ -416,7 +576,11 @@ def read_artist(space: Space, item: Any, *, own: str | None = None) -> CatalogAr
     if ref is None or name is None:
         return None
     return CatalogArtist(
-        ref, name, artwork_address(space.key, item.get("artworkURL"), item.get("cover"))
+        ref,
+        name,
+        full_artwork(space.key, item)
+        if space.full
+        else artwork_address(space.key, item.get("artworkURL"), item.get("cover")),
     )
 
 
@@ -480,6 +644,7 @@ class _Page:
     artist: CatalogArtist
     releases: tuple[CatalogRelease, ...]
     top: tuple[CatalogTrack, ...]
+    next: str | None = None
 
 
 # --- the catalog --------------------------------------------------------------------------
@@ -496,9 +661,10 @@ class AddonCatalog:
     nothing (``pacing.urgent``)."""
 
     region = ""
-    # An add-on names any address for a cover: it is fetched by ``artwork`` alone (public
-    # hosts only, paced, a raster image of a bounded size), never handed to a client.
-    client_artwork = False
+
+    @property
+    def client_artwork(self) -> bool:
+        return self._client_artwork
 
     def __init__(
         self,
@@ -510,9 +676,15 @@ class AddonCatalog:
         ttl: float = 3600.0,
         resolver: Resolver = system_resolver,
         urgency: int = pacing.QUEUED,
+        identity: str = "",
     ) -> None:
         self.name = name
-        self.key = catalog_key(name)
+        self.identity = Settings(identity=identity).identity
+        self.key, _, self.region = (
+            self.identity.partition(".") if self.identity else (catalog_key(name), "", "")
+        )
+        self._full = False
+        self._client_artwork = False
         self.registry = registry
         self.http = http
         self.timeout = timeout
@@ -529,6 +701,8 @@ class AddonCatalog:
         # request's: asked once, whoever asks and for which part.
         self._found = alru_cache(maxsize=ANSWERS, ttl=kept)(self._search)
         self._page = alru_cache(maxsize=ANSWERS, ttl=kept)(self._artist_page)
+        self._release_page = alru_cache(maxsize=ANSWERS, ttl=kept)(self._releases_page)
+        self._artwork_host = alru_cache(maxsize=1024, ttl=300)(self._public_artwork_host)
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -563,12 +737,14 @@ class AddonCatalog:
         is now. Returns the answer, and whose items it holds."""
         source = await self._source()
         self._not_asked(source)
+        if self.identity and source.addon.known is not None:
+            await self._refresh_identity(source)
         urgency = pacing.current() or pacing.Urgency(self.urgency)
         waits = pacing.Waits()
         try:
             with pacing.urgent(urgency), pacing.watched() as waits, anyio.fail_after(self.timeout):
                 manifest = await source.addon.manifest()
-                space = self._space(_service(manifest))
+                space = self._manifest_space(manifest)
                 if service is not None and service != service_tag(space.service):
                     raise CatalogError("not_found", OTHER_SERVICE)
                 return await request(source.addon), space
@@ -578,6 +754,45 @@ class AddonCatalog:
         except AddonError as exc:
             raise _failure(exc) from None
 
+    def _manifest_space(self, manifest: Manifest) -> Space:
+        declared = manifest.full_catalog
+        if self.identity and (declared is None or declared.identity != self.identity):
+            raise CatalogError("invalid", IDENTITY_CHANGED)
+        self._full = declared is not None
+        self._client_artwork = declared is not None and declared.client_artwork
+        return self._space(_service(manifest))
+
+    async def _current(self) -> Space:
+        source = await self._source()
+        if self.identity and source.addon.known is not None:
+            await self._refresh_identity(source)
+        if source.addon.known is not None:
+            # Inspecting a manifest already read spends no API turn. Cached answers
+            # and remembered songs remain usable while fresh requests are paused.
+            return self._manifest_space(source.addon.known)
+        _, space = await self._ask(lambda addon: addon.manifest())
+        return space
+
+    async def _refresh_identity(self, source: Source, *, force: bool = False) -> None:
+        try:
+            self._not_asked(source)
+            with pacing.urgent(pacing.WARM), anyio.fail_after(min(self.timeout, 2)):
+                await source.addon.refresh_manifest(300, force=force)
+        except (AddonError, CatalogError, TimeoutError):
+            # Refresh failure keeps the known declaration and ordinary request behavior.
+            pass
+
+    async def _check_answer(self, data: Any, own: str) -> None:
+        if _other(data, own) and self.identity:
+            source = await self._source()
+            await self._refresh_identity(source, force=True)
+            if source.addon.known is not None:
+                self._manifest_space(source.addon.known)
+
+    async def validate_identity(self) -> None:
+        if self.identity:
+            await self._current()
+
     def _space(self, service: str) -> Space:
         """Whose items the add-on's answers hold now. When it is another service than
         before (the add-on was pointed elsewhere), nothing of the one before is kept."""
@@ -585,7 +800,7 @@ class AddonCatalog:
             self._songs.clear()
             self._artists.clear()
         self._service = service
-        return Space(self.key, service)
+        return Space(self.key, service, self._full, bool(self.identity))
 
     async def check(self) -> None:
         """The dashboard's "Check now": the add-on's manifest read again, and whether it
@@ -600,7 +815,7 @@ class AddonCatalog:
             raise CatalogError("unavailable", "no answer in time") from None
         except AddonError as exc:
             raise _failure(exc) from None
-        _service(manifest)
+        self._manifest_space(manifest)
 
     # --- what the answers showed --------------------------------------------------------------
 
@@ -629,7 +844,11 @@ class AddonCatalog:
         if fold(known.album_title) != fold(track.album_title):
             return track
         return replace(
-            track, album=known.album, number=known.number, release_date=known.release_date
+            track,
+            album=known.album,
+            disc=known.disc,
+            number=known.number,
+            release_date=known.release_date,
         )
 
     def _named(self, space: Space, name: str, own: str | None) -> None:
@@ -648,12 +867,20 @@ class AddonCatalog:
     # --- the catalog interface ----------------------------------------------------------
 
     async def search(self, term: str, limit: int = 20) -> SearchResults:
-        found = await self._found(term)
-        limit = max(1, limit)
+        await self.validate_identity()
+        if self._service is None:
+            await self._current()
+        limit = min(MAX_LISTED, max(1, limit))
+        found = await self._found(term, limit) if self._full else await self._found(term)
         return SearchResults(found.artists[:limit], found.albums[:limit], found.songs[:limit])
 
-    async def _search(self, term: str) -> SearchResults:
-        data, space = await self._ask(lambda addon: addon.search(term))
+    async def _search(self, term: str, limit: int = MAX_LISTED) -> SearchResults:
+        async def request(addon: Addon) -> Any:
+            if (await addon.manifest()).full_catalog is not None:
+                return await addon.search(term, limit)
+            return await addon.search(term)
+
+        data, space = await self._ask(request)
         if not isinstance(data, Mapping):
             raise CatalogError("invalid", "the add-on's search answer is not an object")
         return _reading(lambda: self._searched(space, data))
@@ -661,7 +888,9 @@ class AddonCatalog:
     def _searched(self, space: Space, data: Mapping[str, Any]) -> SearchResults:
         artists = _each(data.get("artists"), lambda item: read_artist(space, item))
         for artist in artists:
-            self._named(space, artist.name, space.own(artist.ref.id[1:]))
+            self._named(
+                space, artist.name, space.own(artist.ref.id if space.direct else artist.ref.id[1:])
+            )
         songs = _each(data.get("tracks"), lambda item: read_track(space, item))
         songs = tuple(self._with_album(song) for song in songs)
         self._keep(songs)
@@ -669,17 +898,53 @@ class AddonCatalog:
         return SearchResults(artists, albums, songs)
 
     async def album(self, album_id: str) -> CatalogRelease:
-        own = own_id(album_id[SERVICE_TAG:])
+        await self.validate_identity()
+        own = (
+            album_id
+            if self.identity and ITEM_ID.fullmatch(album_id) and album_id not in (".", "..")
+            else own_id(album_id[SERVICE_TAG:])
+            if not self.identity
+            else None
+        )
         if own is None:
             raise CatalogError("not_found", "not an album of the add-on")
         data, space = await self._ask(
-            lambda addon: addon.album(own), service=album_id[:SERVICE_TAG]
+            lambda addon: addon.album(own),
+            service=None if self.identity else album_id[:SERVICE_TAG],
         )
+        await self._check_answer(data, own)
         release = _reading(lambda: read_album(space, own, data))
         self._keep(release.tracks)
         return release
 
     async def song(self, song_id: str) -> CatalogTrack:
+        if not self.identity and not self._full:
+            try:
+                source = await self._source()
+            except CatalogError:
+                source = None
+            manifest = source.addon.known if source is not None else None
+            if manifest is not None and manifest.full_catalog is not None:
+                self._manifest_space(manifest)
+        if self.identity or self._full:
+            space = await self._current()
+            own = space.own(song_id)
+            if own is None:
+                raise CatalogError("not_found", "not a song of the add-on")
+            data, space = await self._ask(
+                lambda addon: addon.catalog_track(own),
+                service=None if space.direct else song_id[:SERVICE_TAG],
+            )
+            await self._check_answer(data, own)
+            if _other(data, own):
+                raise CatalogError("invalid", "the add-on answered with another song")
+            if isinstance(data, Mapping) and not data.get("id"):
+                data = {**data, "id": own}
+            track = _reading(lambda: read_track(space, data))
+            if track is None:
+                raise CatalogError("invalid", "the add-on's song could not be read")
+            self._keep((track,))
+            return track
         track = self._songs.get(song_id)
         if track is None:
             raise CatalogError(
@@ -696,7 +961,13 @@ class AddonCatalog:
         by title and artist, the song's artist's first, and opened to see (``CANDIDATES``
         at most), all within the catalog's timeout. ``album``: how albums are opened (the
         cache's, so the answer checked here is the one then written). None: not found."""
-        track = self._songs.get(song_id)
+        space = await self._current() if self._full or self.identity else None
+        try:
+            track = await self.song(song_id) if space and space.full else self._songs.get(song_id)
+        except CatalogError as exc:
+            if exc.kind == "not_found":
+                return None
+            raise
         if track is None or track.album is not None or not track.album_title:
             return track.album if track is not None else None
         try:
@@ -727,13 +998,37 @@ class AddonCatalog:
         return None
 
     async def songs_by_isrc(self, isrc: str) -> tuple[CatalogTrack, ...]:
-        return ()  # the protocol's ISRC lookup names no album: albums are matched by title
+        if not self._full and not self.identity:
+            return ()
+        space = await self._current()
+        if not space.full:
+            return ()
+        code = _isrc(isrc)
+        if code is None:
+            return ()
+        try:
+            data, space = await self._ask(lambda addon: addon.catalog_isrc(code))
+        except CatalogError as exc:
+            if exc.kind == "not_found":
+                return ()
+            raise
+        if not isinstance(data, Mapping):
+            raise CatalogError("invalid", "the add-on's ISRC answer is not an object")
+        tracks = _each(data.get("tracks"), lambda item: read_track(space, item))
+        tracks = tuple(replace(t, isrc=t.isrc or code) for t in tracks if t.isrc in (None, code))
+        self._keep(tracks)
+        return tracks
 
     async def _real(self, artist_id: str) -> tuple[str, str]:
         """The add-on's own ID of an artist item, and the tag of the service it is of: the
         ID the item carries, or - an artist by name - the one an answer named that name
         with, else the one a search for it finds (the credit's whole name, else its
         first)."""
+        if self.identity:
+            await self.validate_identity()
+            if not ITEM_ID.fullmatch(artist_id) or artist_id in (".", ".."):
+                raise CatalogError("not_found", "not an artist of the add-on")
+            return artist_id, ""
         kind, rest = artist_id[:1], artist_id[1:]
         if kind == _ARTIST_ITEM and (own := own_id(rest[SERVICE_TAG:])) is not None:
             return own, rest[:SERVICE_TAG]
@@ -754,7 +1049,8 @@ class AddonCatalog:
         raise CatalogError("not_found", "the add-on's search finds no artist of that name")
 
     async def _artist_page(self, own: str, service: str) -> _Page:
-        data, space = await self._ask(lambda addon: addon.artist(own), service=service)
+        data, space = await self._ask(lambda addon: addon.artist(own), service=service or None)
+        await self._check_answer(data, own)
         return _reading(lambda: self._paged(space, own, data))
 
     def _paged(self, space: Space, own: str, data: Any) -> _Page:
@@ -771,13 +1067,62 @@ class AddonCatalog:
         top = _each(tracks, lambda item: read_track(space, item))
         top = tuple(self._with_album(song) for song in top)
         self._keep(top)
-        return _Page(artist, releases, top)
+        return _Page(
+            artist, releases, top, _cursor(data.get("releasesNext")) if space.full else None
+        )
 
     async def artist(self, artist_id: str) -> CatalogArtist:
         return (await self._page(*await self._real(artist_id))).artist
 
     async def artist_releases(self, artist_id: str) -> tuple[CatalogRelease, ...]:
-        return (await self._page(*await self._real(artist_id))).releases
+        releases: dict[str, CatalogRelease] = {}
+        first_read = False
+        try:
+            # One catalog timeout includes the first page, pacing and all later pages.
+            with anyio.fail_after(self.timeout):
+                own, service = await self._real(artist_id)
+                page = await self._page(own, service)
+                first_read = True
+                releases.update((r.ref.id, r) for r in page.releases)
+                cursor = page.next
+                seen: set[str] = set()
+                pages = 1
+                while cursor is not None:
+                    if (
+                        cursor in seen
+                        or pages >= MAX_RELEASE_PAGES
+                        or len(releases) >= MAX_RELEASES
+                    ):
+                        log.warning("add-on catalog: artist releases cut at a paging bound")
+                        break
+                    seen.add(cursor)
+                    data, space = await self._release_page(own, cursor, service)
+                    read = partial(read_release, space, artist=page.artist.name)
+                    for release in _each(data.get("albums"), read, MAX_LISTED):
+                        if len(releases) >= MAX_RELEASES:
+                            log.warning("add-on catalog: artist releases cut at a paging bound")
+                            break
+                        releases.setdefault(release.ref.id, release)
+                    cursor = _cursor(data.get("next"))
+                    pages += 1
+        except (CatalogError, TimeoutError) as exc:
+            if not first_read or (isinstance(exc, CatalogError) and exc.reason == IDENTITY_CHANGED):
+                if isinstance(exc, TimeoutError):
+                    raise CatalogError(
+                        "unavailable", "artist releases: no answer in time"
+                    ) from None
+                raise
+            log.warning("add-on catalog: artist releases incomplete; retrying later")
+            return PartialReleases(releases.values())
+        return tuple(releases.values())
+
+    async def _releases_page(self, own: str, cursor: str, service: str) -> tuple[Any, Space]:
+        data, space = await self._ask(
+            lambda addon: addon.catalog_releases(own, cursor), service=service or None
+        )
+        if not isinstance(data, Mapping):
+            raise CatalogError("invalid", "the add-on's releases answer is not an object")
+        return data, space
 
     async def top_songs(self, artist_id: str, limit: int = 10) -> tuple[CatalogTrack, ...]:
         return (await self._page(*await self._real(artist_id))).top[: max(0, limit)]
@@ -785,12 +1130,106 @@ class AddonCatalog:
     async def artists_of(
         self, songs: tuple[str, ...], albums: tuple[str, ...]
     ) -> dict[str, tuple[CatalogRef, ...]]:
-        return {}  # every item names its artists (by name)
+        if not self._full and not self.identity:
+            return {}
+        await self.validate_identity()
+        if not songs and not albums:
+            return {}
+        space = await self._current()
+        if not space.full:
+            return {}
+        found = {}
+        for kind, ids in (("songs", songs), ("albums", albums)):
+            for ident in ids:
+                try:
+                    own = space.own(ident)
+                    if own is None:
+                        continue
+                    data, answer_space = await self._artist_credit_answer(kind, own, ident)
+                    await self._check_answer(data, own)
+                    if _other(data, own):
+                        raise CatalogError("invalid", "the add-on answered with another item")
+                    if not isinstance(data, Mapping):
+                        raise CatalogError("invalid", "the add-on's item is not an object")
+                    credit = _credit(data.get("artist"))
+                    refs_list = []
+                    for name, ref in _artist_credits(answer_space, data, credit):
+                        if ref is not None:
+                            refs_list.append(ref)
+                        elif answer_space.direct:
+                            refs_list.extend(await self._credit_refs((name,)))
+                        else:
+                            refs_list.extend(credited(self.key, name))
+                    refs = tuple(refs_list)
+                    if refs:
+                        found[f"{kind}:{ident}"] = refs
+                except CatalogError as exc:
+                    if exc.kind != "not_found":
+                        raise
+        return found
+
+    async def _artist_credit_answer(self, kind: str, own: str, ident: str) -> tuple[Any, Space]:
+        return await self._ask(
+            lambda addon: addon.catalog_track(own) if kind == "songs" else addon.album(own),
+            service=None if self.identity else ident[:SERVICE_TAG],
+        )
+
+    async def _credit_refs(self, names: tuple[str, ...]) -> tuple[CatalogRef, ...]:
+        refs = []
+        for name in names[:MAX_LISTED]:
+            found = await self.search(name)
+            match = next((a.ref for a in found.artists if fold(a.name) == fold(name)), None)
+            if match is not None:
+                refs.append(match)
+        return tuple(refs)
+
+    async def client_artwork_template(self, template: str | None) -> str | None:
+        if not template:
+            return None
+        try:
+            await self.validate_identity()
+            # A cached answer may precede the first request of this process.
+            await self._current()
+            if not self._client_artwork:
+                return None
+            address = template.split("#", 1)[0]
+            url = httpx.URL(address.replace("{w}", "1").replace("{h}", "1"))
+            if url.scheme != "https" or not url.host or url.userinfo:
+                return None
+            if await self._artwork_host(url.host, url.port or 443):
+                return address
+        except (CatalogError, OSError, httpx.InvalidURL, ValueError):
+            pass
+        return None
+
+    async def _public_artwork_host(self, host: str, port: int) -> bool:
+        unresolved = False
+        try:
+            try:
+                ipaddress.ip_address(host)
+                hosts = [host]
+            except ValueError:
+                with anyio.move_on_after(min(self.timeout, 0.25)) as limit:
+                    hosts = await self.resolver(host, port)
+                if limit.cancel_called:
+                    hosts = []
+            unresolved = not hosts
+            return bool(hosts) and all(allowed(ip, Reach.PUBLIC) for ip in hosts)
+        except OSError:
+            unresolved = True
+            return False
+        finally:
+            if unresolved:
+                # Keep DNS failures briefly, rather than hiding recovered hosts for 5 min.
+                asyncio.get_running_loop().call_later(
+                    30, self._artwork_host.cache_invalidate, host, port
+                )
 
     async def artwork(self, url: str) -> tuple[bytes, str]:
+        await self.validate_identity()
         address = unmarked(self.key, url)
         if address is None:
-            raise CatalogError("invalid", "not an artwork address of this catalog")
+            raise UnrecognizedArtwork()
         if self.registry is not None:
             await self.registry.enabled()  # (the add-ons' own addresses are known)
         at: list[pacing.AddonPace | None] = [None]  # the limit of the add-on the hop is at
@@ -865,8 +1304,8 @@ class AddonCatalogs:
     restart. Each is an ``AddonCatalog`` behind a small cache, built when first needed and
     kept by the add-on's name (what its answers showed is remembered: the protocol has no
     request for one song); its requests are background work at the add-on's request
-    limit. ``skip``: the key of the installation's own catalog - an add-on that is the
-    catalog is asked as that one."""
+    limit. ``skip``: the name of the add-on that is the installation's own catalog;
+    that add-on is asked as the configured catalog."""
 
     def __init__(
         self,
@@ -883,7 +1322,7 @@ class AddonCatalogs:
         self.ttl = ttl
         self.resolver = resolver
         self._built: dict[str, CachedCatalog] = {}
-        self._closing: list[CachedCatalog] = []
+        self._closing: dict[asyncio.Task[None], CachedCatalog] = {}
         self._timeouts: dict[str, float] = {}
 
     def _catalog(self, source: Source) -> CachedCatalog:
@@ -891,7 +1330,9 @@ class AddonCatalogs:
         name, timeout = source.name, max(self.timeout, source.budget or 0)
         built = self._built.get(name)
         if built is not None and self._timeouts.get(name) != timeout:
-            self._closing.append(built)  # rebuilt with the changed budget
+            closing = asyncio.create_task(self._close_after(built, self._timeouts[name]))
+            self._closing[closing] = built
+            closing.add_done_callback(lambda task: self._closing.pop(task, None))
             built = None
         if built is None:
             http = policy_client(
@@ -924,7 +1365,7 @@ class AddonCatalogs:
             return []
         found = []
         for source in await self.registry.enabled():
-            if catalog_key(source.name) == self.skip:
+            if source.name == self.skip:
                 continue
             if source.name in (unanswered or ()) or source.name in (unreadable or ()):
                 continue
@@ -947,10 +1388,10 @@ class AddonCatalogs:
     async def by_key(self, key: str) -> CachedCatalog | None:
         """The catalog whose items have the key ``key`` (``catalog_key``): that of the
         enabled add-on of that name; None when no such add-on is enabled now."""
-        if self.registry is None or key == self.skip:
+        if self.registry is None:
             return None
         for source in await self.registry.enabled():
-            if catalog_key(source.name) == key:
+            if source.name != self.skip and catalog_key(source.name) == key:
                 return self._catalog(source)
         return None
 
@@ -959,10 +1400,28 @@ class AddonCatalogs:
         start)."""
         return next((name for name, built in self._built.items() if built.key == key), None)
 
+    async def _close_after(self, catalog: CachedCatalog, grace: float) -> None:
+        # Callers may still be using this client with its old request timeout.
+        await asyncio.sleep(grace)
+        await self._close(catalog)
+
+    @staticmethod
+    async def _close(catalog: CachedCatalog) -> None:
+        try:
+            await catalog.aclose()
+        except Exception as exc:
+            log.warning("replaced add-on catalog could not close (%s)", type(exc).__name__)
+
     async def aclose(self) -> None:
         built, self._built = self._built, {}
-        closing, self._closing = self._closing, []
-        for catalog in [*built.values(), *closing]:
+        retired = dict(self._closing)
+        for task in retired:
+            task.cancel()
+        if retired:
+            await asyncio.gather(*retired, return_exceptions=True)
+        for catalog in retired.values():
+            await self._close(catalog)
+        for catalog in built.values():
             await catalog.aclose()
 
 
@@ -975,6 +1434,17 @@ class Settings(BaseModel):
     # The name of the add-on to take the catalog from, as the Add-ons page (or
     # ``[[addons]]``) has it.
     addon: str = Field(default="", max_length=200)
+    identity: str = Field(default="", max_length=49)
+
+    @field_validator("identity")
+    @classmethod
+    def valid_identity(cls, value: str) -> str:
+        if value:
+            key, _, region = value.partition(".")
+            declared = FullCatalog.parse({"key": key, "region": region})
+            if not declared.key or declared.identity != value:
+                raise ValueError("use a catalog key, followed by .region when it has one")
+        return value
 
 
 def problem(settings: Any) -> Problem | None:
@@ -1000,6 +1470,7 @@ def build(settings: Any, context: Context) -> AddonCatalog:
         timeout=context.timeout_seconds,
         ttl=float(getattr(settings, "cache_seconds", 3600.0)),
         resolver=context.resolver,
+        identity=str(settings.identity),
     )
 
 
@@ -1008,6 +1479,12 @@ adapter = Adapter(
     build=build,
     settings=Settings,
     words={
+        "identity": Words(
+            "Confirmed catalog identity",
+            "Confirm the identity declared by the add-on. Leave empty to keep items under"
+            " its name. Confirming later changes the catalog key and starts matches over.",
+            max_length=49,
+        ),
         "addon": Words(
             "Add-on",
             "The name of the add-on to take the catalog from, as the Add-ons page has it."

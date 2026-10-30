@@ -70,7 +70,7 @@ PLAYER, RATER, LISTER, ADDER, MARKER, DOWNLOADER, FAN, PREPARER = (
     "fan",
     "preparer",
 )
-# More accounts for the review's findings (2026-10-26).
+# More accounts.
 BIG, NATIVE_BIG, REPORTER, SHARER = "big", "nativebig", "reporter", "sharer"
 ACTION_ACCOUNTS = (
     PLAYER,
@@ -1068,7 +1068,7 @@ def test_a_hand_removal_wins_in_its_library_and_in_all(library: Library, fmt: Fo
         library.use(ADMIN_USER, "original")
 
 
-# --- the review's findings (2026-10-26) ---------------------------------------------------
+# --- playlist additions larger than one request ------------------------------------------
 
 
 def wait_for(check: Any, seconds: float = 20) -> None:
@@ -1080,7 +1080,7 @@ def wait_for(check: Any, seconds: float = 20) -> None:
 
 
 def test_an_accepted_playlist_of_501_entries_is_collected(library: Library) -> None:
-    """Review finding B3: Navidrome accepts a playlist of 501 entries (here one song, 501
+    """Navidrome accepts a playlist of 501 entries (here one song, 501
     times); its album joins the account's Shijhon library."""
     client = library.client(BIG, PASSWORD)
     song = library.native[str(BIG_LISTED.tracks[0].ref)]
@@ -1091,7 +1091,7 @@ def test_an_accepted_playlist_of_501_entries_is_collected(library: Library) -> N
 
 
 def test_a_native_website_addition_of_501_songs_is_collected(library: Library) -> None:
-    """Review finding B3, on the native website: an addition larger than one request
+    """On the native website: an addition larger than one request
     confirms is kept and recorded once Navidrome added every song."""
     world = library.world
     client = library.client(NATIVE_BIG, PASSWORD)

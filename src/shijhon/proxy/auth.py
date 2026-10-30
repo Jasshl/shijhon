@@ -45,7 +45,7 @@ import httpx
 
 from shijhon.proxy.params import RestCall, header
 from shijhon.proxy.responses import callback_refused
-from shijhon.proxy.upstream import HOP_BY_HOP, Upstream
+from shijhon.proxy.upstream import Upstream, response_headers
 
 CREDENTIAL_PARAMS = ("u", "p", "t", "s", "jwt", "apiKey")
 # The request's own parameters that shape Navidrome's answer: ``v`` and ``c`` (without
@@ -296,7 +296,7 @@ class CredentialChecker:
         answer = subsonic_answer(response, body)
         if answer is None:
             raise CheckFailed(f"no Subsonic answer from Navidrome (HTTP {response.status_code})")
-        kept = [(k, v) for k, v in response.headers.raw if k.lower() not in HOP_BY_HOP]
+        kept = response_headers(response)
         return answer, Refusal(response.status_code, kept, body)
 
     def _prune(self) -> None:

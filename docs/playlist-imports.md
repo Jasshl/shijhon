@@ -113,7 +113,7 @@ An entry with an artist and a title is matched in this order:
 2. The configured catalog.
 3. The catalogs of your add-ons, in the order of the Add-ons page: every enabled add-on
    that has a catalog of its own (a search, albums and artists). An add-on that is the
-   configured catalog is not asked twice.
+   configured catalog is not asked twice (identified by its add-on name).
 
 The library and the catalogs use the same matching rules. The first one with exactly one
 match for the entry provides it. If a source finds several possible recordings, the
@@ -123,8 +123,10 @@ catalog of add-on …").
 
 Add-ons are read from the current Add-ons page for every match. If you add or turn on an
 add-on with a catalog, **Recheck** can use it without restarting
-Shijhon. The configured catalog does not change. Add-on catalog requests count against
-the add-on's [limits](add-ons.md#limits) and wait behind requests from apps. An add-on's
+Shijhon. These catalogs keep name-based keys even when an add-on declares a stable
+identity through the full-catalog extension. The configured catalog does not change.
+Add-on catalog requests count against the add-on's [limits](add-ons.md#limits) and wait
+behind requests from apps. An add-on's
 own time limit (`budget_seconds`, for a slow add-on) also applies to its catalog
 requests here.
 

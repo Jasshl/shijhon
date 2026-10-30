@@ -61,16 +61,16 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 | Setting | What it sets |
 |---|---|
 | `state_dir` (`var`) | Shijhon's database, downloads under way and the cover cache |
-| `log_level` (`INFO`), `log_debug` (`[]`) | The log level; loggers logged at debug level whatever it says, e.g. `["shijhon.covers"]`: one line per catalog cover request |
-| `[server] host` (`127.0.0.1`), `port` (8765) | Where Shijhon listens |
+| `log_level` (`INFO`), `log_debug` (`[]`) | The log level (`CRITICAL`, `FATAL`, `ERROR`, `WARNING`, `WARN`, `INFO`, `DEBUG` or `NOTSET`; case and surrounding spaces ignored); loggers logged at debug level whatever it says, e.g. `["shijhon.covers"]`: one line per catalog cover request |
+| `[server] host` (`127.0.0.1`), `port` (8765) | Where Shijhon listens; port 1–65535 |
 | `[server] dashboard` (on) | Off: `/shijhon/` goes to Navidrome like any other path |
 | `[server] restart_by_supervisor` (off) | On: the dashboard offers **Restart Shijhon** ([deployment.md](../deployment.md#restarting)), for a service manager that starts Shijhon again after it exits (systemd: `Restart=always` or `Restart=on-failure`). Not needed in a container, where the restart policy does it |
 | `[server] reverse_proxy_user_header` (`Remote-User`), `reverse_proxy_auth` (off) | Sign-in by a header from the reverse proxy ([advanced deployment](advanced-deployment.md#sign-in-by-the-reverse-proxy)) |
-| `[server] credential_cache_seconds` (60) | How long an accepted login is reused |
-| `[server] max_parsed_body_bytes` (1 MiB) | How much of a request body that is no form Shijhon reads; a larger one streams through to Navidrome |
+| `[server] credential_cache_seconds` (60) | How long an accepted login is reused; finite and at least 0 (0 disables reuse) |
+| `[server] max_parsed_body_bytes` (1 MiB) | How much of a request body that is no form Shijhon reads; a larger one streams through to Navidrome. At least 0 (0 passes non-form bodies through) |
 | `[navidrome] database_path` | Navidrome's database, read by the cleanup instead of the usage export ([advanced deployment](advanced-deployment.md#reading-navidromes-database-directly)). With both set, the export is read |
 | `[navidrome] purge_missing` | Set to `"never"` when Navidrome hides its configuration ([deployment.md](../deployment.md#what-shijhon-needs-from-navidrome)) |
-| `[navidrome] timeout_seconds` (30), `client_name` (`shijhon`) | Shijhon's own requests to Navidrome |
+| `[navidrome] timeout_seconds` (30), `client_name` (`shijhon`) | Shijhon's own requests to Navidrome; timeout finite and greater than 0 |
 | `[placeholders] folder` (`_shijhon`) | The placeholder folder inside the library: a folder of its own, not the library itself |
 | `[placeholders] real_audio_accounts` (`[]`) | Navidrome user names (letter case does not matter) of accounts that see only songs whose audio is in the library, for a sound analyzer such as AudioMuse-AI ([how it works](../how-it-works.md#accounts-for-sound-analyzers)). Applies after a restart; `SHIJHON_PLACEHOLDERS__REAL_AUDIO_ACCOUNTS='["audiomuse"]'` in the environment |
 
@@ -78,8 +78,7 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 
 The main download controls are on **Playback → Downloads and playlist preparation**;
 per-user and preparation controls are under **Advanced settings**. Values from the file,
-saved dashboard settings and the environment keep the normal precedence. New defaults
-do not replace existing overrides, including an old hourly quota.
+saved dashboard settings and the environment keep the normal precedence.
 
 Add-on transfer overrides are `[[addons]] downloads` and `preparations`; omitted means
 inherit, a number means a custom limit, and 0 removes that cap. The dashboard displays

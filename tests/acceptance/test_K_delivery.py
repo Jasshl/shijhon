@@ -95,9 +95,12 @@ def test_whole_file_ranges_and_head(
 
 def test_cross_origin_redirect(world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]) -> None:
     a, _ = a_and_b
-    song, _, audio = world.placeholder_track("k-redirect", [a], redirect=True)
+    song, _, audio = world.placeholder_track(
+        "k-redirect", [a], redirect=True, stream_extra={"headers": {"X-Key": "invented-key"}}
+    )
     assert stream(world, song, {"range": "bytes=5-20"}).content == audio.read_bytes()[5:21]
-    assert a.requests("redirect")
+    assert a.requests("redirect")[0]["x_key"] == "invented-key"
+    assert all(r["x_key"] is None for r in a.requests("audio"))
     assert {r["origin"] for r in a.requests("audio")} == {"cdn"}
 
 

@@ -177,9 +177,8 @@ class NativeVisibility:
             await self.prepare_foreign(binding, principal, token)
             mode = None
             warm_key = binding.key("native-prewarm")
-            if (
-                time.monotonic() - self.warmed.get(warm_key, -10000)
-                > self.index.budgets.fresh_seconds
+            if time.monotonic() - self.warmed.get(warm_key, -10000) > max(
+                300.0, self.index.budgets.fresh_seconds * 5
             ):
                 self.warmed[warm_key] = time.monotonic()
                 if len(self.warmed) > 128:

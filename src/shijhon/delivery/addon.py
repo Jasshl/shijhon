@@ -28,6 +28,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -56,7 +57,7 @@ TRANSPORTS = {"none": "direct", "hls": "hls", "dash": "dash"}
 CATALOG = ("search", "catalog")
 MAX_ITEM_ID = 190  # ``catalog.model.ITEM_ID``: the longest ID an item can have
 SEARCHED = 100  # a search's tracks compared at most, in its order, when finding a recording
-# The longest title or artist of a search's track compared (as the catalog of an add-on
+# The longest title or artist of a resolved or searched track (as the catalog of an add-on
 # reads them): a longer one is no track's, and never goes through the patterns.
 MAX_WORDS = 500
 SERVICE_TAG = 8  # characters of an item ID that say which service it is of
@@ -227,6 +228,31 @@ def allows_downloads(value: Any) -> bool:
 
 
 @dataclass(frozen=True)
+class FullCatalog:
+    """The optional catalog declaration; identity text is validated before it is shown."""
+
+    key: str = ""
+    region: str = ""
+    client_artwork: bool = False
+
+    @property
+    def identity(self) -> str:
+        return f"{self.key}.{self.region}" if self.key and self.region else self.key
+
+    @classmethod
+    def parse(cls, value: Any) -> FullCatalog:
+        value = value if isinstance(value, Mapping) else {}
+        key, region = value.get("key", ""), value.get("region", "")
+        if not isinstance(key, str) or not re.fullmatch(r"[a-z][a-z0-9]{0,31}", key):
+            key = ""
+        if key.startswith("addon") or key in ("demo", "none"):
+            key = ""
+        if not isinstance(region, str) or not re.fullmatch(r"[a-z0-9]{0,16}", region):
+            key, region = "", ""
+        return cls(key, region, value.get("clientArtwork") is True)
+
+
+@dataclass(frozen=True)
 class Manifest:
     id: str
     name: str
@@ -235,6 +261,7 @@ class Manifest:
     # False: it asks not to be used for downloads (``allowDownloads``): Shijhon's
     # download-first work and its requests to prepare a song go to other add-ons.
     downloads: bool = True
+    full_catalog: FullCatalog | None = None
 
     @classmethod
     def parse(cls, data: Mapping[str, Any]) -> Manifest:
@@ -260,6 +287,9 @@ class Manifest:
             resources=frozenset(resources),
             defaults=defaults,
             downloads=allows_downloads(data.get("allowDownloads")),
+            full_catalog=FullCatalog.parse(data.get("fullCatalog"))
+            if "fullcatalog" in resources
+            else None,
         )
 
 
@@ -393,11 +423,11 @@ class Found:
     @classmethod
     def resolved(cls, item: Mapping[str, Any]) -> Found:
         """A ``/resolve`` item: ``id``, ``title``, ``artist``, ``durationMs`` (or
-        ``duration`` in seconds), ``isrc``."""
+        ``duration`` in seconds), ``isrc``. Title and artist are bounded as in a search."""
         return cls(
             text(item.get("id")),
-            text(item.get("title")),
-            text(item.get("artist")),
+            _bounded(text(item.get("title"))),
+            _bounded(text(item.get("artist"))),
             _length(item),
             text(item.get("isrc")),
         )
@@ -547,6 +577,8 @@ class Addon:
         self.pace = pace
         self.paces = paces
         self._manifest: Manifest | None = None
+        self.manifest_read_at = 0.0
+        self._refresh_lock = anyio.Lock()
         self._reading: _Reading | None = None  # the manifest's fetch under way
 
     def _url(self, resource: str, params: Mapping[str, str] | None = None) -> httpx.URL:
@@ -679,7 +711,9 @@ class Addon:
         if not isinstance(data, dict):
             raise AddonError("broken", "manifest is not an object")
         try:
-            return Manifest.parse(data)
+            manifest = Manifest.parse(data)
+            self.manifest_read_at = time.monotonic()
+            return manifest
         except Exception as exc:
             raise AddonError("broken", f"unreadable manifest ({type(exc).__name__})") from None
 
@@ -848,16 +882,35 @@ class Addon:
         self._manifest = await self._read_manifest()
         return self._manifest
 
+    async def refresh_manifest(self, age: float, *, force: bool = False) -> Manifest:
+        """Coalesce freshness checks; a failed read preserves the known manifest.
+
+        Failed attempts wait ``age`` too, so an outage adds no per-request probe.
+        """
+        requested = time.monotonic()
+        async with self._refresh_lock:
+            if self._manifest is None:
+                return await self.manifest()
+            if self.manifest_read_at < requested and (
+                force or requested - self.manifest_read_at >= age
+            ):
+                self.manifest_read_at = time.monotonic()
+                try:
+                    await self.reread()
+                finally:
+                    self.manifest_read_at = time.monotonic()
+            return self._manifest
+
     async def has_catalog(self) -> bool:
         """Whether the add-on declares a catalog: its search and its albums and
         artists (the resources ``search`` and ``catalog``)."""
         resources = (await self.manifest()).resources
         return all(resource in resources for resource in CATALOG)
 
-    async def search(self, term: str) -> Any:
+    async def search(self, term: str, limit: int | None = None) -> Any:
         """The add-on's answer to ``GET /search?q=`` as it sent it (``catalog.addon`` reads
         it): tracks, albums and artists for ``term``."""
-        return await self._json("search", {"q": term})
+        return await self._json("search", {"q": term, **({"limit": str(limit)} if limit else {})})
 
     async def album(self, album_id: str) -> Any:
         """Its answer to ``GET /album/{id}``: the album with its tracks."""
@@ -866,6 +919,17 @@ class Addon:
     async def artist(self, artist_id: str) -> Any:
         """Its answer to ``GET /artist/{id}``: the artist with albums and top tracks."""
         return await self._json("artist/" + _segment(artist_id))
+
+    async def catalog_track(self, track_id: str) -> Any:
+        return await self._json("catalog/track/" + _segment(track_id))
+
+    async def catalog_isrc(self, isrc: str) -> Any:
+        return await self._json("catalog/isrc/" + _segment(isrc))
+
+    async def catalog_releases(self, artist_id: str, cursor: str) -> Any:
+        return await self._json(
+            "catalog/artist/" + _segment(artist_id) + "/releases", {"cursor": cursor}
+        )
 
     async def stream(self, track_id: str) -> StreamInfo:
         manifest = await self.manifest()

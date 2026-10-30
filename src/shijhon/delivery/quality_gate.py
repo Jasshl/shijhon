@@ -262,11 +262,9 @@ class LibrarySong:
 def native_quality(song: Mapping[str, Any]) -> Quality:
     """A native song's file quality (Navidrome's own JSON: ``sampleRate``, ``codec``)."""
     fmt = str(song.get("suffix") or "").lower()
-    codec = str(song.get("codec") or "").lower()
-    depth = _number(song.get("bitDepth"))
-    lossless = fmt in LOSSLESS_FORMATS or codec in LOSSLESS_CODECS or depth > 0
+    quality = Quality.of_song(song)
     rate = _number(song.get("sampleRate") or song.get("samplingRate"))
-    return Quality(fmt, lossless, _number(song.get("bitRate")), rate, depth)
+    return Quality(fmt, quality.lossless, quality.kbps, rate, quality.bit_depth)
 
 
 def addon_quality(kind: str | None, kbps: int | None) -> Quality:

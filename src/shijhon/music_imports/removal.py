@@ -42,6 +42,7 @@ class ImportRemovals:
         self.imports, self.store = imports, imports.store
         self.usage, self.gate, self.administrator = usage, gate, administrator
         self.native_absent = native_absent
+        imports.audio_authorize = self._audio_authorize
         self.wake = anyio.Event()
 
     async def _job(self, actor: str, job_id: str) -> dict[str, Any]:
@@ -57,9 +58,25 @@ class ImportRemovals:
             or found["config_id"] != self.imports.config_id
         ):
             raise ImportError(
-                "configuration_changed", "The retained import root or limits changed."
+                "configuration_changed", "The retained import library or folders changed."
             )
         return dict(found)
+
+    async def _audio_authorize(self, owner: str, job_id: str) -> None:
+        try:
+            await self._job(owner, job_id)
+            return
+        except ImportError as exc:
+            if exc.code != "access":
+                raise
+        restored = await self.store.fetchone(
+            "SELECT actor_id FROM music_import_removals WHERE job_id=? AND state='restored'",
+            [job_id],
+        )
+        actor = restored["actor_id"] if restored and restored["actor_id"] else owner
+        # A current administrator may supply access when the importer lost it.
+        # Credit still belongs to the importer; either account may authorize later audio.
+        await self._job(actor, job_id)
 
     async def listing(self, actor: str, *, offset: int = 0) -> list[dict[str, Any]]:
         await self.imports._actor(actor)

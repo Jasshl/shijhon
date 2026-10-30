@@ -41,7 +41,7 @@
     <p class="music-import-selection" data-selection-summary role="status" aria-live="polite">No files selected.</p>
     <div class="music-import-buttons"><button class="btn-primary" data-upload disabled>Upload for review</button></div>
     <p class="music-import-muted">Keep this tab open while files upload.</p>
-    <details class="music-import-more"><summary>If the upload stops</summary><p>If this tab closes, reopen this batch under Your imports and choose Resume upload. Select the same files or folder, then Continue upload. Completed files will not upload again; an unfinished file starts again. Changed source files need a new import. Discard upload stops the batch permanently; start a new import afterward.</p></details>
+    <details class="music-import-more"><summary>If the upload stops</summary><p>If this tab closes, reopen this batch under Your imports and choose Resume upload. Select the same files or folder, then Continue upload. Completed files will not upload again; an unfinished file starts again. Changed source files need a new import. Discard upload stops the batch permanently, deletes uploaded files that were not added and frees their space after cleanup. Start a new import afterward.</p></details>
   </section>
   <section class="music-import-panel" data-job-panel{% if not job %} hidden{% endif %} aria-labelledby="import-stage">
     <div class="music-import-stage-heading"><h2 id="import-stage" tabindex="-1" data-stage>{{ 'Import progress' if job else '' }}</h2><span data-stage-count></span></div>

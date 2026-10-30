@@ -28,11 +28,24 @@ class CatalogError(Exception):
         self.reason = reason
 
 
+class UnrecognizedArtwork(CatalogError):
+    """The current catalog did not name this address; a cached template needs refreshing."""
+
+    def __init__(self) -> None:
+        super().__init__("invalid", "not an artwork address of this catalog")
+
+
 @dataclass(frozen=True)
 class SearchResults:
     artists: tuple[CatalogArtist, ...] = ()
     albums: tuple[CatalogRelease, ...] = ()  # without tracks
     songs: tuple[CatalogTrack, ...] = ()
+
+
+class PartialReleases(tuple[CatalogRelease, ...]):
+    """Releases read before a paging failure: retry soon, never save as a complete list."""
+
+    retry_after = 60.0
 
 
 class Catalog(Protocol):
@@ -117,7 +130,9 @@ def addresses_for_clients(catalog: Catalog) -> bool:
     (``artistImageUrl``, the image fields of the album and artist info answers). A
     catalog that says ``client_artwork = False`` (optional; True without it) names
     addresses that only Shijhon's own artwork path may fetch (``Catalog.artwork``: its
-    checks, its limits): its images reach clients by their cover art IDs alone."""
+    checks, its limits): its images reach clients by their cover art IDs alone. Use
+    ``client_artwork_template`` for a particular address: it also applies any per-address
+    policy the catalog provides."""
     return bool(getattr(catalog, "client_artwork", True))
 
 
@@ -125,3 +140,12 @@ def scope(catalog: Catalog) -> str:
     """What saved matches, plans and lists belong to: the catalog and its region
     ("<key>.<region>"; the key alone for a catalog without regions)."""
     return f"{catalog.key}.{catalog.region}" if catalog.region else catalog.key
+
+
+async def client_artwork_template(catalog: Catalog, template: str | None) -> str | None:
+    """An optional per-address policy, checked when an image address is given to apps."""
+    policy = getattr(catalog, "client_artwork_template", None)
+    if policy is not None:
+        result: str | None = await policy(template)
+        return result
+    return template if addresses_for_clients(catalog) else None

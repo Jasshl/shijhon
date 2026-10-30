@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+import httpx
 
 from shijhon.catalog.base import CatalogError
 from shijhon.navidrome.client import NavidromeError, NavidromeService
@@ -109,7 +110,7 @@ async def check_catalog(catalog: Any) -> CatalogCheck:
         error = "timeout: no answer within 10 s"
     except CatalogError as exc:
         error = f"{exc.kind}: {exc.reason}"
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError, KeyError, TypeError) as exc:
         error = type(exc).__name__
     return CatalogCheck(time.time(), error is None, (time.perf_counter() - started) * 1000, error)
 

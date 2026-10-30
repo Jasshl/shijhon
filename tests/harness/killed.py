@@ -64,6 +64,15 @@ async def run(spec: dict[str, Any]) -> None:
                 os.kill(os.getpid(), signal.SIGKILL)
 
         os.replace = replace  # type: ignore[assignment]
+    if spec["kill_at"] == "placeholder linked":
+        link = os.link
+
+        def linked(src: Any, dst: Any, **kwargs: Any) -> None:
+            link(src, dst, **kwargs)
+            if Path(src).parent == engine.layout.staging:
+                os.kill(os.getpid(), signal.SIGKILL)
+
+        os.link = linked  # type: ignore[assignment]
     action = spec["action"]
     if action in ("materialize", "retag"):
         key = spec["key"]

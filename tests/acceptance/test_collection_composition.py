@@ -251,7 +251,7 @@ def test_partial_album_opens_complete_before_and_after_fill_without_enabling_tra
                 "SELECT count(*) n FROM collection_membership"
             )
             assert row is not None and row["n"] == 0
-            assert await collection.mode(owner) == "all"
+            assert (await collection.profile(owner))["selection_id"] == "all"
 
         world.server.call(unchanged_choices)
 

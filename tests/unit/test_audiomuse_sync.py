@@ -676,3 +676,47 @@ async def test_the_ids_of_a_request_are_checked_not_trusted(setup: Setup) -> Non
     assert not setup.fake.requests("similar_tracks")
     many = [f"nd-{n}" for n in range(1, 11)] * 10
     assert len(await setup.sound.facts(many)) == 10
+
+
+async def mark_absent(store: Store, song_id: str) -> None:
+    await store.execute(
+        "INSERT INTO collection_tracks (library_id, track_key, song_id, release_key,"
+        " album_id, artist_id, title, album, artist, search_text, original, present,"
+        " generation, indexed_at) VALUES ('1', ?, ?, 'r', 'al', 'ar', 'T', 'A', 'B', '',"
+        " 1, 0, 'g', 0)",
+        [f"k-{song_id}", song_id],
+    )
+
+
+@pytest.mark.anyio
+async def test_known_absent_songs_are_not_fetched_or_reinserted(setup: Setup) -> None:
+    await mark_absent(setup.store, "nd-5")
+    for _ in range(2):
+        setup.fake.clear()
+        await setup.sync.sync()
+        assert "nd-5" not in await stored(setup.store)
+        asked = {
+            i for r in sync_requests(setup.fake) for i in r["params"].get("ids", "").split(",")
+        }
+        assert "nd-5" not in asked
+    # A song that reappears in the index becomes eligible again.
+    await setup.store.execute("UPDATE collection_tracks SET present = 1 WHERE song_id = 'nd-5'")
+    await setup.sync.sync()
+    assert "nd-5" in await stored(setup.store)
+
+
+@pytest.mark.anyio
+async def test_songs_lost_during_fetch_are_removed_in_the_same_sync(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    table = setup.sync.table
+    put = table.put
+
+    async def save_then_lose(rows: Any, at: float) -> None:
+        await put(rows, at)
+        await mark_absent(setup.store, "nd-5")
+
+    monkeypatch.setattr(table, "put", save_then_lose)
+    report = await setup.sync.sync()
+    assert report.fetched == 10 and report.removed == 1
+    assert "nd-5" not in await stored(setup.store)

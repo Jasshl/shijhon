@@ -8,7 +8,7 @@ have it well enough; what is at or above it is kept as it is, lossless or not.
 
 A quality that is not known (a raw AAC file reports no bitrate) meets every minimum:
 nothing is turned away for missing information. Lossless audio is told by its codec or
-format, or by a bit depth, which compressed formats do not have.
+format, or by a bit depth when its codec is not known to be lossy.
 """
 
 from __future__ import annotations
@@ -37,6 +37,22 @@ LOSSLESS_FORMATS = frozenset(
         "tak",
     }
 )
+LOSSY_CODECS = frozenset(
+    {
+        "aac",
+        "mp3",
+        "mp2",
+        "opus",
+        "vorbis",
+        "wma",
+        "wmav1",
+        "wmav2",
+        "wmapro",
+        "wmavoice",
+        "ac3",
+        "eac3",
+    }
+)
 LOSSLESS_CODECS = frozenset({"flac", "alac", "pcm", "wavpack", "ape", "tta", "shorten", "dsd"})
 CHOICES_KBPS = (0, 128, 160, 192, 256, 320)  # the minimums a person can choose (0: any)
 
@@ -47,7 +63,7 @@ class Quality:
     lossless: bool = False
     kbps: int = 0  # average bitrate; 0: not known
     sample_rate: int = 0  # Hz; 0: not known
-    bit_depth: int = 0  # 0: not known or compressed
+    bit_depth: int = 0  # 0: not known
 
     @classmethod
     def of_song(cls, song: Mapping[str, Any]) -> Quality:
@@ -56,7 +72,9 @@ class Quality:
         fmt = str(song.get("suffix") or "").lower()
         codec = str(song.get("codec") or "").lower()
         depth = _number(song.get("bitDepth"))
-        lossless = fmt in LOSSLESS_FORMATS or codec in LOSSLESS_CODECS or depth > 0
+        lossless = codec not in LOSSY_CODECS and (
+            fmt in LOSSLESS_FORMATS or codec in LOSSLESS_CODECS or depth > 0
+        )
         return cls(
             fmt, lossless, _number(song.get("bitRate")), _number(song.get("samplingRate")), depth
         )

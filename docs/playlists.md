@@ -70,11 +70,13 @@ A request with explicit tracks, and songs without facts, show only what they hav
 
 Requests are one-off by default. Their instructions and run state remain in private
 state for status and recovery, but no schedule is enabled. **Save these instructions for
-reuse** also allows an explicit manual refresh from the request page. Daily or weekly refreshes
-require that checkbox, an explicit cadence and usable saved AI; they start after verified
-publication. Pause stops future refreshes. Retry reuses a frozen selection and reconciles
-an uncertain native write rather than choosing different music or blindly creating a
-second playlist. A selection interrupted before it was frozen can be regenerated.
+reuse** also allows an explicit manual refresh from the request page. Daily or weekly
+refreshes require that checkbox, an explicit cadence and usable saved AI; they start
+after verified publication. Pause stops future refreshes. You can pause an agent-created
+playlist or discard its preview in the dashboard even after revoking the agent
+connection. Retry reuses a frozen selection and reconciles an uncertain native write
+rather than choosing different music or blindly creating a second playlist. A selection
+interrupted before it was frozen can be regenerated.
 
 ### Reference playlists and songs
 
@@ -107,11 +109,11 @@ them. References need a description; explicit tracks cannot use them.
 
 Agents need the library permission for references. A request with chosen references is
 refused without it. For a request an agent created, playlist names in the instructions
-are looked up only while the agent's connection has the library permission, checked
-again at every generation and scheduled refresh: without it, no playlist is listed or
-read and the result shows no reference. If the permission is removed while a playlist
-found by name is in use, that generation stops. Your own requests from the dashboard
-always look up names.
+are looked up only if the submitting token included the library permission and the
+agent's connection still grants it, checked again at every generation and scheduled
+refresh: without it, no playlist is listed or read and the result shows no reference. If
+the permission is removed while a playlist found by name is in use, that generation
+stops. Your own requests from the dashboard always look up names.
 
 ### Facts as hints
 
@@ -320,7 +322,7 @@ The shared administrator-configured service is the default for new accounts. In
 default model, or select an additional administrator-approved model. This preference
 applies across that account's devices and affects described playlists, discovery
 curation and future refreshes. History settings and playlist instructions remain
-personal. Independent personal provider connections are planned for later.
+personal.
 
 Administrators configure **Shared AI service** separately: backend, API URL/key,
 default model and up to 50 additional approved model names (one per line). The default
@@ -409,9 +411,9 @@ secrets protected by the state's filesystem permissions; they are not encrypted 
 database. Secret fields are write-only in the dashboard. Blank secret inputs retain their
 saved value for the same key source; changing the API URL clears the old API key unless
 you enter a new one. Choosing a different AI connection removes the API URL and key.
-Disconnecting forgets that account's connections, history, definitions and
-runs, while its native playlists and library files remain. It also clears the saved
-Downloads authorization, which pauses unfinished preparation until you reconnect on
+**Forget my playlist settings and history** forgets that account's connections, history,
+definitions and runs, while its native playlists and library files remain. It also clears
+the saved Downloads authorization, which pauses unfinished preparation until you reconnect on
 **Downloads** and choose **Resume**.
 
 Ordinary Navidrome users with access to Shijhon's configured library can manage their

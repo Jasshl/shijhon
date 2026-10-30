@@ -2,7 +2,7 @@
 
 Shijhon exposes music tools over Streamable HTTP MCP. Add your installation's
 `https://music.example.invalid/shijhon/mcp` URL to an MCP client, sign in with your
-Navidrome account and approve permissions. No manually created agent key or
+Navidrome account and approve permissions. No manually created credential or
 Python client installation is needed. The optional [playlist skill](../skills/shijhon-playlists/SKILL.md)
 adds curation and recovery guidance; the tools describe their own inputs.
 The optional [audio preparation skill](../skills/shijhon-audio-preparation/SKILL.md)
@@ -74,8 +74,8 @@ call a model to test the connection. Configured AI can still fail at runtime.
   optional, approximate information: an agent's own knowledge of the music comes first,
   and songs without facts are never a reason to drop a song.
 - `get_listening_history` returns bounded artist/title listen counts from the
-  connected Last.fm history source. It needs that source configured and history
-  permission; it does not substitute library membership for listening evidence.
+  connected Last.fm history source, restricted to the configured `history_days` window.
+  It needs that source configured and history permission; it does not substitute library membership for listening evidence.
 - `create_playlist` accepts either a description using saved server AI, or an
   ordered artist/title list curated by the external agent without server AI.
   Track versions and all user constraints are preserved. Native/catalog IDs and
@@ -84,8 +84,10 @@ call a model to test the connection. Configured AI can still fail at runtime.
   them with `get_native_playlists` or `search_library` and passes them as
   `reference_playlists` or `reference_songs` instead of pasting names. Choosing
   references needs the library permission, and so does finding a playlist the
-  description only names: without the permission, checked again at every generation
-  and refresh, Shijhon does not look up names. Shijhon leaves the chosen references'
+  description only names. The submitting token must include library permission;
+  Shijhon saves that ceiling and rechecks the current connection at every generation
+  and refresh. Without both permissions, Shijhon does not look up names. Shijhon leaves
+  the chosen references'
   songs out of the result unless `exclude_reference` is false, and only avoids
   repeating the songs of a playlist found by name. The AI sees reference songs with
   their facts, and the request's status shows the references, the goal, each song's
@@ -103,7 +105,9 @@ call a model to test the connection. Configured AI can still fail at runtime.
   audio preparation. It needs separate optional `downloads` permission and an
   explicit user request. A native/library connection is sufficient; AI and Last.fm
   are unnecessary. It reuses the existing preparation worker and verified download
-  path, without changing playlist membership or saving catalog albums.
+  path. Playlist membership stays as it is; its catalog songs bring their albums
+  into the person's Shijhon library and All through recorded preparation activity,
+  separately from explicitly saving an album on the Collection page.
 - `get_audio_preparation` and `list_audio_preparations` read bounded progress for
   this OAuth connection with `status` permission. `manage_audio_preparation`
   retries failed songs, resumes paused songs or cancels new work with `downloads`
@@ -143,27 +147,39 @@ Keep the same idempotency key and exact input after a lost response. Identical
 replay recovers the original request even if AI/history setup was subsequently
 removed. A changed payload under the same key is a conflict. Tokens rotate while
 the connection identity stays stable, preserving status, retry and recurring
-work. Refresh-token reuse revokes that connection, including its replacement
-credentials.
+work. For 20 seconds after refresh-token rotation, retrying the same token with
+the same scopes returns the original replacement pair. This covers overlapping
+refreshes and immediate retries after a lost response without extending the
+window on each retry. Replacement pairs stay only in process memory and are
+discarded after the window; the database retains only token hashes. Reuse after
+20 seconds, or after a restart has lost the pair, revokes that connection,
+including its replacement credentials. During the window, anyone holding the
+spent refresh token can recover its replacement; current client, connection and
+permission checks still apply.
 
-Authorizing additional permissions for the same OAuth client/account preserves
-the connection and its requests. Removing a permission takes effect on outstanding
-credentials too. Client registration describes possible scopes; only browser
-consent grants access to the user's data or actions.
-Status remains readable with status permission after creation permission is
-removed. Pausing needs creation/management permission but no history/library
-read permission; starting another generation needs its saved context permissions.
-Preparation status similarly remains readable after `downloads` is removed.
-Removing `downloads` or revoking the connection pauses unfinished preparation at
-the existing worker preflights, including after acquisition waits and before
-placement. Independent app downloads can continue through shared acquisitions.
-After restoring permission on the same connection, explicitly resume its paused
-batch. Restart also pauses unfinished preparation for explicit resume. If the
-Downloads page was explicitly disconnected, reconnect there first.
+After sign-in, the consent form selects the connection's existing permissions plus the
+newly requested ones. Clear a permission to remove it deliberately. Authorizing
+additional permissions for the same OAuth client/account preserves the connection and
+its requests. Removing a permission takes effect on outstanding credentials too. Client
+registration describes possible scopes; only browser consent grants access to the user's
+data or actions. Status remains readable with status permission after creation
+permission is removed. Pausing needs creation/management permission but no
+history/library read permission; starting another generation needs its saved context
+permissions. Preparation status similarly remains readable after `downloads` is removed.
+Removing `downloads` or revoking the connection pauses unfinished preparation at the
+existing worker preflights, including after acquisition waits and before placement.
+Independent app downloads can continue through shared acquisitions. After restoring
+permission on the same connection, explicitly resume its paused batch. Restart also
+pauses unfinished preparation for explicit resume. If the Downloads page was explicitly
+disconnected, reconnect there first.
 
 Revoke a connection under **Describe a playlist → Agent access**, or through the
 OAuth revocation endpoint. Revocation stops future/unfinished work at its next
 authorization check. Published playlists and prior library additions remain.
+The owner can still pause these playlists and discard previews in the dashboard
+after revocation. Temporary Navidrome failures return HTTP `503` with
+`temporarily_unavailable` during token verification or exchange; retain the refresh
+token and retry later. Revoked credentials still return `invalid_grant`.
 The JSON request API also requires OAuth access tokens; it never accepts native
 passwords or dashboard cookies.
 

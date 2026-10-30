@@ -171,7 +171,7 @@ def test_account_disconnect_removes_agent_audio_and_revokes_credentials(
         assert (await prep.repo.owner(owner))["authorization"]
 
     w.server.call(before_disconnect)
-    assert browser.post("playlists/disconnect", {"csrf": browser.csrf()}).status_code == 303
+    assert browser.post("playlists/forget", {"csrf": browser.csrf()}).status_code == 303
 
     async def verify_removed() -> None:
         store = prep.repo.store

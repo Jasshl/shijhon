@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -40,8 +41,8 @@ def definition(form: dict[str, str]) -> Definition:
             "cadence": form.get("cadence", "weekly"),
             "brief": form.get("brief", "") if form.get("ai") == "true" else "",
             "ai": form.get("ai") == "true",
-            # Only forms showing the new publication controls can use the direct
-            # default. Pre-upgrade create/rule forms explicitly promised a preview.
+            # Direct publication needs the controls shown by this form. A page
+            # promising a preview must keep that intent when submitted later.
             "review_before_publishing": form.get("publication_mode") != "direct"
             or form.get("review_before_publishing") == "true",
         }
@@ -63,7 +64,7 @@ class Pages:
             Route("/playlists/ai-preferences", page(self.preferences), methods=["POST"]),
             Route("/playlists/host-ai", page(self.host_ai), methods=["POST"]),
             Route("/playlists/private-ai", page(self.private_ai), methods=["POST"]),
-            Route("/playlists/disconnect", page(self.disconnect), methods=["POST"]),
+            Route("/playlists/forget", page(self.forget), methods=["POST"]),
             *RequestPages(self.dashboard).routes(),
             *ImportPages(self.dashboard).routes(),
             Route("/playlists/{mix}", page(self.detail), methods=["GET", "POST"]),
@@ -81,7 +82,8 @@ class Pages:
         connection = await self.service.connection(session.user_id)
         if not session.user_id or connection.user_id != session.user_id:
             raise PlaylistError(
-                "This connection belongs to a previous account. Disconnect it before reconnecting."
+                "These playlist settings belong to a previous account."
+                " Forget them before reconnecting."
             )
         return connection
 
@@ -92,13 +94,15 @@ class Pages:
         error: str = "",
         mix: dict[str, Any] | None = None,
         form: dict[str, str] | None = None,
+        rules_form: dict[str, str] | None = None,
     ) -> Response:
         service = self.service
         connection = await service.repo.connection(session.user_id)
         if connection and connection.user_id != session.user_id:
             connection = None
             error = (
-                error or "A previous account's connection must be disconnected before reconnecting."
+                error
+                or "A previous account's playlist settings must be forgotten before reconnecting."
             )
         mixes = await service.repo.mixes(connection.user_id) if connection else []
         shown = []
@@ -132,6 +136,19 @@ class Pages:
             # Even a formerly administrative profile's endpoint/model is host state.
             fields.update(backend="none", model="", endpoint="")
         choices = await service.ai_choices(session.user_id)
+        spec = Definition.model_validate_json(mix["definition"]) if mix else Definition()
+        rules_values = spec.model_dump()
+        rules_enabled = bool(mix and mix["enabled"])
+        if rules_form is not None:
+            for key in rules_values:
+                if key in rules_form:
+                    rules_values[key] = rules_form[key]
+            rules_values["ai"] = rules_form.get("ai") == "true"
+            rules_values["review_before_publishing"] = (
+                rules_form.get("publication_mode") != "direct"
+                or rules_form.get("review_before_publishing") == "true"
+            )
+            rules_enabled = rules_form.get("enable") == "true"
         return await self.dashboard._render(
             "playlists.html",
             session=session,
@@ -165,7 +182,10 @@ class Pages:
             mixes=shown,
             mix=mix,
             learning=learning,
-            definition=Definition.model_validate_json(mix["definition"]) if mix else Definition(),
+            definition=spec,
+            rules_definition=rules_values,
+            rules_enabled=rules_enabled,
+            request_key=(rules_form or {}).get("request_key") or secrets.token_hex(16),
             mix_version=version(mix["definition"]) if mix else "",
             runs=runs,
             pending_refresh=any(
@@ -178,7 +198,7 @@ class Pages:
         )
 
     async def index(self, request: Request, session: Session) -> Response:
-        if request.method == "GET":
+        if request.method != "POST":
             return await self.render(session)
         try:
             service = self.service
@@ -186,9 +206,11 @@ class Pages:
             connection.require_history()
             spec = definition(request.state.form)
             async with service.changes:
-                ident = await service.repo.create(connection.user_id, spec)
-                await service.repo.enqueue(
-                    ident, enable_after=request.state.form.get("enable") == "true"
+                ident = await service.repo.create_discovery(
+                    connection.user_id,
+                    request.state.form.get("request_key", ""),
+                    spec,
+                    enable_after=request.state.form.get("enable") == "true",
                 )
                 service.notify()
             return self.dashboard._see(f"/playlists/{ident}")
@@ -198,7 +220,7 @@ class Pages:
                 if isinstance(exc, PlaylistError)
                 else "Check the mix rules. A brief requires AI curation."
             )
-            return await self.render(session, error=error)
+            return await self.render(session, error=error, rules_form=request.state.form)
 
     async def connect(self, request: Request, session: Session) -> Response:
         form = request.state.form
@@ -389,7 +411,7 @@ class Pages:
             message = str(exc) if isinstance(exc, PlaylistError) else "Choose an approved model."
             return await self.render(session, error=message)
 
-    async def disconnect(self, request: Request, session: Session) -> Response:
+    async def forget(self, request: Request, session: Session) -> Response:
         service = self.service
         async with service.changes:
             await service.repo.disconnect(session.user_id)
@@ -401,10 +423,10 @@ class Pages:
             service = self.service
             connection = await service.repo.connection(session.user_id)
             if not connection:
-                raise PlaylistError("Connect your playlist account first.")
+                raise PlaylistError("Connect your Navidrome account first.")
             if connection.user_id != session.user_id:
                 raise PlaylistError("This mix is unavailable for this account.")
-            if request.method == "GET":
+            if request.method != "POST":
                 mix = await service.repo.mix(request.path_params["mix"], connection.user_id)
                 if Definition.model_validate_json(mix["definition"]).mode != "discovery":
                     return self.dashboard._see(f"/playlists/describe/{mix['id']}")
@@ -444,7 +466,12 @@ class Pages:
                 if isinstance(exc, PlaylistError)
                 else "Check the mix rules. A brief requires AI curation."
             )
-            return await self.render(session, error=error, mix=mix)
+            return await self.render(
+                session,
+                error=error,
+                mix=mix,
+                rules_form=request.state.form if request.method == "POST" else None,
+            )
 
     async def action(self, request: Request, session: Session) -> Response:
         service = self.service
@@ -458,7 +485,6 @@ class Pages:
                 form = request.state.form
                 action = form.get("action")
                 if action in ("generate", "preview"):
-                    # Forms opened before upgrading still explicitly request a preview.
                     await service.repo.enqueue(
                         mix["id"], review=True if action == "preview" else None
                     )

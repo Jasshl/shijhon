@@ -461,3 +461,51 @@ def test_track_and_disc_totals() -> None:
     # Two discs without a disc total: it cannot tell whether there is a third.
     assert not complete_by_tags(album((1, 1, 1, None), (2, 1, 1, None)))
     assert not complete_by_tags(album((1, 1, 1, 3), (2, 1, 1, 3)))  # disc 3 missing
+
+
+@pytest.mark.parametrize("shared_isrc", [False, True])
+@pytest.mark.parametrize("evidence", ["song", "track", "album", "album_title", "release_title"])
+@pytest.mark.anyio
+async def test_contradictory_editions_never_link_owned_recordings(
+    shared_isrc: bool, evidence: str
+) -> None:
+    album = owned([1, 3])
+    candidate = release("a", explicit=True)
+    if shared_isrc:
+        album = with_isrcs(album, "a")
+    if evidence == "song":
+        album = dataclasses.replace(
+            album,
+            songs=tuple(dataclasses.replace(s, title=s.title + " (Clean)") for s in album.songs),
+        )
+    elif evidence == "track":
+        album = dataclasses.replace(album, clean=False)
+        candidate = dataclasses.replace(
+            candidate,
+            tracks=tuple(dataclasses.replace(t, clean=True) for t in candidate.tracks),
+        )
+    elif evidence == "album":
+        album = dataclasses.replace(album, clean=True)
+    elif evidence == "album_title":
+        album = dataclasses.replace(album, title=album.title + " (Clean)")
+    else:
+        album = dataclasses.replace(album, clean=True)
+        candidate = dataclasses.replace(
+            candidate, explicit=False, title=candidate.title + " (Explicit)"
+        )
+    assert (await match(album, candidate)).outcome is Outcome.NONE
+
+
+@pytest.mark.anyio
+async def test_agreeing_clean_evidence_and_unknown_versions_still_match() -> None:
+    album = dataclasses.replace(owned([1, 3]), clean=True)
+    assert (await match(album, release("a", clean=True))).outcome is Outcome.FILL
+    assert (await match(album, release("a"))).outcome is Outcome.FILL
+
+
+@pytest.mark.anyio
+async def test_symbol_only_track_titles_do_not_match_each_other() -> None:
+    album = owned([1])
+    album = dataclasses.replace(album, songs=(dataclasses.replace(album.songs[0], title="?"),))
+    assert (await match(album, release("a", names=["...", *TITLES[1:]]))).outcome is Outcome.NONE
+    assert (await match(album, release("a", names=["?", *TITLES[1:]]))).outcome is Outcome.FILL

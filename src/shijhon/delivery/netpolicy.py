@@ -98,21 +98,36 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
         socket_options: Iterable[Any] | None = None,
     ) -> httpcore.AsyncNetworkStream:
         try:
-            addresses = await self.resolver(host, port)
-        except OSError as exc:
-            raise httpcore.ConnectError(f"cannot resolve host ({exc.__class__.__name__})") from exc
-        permitted = [a for a in addresses if allowed(a, self.reach)]
-        if not permitted:
-            raise PolicyDenied("destination address not allowed by the network policy")
-        last: Exception | None = None
-        for address in permitted:
-            try:
-                return await self.inner.connect_tcp(
-                    address, port, timeout, local_address, socket_options
-                )
-            except (httpcore.ConnectError, httpcore.ConnectTimeout, OSError) as exc:
-                last = exc
-        raise httpcore.ConnectError("could not connect") from last
+            with anyio.fail_after(timeout) as scope:
+                try:
+                    addresses = await self.resolver(host, port)
+                except OSError as exc:
+                    raise httpcore.ConnectError(
+                        f"cannot resolve host ({type(exc).__name__})"
+                    ) from exc
+                permitted = [a for a in addresses if allowed(a, self.reach)]
+                if not permitted:
+                    raise PolicyDenied("destination address not allowed by the network policy")
+                last: Exception | None = None
+                for index, address in enumerate(permitted):
+                    remaining = (
+                        None if timeout is None else max(0.0, scope.deadline - anyio.current_time())
+                    )
+                    attempt = None if remaining is None else remaining / (len(permitted) - index)
+                    try:
+                        with anyio.fail_after(attempt):
+                            return await self.inner.connect_tcp(
+                                address, port, attempt, local_address, socket_options
+                            )
+                    except TimeoutError:
+                        last = httpcore.ConnectTimeout("address did not connect in time")
+                    except (httpcore.ConnectError, httpcore.ConnectTimeout, OSError) as exc:
+                        last = exc
+                if isinstance(last, httpcore.ConnectTimeout):
+                    raise httpcore.ConnectTimeout("could not connect in time") from last
+                raise httpcore.ConnectError("could not connect") from last
+        except TimeoutError:
+            raise httpcore.ConnectTimeout("could not connect in time") from None
 
     async def connect_unix_socket(
         self, path: str, timeout: float | None = None, socket_options: Iterable[Any] | None = None

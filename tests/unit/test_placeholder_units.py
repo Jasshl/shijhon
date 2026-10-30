@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ctypes
 import dataclasses
+import errno
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -267,3 +270,166 @@ def test_a_partial_catalog_album_says_how_many_tracks_the_album_has() -> None:
     assert tagging.catalog_album_tags(partial)["tracktotal"] == ["3"]
     counted = dataclasses.replace(whole, track_count=9)  # (whole: its tracks are the total)
     assert tagging.catalog_album_tags(counted)["tracktotal"] == ["3"]
+
+
+@pytest.mark.parametrize(
+    ("track_clean", "release_clean", "explicit", "expected"),
+    [
+        (True, False, False, ["2"]),
+        (False, True, False, ["2"]),
+        (True, True, True, ["1"]),
+        (False, False, False, None),
+    ],
+)
+def test_clean_advisory_keeps_track_and_release_flags(
+    track_clean: bool,
+    release_clean: bool,
+    explicit: bool,
+    expected: list[str] | None,
+) -> None:
+    from tests.harness.engine import catalog_release
+
+    release = catalog_release(
+        "clean-song", "Mixed Lanterns", "Paper Quartet", 1, clean=release_clean
+    )
+    track = dataclasses.replace(release.tracks[0], clean=track_clean, explicit=explicit)
+    assert tagging.placeholder_tags({}, track, release).get("itunesadvisory") == expected
+
+
+@pytest.mark.parametrize("occupied", [False, True])
+def test_exclusive_publication_on_a_filesystem_without_hard_links(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    occupied: bool,
+) -> None:
+    import errno
+
+    from shijhon.placeholders.engine import _place_unused
+
+    staged, target = tmp_path / "staged.flac", tmp_path / "final.flac"
+    staged.write_bytes(b"staged audio")
+    if occupied:
+        target.write_bytes(b"foreign audio")
+
+    def no_links(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.ENOTSUP, "hard links unsupported")
+
+    monkeypatch.setattr(os, "link", no_links)
+    if occupied:
+        with pytest.raises(FileExistsError):
+            _place_unused(staged, target)
+        assert staged.read_bytes() == b"staged audio"
+        assert target.read_bytes() == b"foreign audio"
+    else:
+        _place_unused(staged, target)
+        assert target.read_bytes() == b"staged audio"
+        assert not staged.exists()
+
+
+@pytest.mark.parametrize(
+    "link_error",
+    [errno.EXDEV, errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EINVAL],
+)
+@pytest.mark.parametrize("native", ["missing", "unsupported", "exclusive"])
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+@pytest.mark.parametrize("occupied", ["free", "file", "link"])
+def test_publication_falls_back_when_exclusive_operations_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    link_error: int,
+    native: str,
+    platform: str,
+    occupied: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from shijhon.placeholders.engine import _place_unused
+
+    staged, target = tmp_path / "staged", tmp_path / "target"
+    staged.write_bytes(b"new audio")
+    if occupied == "file":
+        target.write_bytes(b"foreign audio")
+    elif occupied == "link":
+        target.symlink_to(tmp_path / "missing")
+
+    def no_link(*args: object, **kwargs: object) -> None:
+        raise OSError(link_error, "hard links unavailable")
+
+    def rename(*args: object) -> int:
+        if native == "unsupported":
+            # macOS EOPNOTSUPP is distinct from ENOTSUP; Linux filesystems commonly
+            # reject RENAME_NOREPLACE with EINVAL.
+            ctypes.set_errno(errno.EOPNOTSUPP if platform == "darwin" else errno.EINVAL)
+            return -1
+        if os.path.lexists(target):
+            ctypes.set_errno(errno.EEXIST)
+            return -1
+        os.rename(staged, target)
+        return 0
+
+    symbol = "renamex_np" if platform == "darwin" else "renameat2"
+    libc = SimpleNamespace(**({} if native == "missing" else {symbol: rename}))
+    monkeypatch.setattr(os, "link", no_link)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **kw: libc)
+    if occupied != "free":
+        with pytest.raises(FileExistsError):
+            _place_unused(staged, target)
+        assert staged.read_bytes() == b"new audio"
+        if occupied == "file":
+            assert target.read_bytes() == b"foreign audio"
+        else:
+            assert target.is_symlink()
+    else:
+        _place_unused(staged, target)
+        assert target.read_bytes() == b"new audio"
+        assert not staged.exists()
+    assert ("exclusive rename was unavailable" in caplog.text) == (native != "exclusive")
+
+
+@pytest.mark.parametrize("operation", ["link", "rename"])
+def test_publication_does_not_hide_real_permission_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    from types import SimpleNamespace
+
+    from shijhon.placeholders.engine import _place_unused
+
+    staged, target = tmp_path / "staged", tmp_path / "target"
+    staged.write_bytes(b"new audio")
+
+    def no_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EACCES if operation == "link" else errno.ENOTSUP, "denied")
+
+    def denied(*args: object) -> int:
+        ctypes.set_errno(errno.EACCES)
+        return -1
+
+    monkeypatch.setattr(os, "link", no_link)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *a, **kw: SimpleNamespace(renameat2=denied))
+    with pytest.raises(OSError) as failure:
+        _place_unused(staged, target)
+    assert failure.value.errno == errno.EACCES
+    assert staged.exists() and not target.exists()
+
+
+def test_delivery_retains_grouping_without_requiring_unrepresentable_metadata() -> None:
+    from shijhon.placeholders.engine import _retained_metadata
+
+    original = {
+        "albumId": "album",
+        "discNumber": 1,
+        "trackNumber": 2,
+        "releaseDate": {"year": 2004},
+        "year": 2001,
+        "originalDate": {"year": 1998},
+        "genres": [{"name": "Invented"}],
+    }
+    changed = original | {"year": 2004, "originalDate": None, "genres": []}
+    assert _retained_metadata(original) == _retained_metadata(changed)
+    for key in ("albumId", "discNumber", "trackNumber", "releaseDate"):
+        assert _retained_metadata(original) != _retained_metadata(changed | {key: None})

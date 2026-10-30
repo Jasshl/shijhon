@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import anyio
@@ -293,12 +294,16 @@ def test_library_songs_read_navidromes_native_recording_fields() -> None:
     other = incoming("x", "Lantern 1", 1, isrcs=("XXA0L2000009",))
     same = incoming("y", "Lantern 1", 1, fmt="mp3", kbps=128, isrcs=("XXA0L2000001",))
     assert decide([other], [song])["x"].outcome == NEW
+    same = Incoming("y", {**same.facts, "clean": True})
     assert decide([same], [song])["y"].outcome == LINKED
     # A clean edit is never the explicit song.
     explicit = LibrarySong.of_index(*native_row("n2", "Lantern 2", 2, explicitStatus="e"),
                                     placeholder=False)  # fmt: skip
     clean = incoming("c", "Lantern 2", 2)
     clean = Incoming("c", {**clean.facts, "clean": True})
+    assert decide([clean], [explicit])["c"].outcome != LINKED
+    clean = Incoming("c", {**clean.facts, "isrcs": ["XXA0L2000001"]})
+    explicit = replace(explicit, isrcs=("XXA0L2000001",))
     assert decide([clean], [explicit])["c"].outcome != LINKED
 
 

@@ -233,48 +233,64 @@ class NavidromeService:
         return song if isinstance(song, dict) else None
 
     async def playlist_song_ids(self, playlist_id: str) -> list[str]:
-        tracks = await self.native_json(
-            "GET", f"playlist/{segment(playlist_id)}/tracks", params={"_end": 5000}
-        )
-        if not isinstance(tracks, list):
-            return []
-        return [
-            str(t.get("mediaFileId") or t.get("id"))
-            for t in tracks
-            if isinstance(t, dict) and (t.get("mediaFileId") or t.get("id"))
-        ]
+        return await self.archive_song_ids("playlist", playlist_id)
 
-    async def archive_song_ids(self, kind: str, ident: str, *, limit: int = 5000) -> list[str]:
-        """A complete, bounded archive listing, with native totals as proof.
+    async def archive_song_ids(self, kind: str, ident: str) -> list[str]:
+        """Read the whole archive in bounded pages, checking totals and entry IDs.
 
-        A short page alone is insufficient: Navidrome may cap a requested page.
-        Keep playlist order and repeated recordings; its entry IDs are not song IDs.
+        Keep playlist order and repeated recordings; playlist entry IDs identify
+        positions, not songs. No partial listing is used to approve an archive.
         """
         if kind == "playlist":
-            path, params, key = f"playlist/{segment(ident)}/tracks", {}, "mediaFileId"
+            path, params, key = (
+                f"playlist/{segment(ident)}/tracks",
+                {"_sort": "id", "_order": "ASC"},
+                "mediaFileId",
+            )
         elif kind == "album":
-            path, params, key = "song", {"album_id": ident, "_sort": "path"}, "id"
+            path, params, key = "song", {"album_id": ident, "_sort": "id", "_order": "ASC"}, "id"
         else:
             raise NavidromeError("archive: unsupported resource")
-        if not 0 <= limit <= 5000:
-            raise NavidromeError("archive: inspection limit exceeded")
-        response = await self.native("GET", path, params={**params, "_start": 0, "_end": limit + 1})
-        total = response.headers.get("x-total-count", "")
-        if not re.fullmatch(r"[0-9]{1,6}", total) or int(total) > limit:
-            raise NavidromeError("archive: complete listing unavailable")
-        try:
-            entries = response.json()
-        except ValueError:
-            raise NavidromeError("archive: not JSON") from None
-        if not isinstance(entries, list) or len(entries) != int(total):
-            raise NavidromeError("archive: incomplete listing")
-        songs = []
-        for entry in entries:
-            song = entry.get(key) if isinstance(entry, dict) else None
-            if not isinstance(song, str) or not song:
-                raise NavidromeError("archive: unreadable song")
-            songs.append(song)
-        return songs
+        songs: list[str] = []
+        seen: set[str] = set()
+        expected: int | None = None
+        page_size = 5000
+        while True:
+            response = await self.native(
+                "GET", path, params={**params, "_start": len(songs), "_end": len(songs) + page_size}
+            )
+            total = response.headers.get("x-total-count", "")
+            if not re.fullmatch(r"[0-9]{1,19}", total) or int(total) > 2**63 - 1:
+                raise NavidromeError("archive: complete listing unavailable")
+            if expected is not None and int(total) != expected:
+                raise NavidromeError("archive: listing changed")
+            expected = int(total)
+            try:
+                entries = response.json()
+            except ValueError:
+                raise NavidromeError("archive: not JSON") from None
+            if (
+                not isinstance(entries, list)
+                or len(entries) > page_size
+                or len(songs) + len(entries) > expected
+                or (not entries and len(songs) < expected)
+            ):
+                raise NavidromeError("archive: incomplete listing")
+            for entry in entries:
+                song = entry.get(key) if isinstance(entry, dict) else None
+                entry_id = entry.get("id") if isinstance(entry, dict) else None
+                if (
+                    not isinstance(song, str)
+                    or not song
+                    or type(entry_id) not in (str, int)
+                    or not str(entry_id)
+                    or str(entry_id) in seen
+                ):
+                    raise NavidromeError("archive: unreadable or repeated entry")
+                seen.add(str(entry_id))
+                songs.append(song)
+            if len(songs) == expected:
+                return songs
 
     async def share(self, share_id: str) -> dict[str, Any] | None:
         share = await self.native_json("GET", f"share/{segment(share_id)}")

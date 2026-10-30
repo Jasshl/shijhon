@@ -3,7 +3,7 @@
 {% block main %}
 <div class="page-head">
   <h1>Audio quality</h1>
-  <p class="page-summary">Choose the lowest quality you want to hear. A song whose file is below it plays from the add-ons when they have it, and files below it don't play for catalog songs. Other accounts choose their own.</p>
+  <p class="page-summary">Choose the lowest quality you want to hear. A song whose file is below it plays from the add-ons when they have it. For a catalog song whose file is below it, the add-ons' audio plays, and the file plays only when they have nothing. Other accounts choose their own.</p>
 </div>
 {% if saved_now %}
 <div class="notice notice-ok" role="status"><p>{{ saved_now }}</p></div>
@@ -16,7 +16,7 @@
   <section class="group" aria-labelledby="minimum-title">
     <div class="group-head">
       <h2 id="minimum-title">Lowest quality</h2>
-      <p class="group-help">A bitrate is for compressed audio (MP3, AAC, Opus…); lossless audio (FLAC, ALAC…) is accepted at any bitrate, except that Lossless only accepts nothing else. Every choice but Any also needs 44.1 kHz. When the add-ons don't have a song, or only in a lower quality, its file plays.</p>
+      <p class="group-help">A bitrate is for compressed audio (MP3, AAC, Opus…); lossless audio (FLAC, ALAC…) is accepted at any bitrate. Lossless accepts only lossless audio. Every choice but Any also needs 44.1 kHz. When the add-ons don't have a song, or only in a lower quality, its file plays.</p>
       <p class="group-meta">{% if own %}Your choice: {{ words[chosen] }}{% else %}You use the server's default: {{ default_words }}{% endif %}</p>
     </div>
     <div class="rows music-card">

@@ -19,5 +19,9 @@
     <p>Return to your agent and start the connection again.</p>
   </div>
 </main>
+{% from "_macros.html" import legal %}
+<footer class="signin-footer">
+  {{ legal(version, copyright, license, source_url) }}
+</footer>
 </body>
 </html>

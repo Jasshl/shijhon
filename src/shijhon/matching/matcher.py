@@ -57,12 +57,13 @@ from shijhon.matching.normalize import (
     same_artist,
     same_title,
     title_key,
+    version_marker,
 )
 
 log = logging.getLogger(__name__)
 
 # Increment when matching or normalization changes can turn a negative into a match.
-MATCH_REVISION = 1
+MATCH_REVISION = 3
 DURATION_MS = 3000  # an owned track and its catalog version differ at most this much
 MAX_CANDIDATES = 6  # releases with the album's title fetched in detail
 MAX_ELSEWHERE = 3  # releases under other titles fetched, when none with the title fits
@@ -342,10 +343,12 @@ def confirm(owned: OwnedAlbum, release: CatalogRelease) -> dict[CatalogRef, str]
     """Catalog track -> owned song for every owned song, or None if one is not on the
     release: the same ISRC, else the same position, else anywhere - with a title naming the
     same recording and a length within 3 s."""
+    if not editions_agree(owned, release):
+        return None
     links: dict[CatalogRef, str] = {}
     free = list(release.tracks)
     for song in sorted(owned.songs, key=lambda s: (s.disc, s.number)):
-        found = _find(song, free)
+        found = _find(song, free, owned=owned, release=release)
         if found is None:
             return None
         links[found.ref] = song.id
@@ -353,7 +356,32 @@ def confirm(owned: OwnedAlbum, release: CatalogRelease) -> dict[CatalogRef, str]
     return links
 
 
-def _find(song: OwnedSong, tracks: list[CatalogTrack]) -> CatalogTrack | None:
+def _version(clean: bool | None, explicit: bool = False) -> str | None:
+    return "clean" if clean else "explicit" if explicit or clean is False else None
+
+
+def editions_agree(owned: OwnedAlbum, release: CatalogRelease) -> bool:
+    """No contradictory clean/explicit evidence, as exact-release preparation requires."""
+    own = version_marker(owned.title) or _version(owned.clean)
+    want = version_marker(release.title) or _version(release.clean or None, release.explicit)
+    return not (own and want and own != want)
+
+
+def _find(
+    song: OwnedSong, tracks: list[CatalogTrack], *, owned: OwnedAlbum, release: CatalogRelease
+) -> CatalogTrack | None:
+    own = version_marker(song.title) or version_marker(owned.title) or _version(owned.clean)
+
+    def compatible(track: CatalogTrack) -> bool:
+        want = (
+            version_marker(track.title)
+            or _version(track.clean or None, track.explicit)
+            or version_marker(release.title)
+            or _version(release.clean or None, release.explicit)
+        )
+        return not (own and want and own != want)
+
+    tracks = [track for track in tracks if compatible(track)]
     for track in tracks:
         if track.isrc and track.isrc in song.isrcs:
             return track

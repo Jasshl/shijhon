@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from shijhon.matching.normalize import (
     artist_names,
     close_duration,
@@ -166,3 +168,33 @@ def test_durations() -> None:
     assert close_duration(180_000, 182_900)
     assert not close_duration(180_000, 183_500)
     assert not close_duration(None, 180_000)
+
+
+def test_artist_markers_are_complete_words_followed_by_a_credit() -> None:
+    from shijhon.matching.normalize import credit_names
+
+    for name in ("Feathers", "Featherstone", "Feather Lantern", "Little Feat", "Soft Ft"):
+        assert credit_names(name) == [name]
+    assert not same_artist("Feather Lantern", "Her Lantern")
+    assert same_artist("Ivo Lane (feat. Ada Reed)", "Ada Reed")
+    for marker in ("featuring", "feat", "feat.", "ft", "ft."):
+        assert credit_names(f"Ivo Lane {marker} Ada Reed") == ["Ivo Lane", "Ada Reed"]
+        assert same_artist(f"Ivo Lane {marker} Ada Reed", "Ada Reed")
+
+
+def test_symbol_titles_keep_their_identity() -> None:
+    from shijhon.matching.normalize import name_key, recording_key
+
+    for key in (title_key, recording_key, name_key):
+        assert key("?") != key("...")
+        assert key("♫") != key("★")
+        assert key(" ? ") == key("?")
+    assert not same_title("?", "...")
+    assert not same_title(None, "")
+
+
+@pytest.mark.parametrize("credit", ["A feat.B", "A ft.B", "A Ft. B"])
+def test_artist_credits_with_a_period_need_no_space(credit):
+    from shijhon.matching.normalize import credit_names
+
+    assert credit_names(credit) == ["A", "B"]

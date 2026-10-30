@@ -129,3 +129,20 @@ def test_cover_fingerprints_tell_pictures_apart(tmp_path: Path) -> None:
 @pytest.mark.parametrize("size", [0, covers.MAX_IMAGE + 1])
 def test_cover_fingerprint_refuses_empty_or_oversized_input(size: int) -> None:
     assert anyio.run(covers.fingerprint, b"\0" * size) is None
+
+
+def test_symbol_only_recording_titles_are_distinct() -> None:
+    assert not same_recording(song("?"), song("..."))
+    assert not same_recording(song("♫"), song("★"))
+    assert same_recording(song("?"), song("?"))
+    assert not same_recording(song(""), song(""))
+
+
+@pytest.mark.parametrize("identifier", ["isrcs", "recording_id"])
+def test_shared_identifiers_do_not_join_clean_and_other_versions(identifier: str) -> None:
+    same = {identifier: ("XXA0L2000001",) if identifier == "isrcs" else "recording-a"}
+    clean = song("Lantern", clean=True, **same)
+    other = song("Lantern", clean=False, **same)
+    assert not same_recording(clean, other)
+    assert not same_recording(other, clean)
+    assert same_recording(clean, song("Lantern (Clean)", **same))

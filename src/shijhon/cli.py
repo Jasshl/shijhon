@@ -2,6 +2,8 @@
 pass's dry run, the review list) from the database without changing it; ``shijhon cleanup``
 lists what the cleanup of unused releases would take out now (read only);
 ``shijhon catalogs`` lists the installed catalog adapters;
+``shijhon saved`` lists saved settings and removes chosen overrides;
+``shijhon fills-undo`` previews or removes unused fills;
 ``shijhon usage-export`` writes what the cleanup reads of Navidrome's database, for a
 Shijhon that does not see that database itself; ``shijhon carry-over`` shows the catalog
 albums carried over at the upgrade to schema 24, and ``--account NAME`` gives them to one
@@ -19,6 +21,7 @@ import os
 import sqlite3
 import sys
 import time
+import tomllib
 from pathlib import Path
 from threading import Timer
 from typing import NoReturn
@@ -298,7 +301,7 @@ def restart_problem(config: Path | None, running: Settings) -> str | None:
         fresh = load_settings(config)
     except ValidationError as exc:
         return "the configuration has an error - " + "; ".join(_problems(exc, own=False))
-    except (OSError, ValueError) as exc:  # (a file that is not TOML is a ValueError)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         return f"the configuration file cannot be read ({type(exc).__name__})"
     if fresh.navidrome.library_path is None:
         return "the configuration names no library folder (navidrome.library_path)"
@@ -739,6 +742,13 @@ def _settings(config: Path | None) -> Settings:
                 print(f"shijhon: configuration error {problem}", file=sys.stderr)
             else:
                 print(f"shijhon: configuration error: {problem}", file=sys.stderr)
+        raise SystemExit(2) from None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        print(
+            "shijhon: configuration error: the configuration file cannot be read"
+            f" ({type(exc).__name__})",
+            file=sys.stderr,
+        )
         raise SystemExit(2) from None
 
 

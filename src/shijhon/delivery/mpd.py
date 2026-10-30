@@ -210,7 +210,7 @@ def _timed(times: list[tuple[int, int]], timescale: int) -> _Times | None:
 
 
 def _even(
-    count: int, duration: float, timescale: int, seconds: float | None, offset: float
+    count: int, duration: float, timescale: int, seconds: float | None, offset: int
 ) -> _Times | None:
     """Segments of one ``duration`` each (the last as long as what is left of ``seconds``),
     from ``offset`` (the presentation time offset); None without ``seconds`` (the last one's
@@ -220,7 +220,7 @@ def _even(
         return None
     left = round(seconds * timescale) - each * (count - 1)
     last = left if 0 < left <= each else each
-    return _Times((each,) * (count - 1) + (last,), timescale, round(offset))
+    return _Times((each,) * (count - 1) + (last,), timescale, offset)
 
 
 def _choose(reps: list[_Rep], low: str, high: str) -> _Rep:
@@ -270,7 +270,7 @@ def _parts(
                 return items
         return []
 
-    timescale = _number(attrs.get("timescale"), 1, high=2.0**32) or 1
+    timescale = _number(attrs.get("timescale"), 1, high=2**32) or 1
     scale = int(timescale)
     offset = _number(attrs.get("presentationTimeOffset"), 0)
     rep_id = (chosen.rep.get("id") or "").strip()
@@ -430,16 +430,16 @@ def _seconds(value: str | None) -> float | None:
     return total if total > 0 else None
 
 
-def _number(value: str | None, default: float, high: float = 2.0**64) -> float:
+def _number(value: str | None, default: int, high: int = 2**64) -> int:
     """A number of the manifest (its times and counts are 64-bit at most, its timescales
     32-bit: ``high``)."""
     if value is None or not value.strip():
         return default
     try:
-        result = float(value)
+        result = int(value)
     except ValueError:
         raise Unsupported("a number in the manifest that cannot be read") from None
-    if not math.isfinite(result) or not 0 <= result <= high:
+    if not 0 <= result <= high:
         raise Unsupported("a number in the manifest that cannot be read")
     return result
 

@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any
 import anyio
 import httpx
 
+from shijhon.catalog.model import ITEM_ID
 from shijhon.delivery import pacing
 from shijhon.delivery.addon import (
     AddonError,
@@ -541,6 +542,9 @@ async def _nothing() -> None:
 
 @dataclass
 class PlaybackSettings:
+    # Only this configured catalog may use its confirmed, declared item IDs directly.
+    catalog_addon: str = ""
+    catalog_identity: str = ""
     budget_seconds: float = 9.0
     max_attempts: int = 2  # sources whose stream is tried at byte zero (one fallback)
     pin_ttl_seconds: float = 1800.0
@@ -1987,7 +1991,7 @@ class Deliverer:
                 try:
                     # A song of this add-on's own catalog carries the add-on's track
                     # ID: asked for by it, without a lookup.
-                    own = None if hint else await _own_id(source, track)
+                    own = None if hint else await _own_id(source, track, self.settings)
                     known = hint or own
                     track_id = known or await source.addon.find(track.wanted, notes)
                 finally:
@@ -2291,7 +2295,7 @@ class Deliverer:
                     # A song of its own catalog: its ID is known without asking. It
                     # is no hint for later: its attempt works it out again, from the add-on
                     # as it is then (the same name may be another service by then).
-                    own = await _own_id(source, track)
+                    own = await _own_id(source, track, self.settings)
                     found = own or await source.addon.find(track.wanted)
                 checks.looked[source.id] = self.clock() - begun
                 if own:
@@ -2908,7 +2912,9 @@ class Deliverer:
                         request = http.build_request("GET", pin.info.url, headers=headers)
                         if pace is not None:
                             ended = await pace.open()
-                        response = await pacing.send(http, request, turn=hop)
+                        response = await pacing.send(
+                            http, request, turn=hop, private=tuple(pin.info.headers)
+                        )
                         if _a_manifest(response):
                             # A plain link that answers with a DASH manifest: joined as one.
                             await response.aclose()
@@ -3368,13 +3374,27 @@ def _states(sources: list[Source], answers: dict[int, Availability | None], aske
     return ", ".join(f"{s.name} {state(s)}" for s in sources)
 
 
-async def _own_id(source: Source, track: Track) -> str | None:
-    """The source's own track ID of a song that came from its catalog: the song's
-    catalog reference is of the catalog this add-on is (its name) and of the service it
-    is now (its manifest, read like before a lookup). None for every other song."""
-    if not of_catalog(source.name, track.ref):
+async def _own_id(source: Source, track: Track, settings: PlaybackSettings) -> str | None:
+    """The source's own track ID: name-based, or its confirmed catalog identity.
+
+    A declared identity is trusted only at the configured catalog add-on, while its
+    current manifest still matches the operator's confirmation.
+    """
+    if of_catalog(source.name, track.ref):
+        return own_track(source.name, (await source.addon.manifest()).id, track.ref)
+    if source.name != settings.catalog_addon or not settings.catalog_identity:
         return None
-    return own_track(source.name, (await source.addon.manifest()).id, track.ref)
+    manifest = await source.addon.manifest()
+    declared = manifest.full_catalog
+    key, _, item = (track.ref or "").partition(":")
+    if (
+        declared is not None
+        and declared.key
+        and declared.identity == settings.catalog_identity
+        and key == declared.key
+    ):
+        return item if ITEM_ID.fullmatch(item) and item not in (".", "..") else None
+    return None
 
 
 async def _looks_up(source: Source, track: Track) -> bool:

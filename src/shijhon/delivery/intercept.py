@@ -70,6 +70,7 @@ from shijhon.delivery.playback import (
     Opened,
     PinBroken,
     Track,
+    _Changed,
 )
 from shijhon.delivery.quality_gate import LibrarySong, QualityGate, refusal
 from shijhon.delivery.warm import WarmAhead
@@ -256,6 +257,7 @@ class Interceptor:
         # A use of an old ID found here (a conversion its audio needs): adds its
         # release back; True when it is back (``cleanup.OldIds.use``).
         self.use_old_id: Callable[[RestCall, RequestContext, str], Awaitable[bool]] | None = None
+        self._share_preparing: set[str] = set()
         self._jukebox: tuple[float, bool] | None = None  # (valid until, enabled)
         self._downsampled: tuple[float, bool] | None = None  # (valid until, it converts)
         # Each listener's latest play of a song (its key), as a plain stream or for a
@@ -1006,6 +1008,69 @@ class Interceptor:
         later range of a play whose link is gone one of the plays'. ``accept``: the
         request's own test of the audio (``Deliverer.open``)."""
         range_header = header(call.headers, b"range") or None
+        if call.name == "download":
+            parsed = ByteRange.parse(range_header)
+            starts = not head and (parsed is None or parsed.at_zero)
+
+            async def download(departure: Departure) -> Opened:
+                cap = self.deliverer.settings.max_wait_seconds
+                if parsed is not None and not parsed.at_zero:
+                    cap = min(cap, self.deliverer.settings.seek_timeout_seconds)
+                opened: Opened | None = None
+                try:
+                    with anyio.fail_after(cap):
+                        # Only a new download takes the user's turn and allowance.
+                        # The bulk lease bounds upstream HEAD and continuation work.
+                        context = (
+                            self.download_first.turn(track.key, who[0])
+                            if starts
+                            else contextlib.nullcontext(Turn())
+                        )
+                        async with context as turn:
+                            if departure.at is not None:
+                                raise _NoTurn(["the client left while waiting for a download turn"])
+                            turn.decided("the download could not open its audio")
+                            with pacing.urgent(turn.urgency):
+                                bulk = self.download_first.bulk
+                                if bulk is not None:
+                                    opened = await bulk.open(
+                                        track,
+                                        who[0],
+                                        range_header=range_header,
+                                        head=head,
+                                        accept=accept,
+                                    )
+                                else:
+                                    opened = await self.deliverer.open(
+                                        track, range_header, head=head, download=True, heard=False,
+                                        accept=accept, departure=departure,
+                                    )  # fmt: skip
+                            turn.spent = starts and opened.status in (200, 206)
+                            turn.decided(
+                                "the download streamed audio without preparing a library file"
+                            )
+                            if turn.waiting is not None:
+                                # A stream waiting for this opening must acquire its own
+                                # turn: the download has no prepared file to share.
+                                turn.waiting.detached = True
+                        # The user's slot ends at open; the bulk lease owns the transfer.
+                        return opened
+                except _Changed:
+
+                    async def closed() -> None:
+                        pass
+
+                    return Opened(412, [(b"content-length", b"0")], None, closed)
+                except (TimeoutError, Limited) as exc:
+                    if opened is not None:
+                        with anyio.CancelScope(shield=True):
+                            await opened.close()
+                    reason = (
+                        exc.reason if isinstance(exc, Limited) else "the download wait cap elapsed"
+                    )
+                    raise _NoTurn([reason]) from None
+
+            return _Opening(download, False, 0.0)
         parsed = ByteRange.parse(range_header)
         starts = not head and (parsed is None or parsed.at_zero)
         if at is None:
@@ -1745,14 +1810,28 @@ class Interceptor:
             await self.download_first.settled(song_id, used=True)  # played through the link
         silent = await self.silent_among(songs)
         if silent and not deliver:
-            raise _BeingWritten(ident)  # (answered "Audio unavailable")
-        for song_id in silent[:MAX_SHARE_TRACKS]:
+            raise _BeingWritten(ident)
+        if len(silent) > MAX_SHARE_TRACKS or any(s in self._share_preparing for s in silent):
+            self._prepare_share(silent, f"share {ident[:16]}")
+            await send_bytes(
+                send,
+                503,
+                b"Audio unavailable\n",
+                [(b"content-type", b"text/plain"), (b"retry-after", b"5")],
+                head=scope["method"] == "HEAD",
+            )
+            return True
+        for song_id in silent:
             await self.download_first.used(song_id)  # played through the link
             # The link is the credential: its downloads count as the share's own.
             failure = await self.download_first.ensure(song_id, f"share {ident[:16]}")
             if failure is not None:
                 await send_bytes(
-                    send, 503, b"Audio unavailable\n", [(b"content-type", b"text/plain")]
+                    send,
+                    503,
+                    b"Audio unavailable\n",
+                    [(b"content-type", b"text/plain")],
+                    head=scope["method"] == "HEAD",
                 )
                 return True
         if kind == "s":
@@ -1782,6 +1861,39 @@ class Interceptor:
         else:
             await relay(response, receive, send, head=scope["method"] == "HEAD")
         return True
+
+    def _prepare_share(self, songs: list[str], user: str) -> None:
+        """Prepare a large share outside its request, deduplicated across share links.
+
+        At most twenty workers per share; bulk admission bounds transfers across all
+        shares and users. The validated archive listing already bounds the pending IDs.
+        """
+        if self.deliverer.spawn is None:
+            return
+        pending = [song for song in dict.fromkeys(songs) if song not in self._share_preparing]
+        if not pending:
+            return
+        self._share_preparing.update(pending)
+
+        async def prepare() -> None:
+            todo = iter(pending)
+
+            async def worker() -> None:
+                for song in todo:
+                    try:
+                        await self.download_first.used(song)
+                        await self.download_first.ensure(song, user, bulk=True, background=True)
+                    finally:
+                        self._share_preparing.discard(song)
+
+            try:
+                async with anyio.create_task_group() as group:
+                    for _ in range(min(MAX_SHARE_TRACKS, len(pending))):
+                        group.start_soon(worker)
+            finally:
+                self._share_preparing.difference_update(pending)
+
+        self.deliverer.background(prepare)
 
     async def _valid_share(self, scope: Scope) -> bool:
         headers = [
@@ -1815,13 +1927,13 @@ class Interceptor:
         return await self._shared_songs(share_id, strict=True)
 
     async def _shared_songs(self, share_id: str, *, strict: bool = False) -> list[str]:
-        """At most 5,000 entries, completely listed; strict failures refuse the archive."""
+        """Completely list each resource; strict failures refuse the archive."""
         try:
             share = await self.navidrome.share(share_id)
             resources = share.get("resourceIds") if share else None
             if not isinstance(resources, str) or not resources:
                 raise NavidromeError("share: unavailable resources")
-            # Bound both the number of native requests and their aggregate entries.
+            # Bound the number of resources; each collection is read in bounded pages.
             ids = resources.split(",", 5000)
             if len(ids) > 5000 or any(not ident for ident in ids):
                 raise NavidromeError("share: inspection limit exceeded")
@@ -1834,9 +1946,7 @@ class Interceptor:
                 raise NavidromeError("share: collection inspection limit exceeded")
             songs: list[str] = []
             for resource in ids:
-                songs += await self.navidrome.archive_song_ids(
-                    kind, resource, limit=5000 - len(songs)
-                )
+                songs += await self.navidrome.archive_song_ids(kind, resource)
             return songs
         except NavidromeError:
             if strict:

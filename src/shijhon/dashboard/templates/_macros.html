@@ -22,7 +22,7 @@
 {% if row.default %}{% set _ = described.append(row.id ~ "-default") %}{% endif %}
 <div class="setting{% if row.problem or pair and pair.problem %} is-invalid{% elif row.modified %} is-modified{% endif %}">
   <div class="setting-text">
-{% if row.kind in ("mapping", "locked") %}
+{% if row.kind in ("mapping", "locked", "confirmed_identity") %}
     <p class="setting-label" id="{{ row.id }}">{{ row.label }}</p>
 {% else %}
 {% set spoken = row.label|spoken_unit(row.spoken) %}
@@ -42,7 +42,13 @@
 {% endif %}
   </div>
   <div class="setting-control">
-{% if row.kind == "locked" %}
+{% if row.kind == "confirmed_identity" %}
+    <p>{{ row.text or "None — using the add-on's name" }}</p>
+    <input type="hidden" name="{{ row.name }}" value="{{ row.text }}"{{ owner }}>
+{% if row.claim is not none %}
+    <label><input type="checkbox" name="confirm-identity" value="{{ row.claim }}" aria-describedby="{{ row.id }}-help"{% if row.checked %} checked{% endif %}{{ owner }}> {{ "Confirm this identity" if row.claim else "Use the add-on's name" }}</label>
+{% endif %}
+{% elif row.kind == "locked" %}
     <p>{{ row.text }}</p>
     <p class="setting-default" id="{{ row.id }}-env">Set by <code>{{ row.locked }}</code>; change it there.{% if row.hidden %} A value saved here is kept but not used while it is set.{% endif %}</p>
 {% if row.hidden %}
@@ -137,7 +143,7 @@
 {% if info.kind == "none" and not info.running %}
 <{{ tag }} class="status"><span class="led led-off" aria-hidden="true"></span><span>Off: no catalog is chosen</span></{{ tag }}>
 {% elif info.problem and not info.running %}
-<{{ tag }} class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Not connected: {{ info.problem.label|lower }} {{ info.problem.notice }}</span></{{ tag }}>
+<{{ tag }} class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Not connected: {{ info.problem.label }} {{ info.problem.notice }}</span></{{ tag }}>
 {% elif not info.running %}
 <{{ tag }} class="status"><span class="led" aria-hidden="true"></span><span>Not connected yet: the catalog starts when Shijhon restarts</span></{{ tag }}>
 {% elif info.resting %}

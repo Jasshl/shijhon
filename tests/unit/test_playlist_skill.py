@@ -355,7 +355,10 @@ def test_real_opener_rejects_all_redirects_without_a_second_request(
         (403, "does not permit"),
         (404, "not found"),
         (409, "conflicts"),
-        (429, "outcome may be unknown"),
+        (413, "body is too large"),
+        (415, "Unsupported media type"),
+        (424, "setup is missing"),
+        (429, "Too many playlist requests"),
         (500, "outcome may be unknown"),
     ],
 )

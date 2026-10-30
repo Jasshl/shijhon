@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 import anyio
 
 from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
-from shijhon.collection.contracts import REAL_AUDIO, IndexState, Mode, Selection
+from shijhon.collection.contracts import REAL_AUDIO, IndexState, Selection
 from shijhon.collection.query_index import (
     Binding,
     IndexFailed,
@@ -54,7 +54,6 @@ REAL_AUDIO_WAIT_SECONDS = 30.0
 
 
 class Collections(Protocol):
-    async def mode(self, owner_id: str) -> Mode: ...
     async def index_state(self, owner_id: str, library_id: str) -> IndexState: ...
 
 
@@ -152,22 +151,33 @@ def response(
     )
 
 
-def selected_native(answer: LibraryAnswer, total: int, *, selected: bool = True) -> LibraryAnswer:
+def selected_native(
+    answer: LibraryAnswer, total: int | None, *, selected: bool = True
+) -> LibraryAnswer:
     """Keep exact native bytes with private transport headers.
 
     Complete album details are discovery, so their reply must still allow the
     complete-album handler to add a saved plan's unmaterialized tracks.
     """
     content_type = header(answer.headers, b"content-type").split(";", 1)[0].encode()
-    return LibraryAnswer(
-        answer.status,
-        [
-            (b"content-type", content_type),
-            (b"cache-control", b"no-store"),
-            (b"x-total-count", str(total).encode()),
-        ],
-        answer.body,
-        selected_view=selected,
+    headers = [(b"content-type", content_type), (b"cache-control", b"no-store")]
+    if total is not None:
+        headers.append((b"x-total-count", str(total).encode()))
+    return LibraryAnswer(answer.status, headers, answer.body, selected_view=selected)
+
+
+def same_native_rows(
+    rows: Sequence[Mapping[str, Any]], native: Sequence[Mapping[str, Any]]
+) -> bool:
+    """Current native identities and aggregates agree with the selected page."""
+    return len(rows) == len(native) and all(
+        row.get("id") == current.get("id")
+        and all(
+            row.get(key) == current.get(key)
+            for key in ("songCount", "albumCount", "duration", "size", "stats")
+            if key in row
+        )
+        for row, current in zip(rows, native, strict=True)
     )
 
 
@@ -249,7 +259,7 @@ class Visibility:
     async def final_answer(self, call: RestCall, ctx: RequestContext) -> LibraryAnswer | None:
         if not self.applicable(call) or (caller := await ctx.caller()) is None:
             return None  # the proxy retains the first credential refusal or native bypass
-        return await self.answer(call, caller=caller)
+        return await self.answer(call, caller=caller, fresh=False)
 
     async def binding(
         self, principal: Principal, requested: frozenset[str] | None = None
@@ -272,10 +282,18 @@ class Visibility:
         )
         return Binding(principal.user_id, libraries, tuple(generations), authority)
 
-    async def answer(self, call: RestCall, *, caller: Caller | None = None) -> LibraryAnswer | None:
+    async def answer(
+        self, call: RestCall, *, caller: Caller | None = None, fresh: bool = True
+    ) -> LibraryAnswer | None:
         if not self.applicable(call):
             return None
-        verdict = caller if caller is not None else await self.checker.check(call, fresh=True)
+        # Cached selected answers need a current native proof too. The caller may
+        # have been accepted before a completion handler waited on catalog work.
+        verdict = (
+            caller
+            if not fresh and caller is not None
+            else await self.checker.check(call, fresh=True)
+        )
         if isinstance(verdict, Refusal):
             return LibraryAnswer(verdict.status, verdict.headers, verdict.body, selected_view=True)
         if not isinstance(verdict, Caller):
@@ -541,12 +559,32 @@ class Visibility:
             verify_songs=verify_songs,
             whole_albums=self.whole_albums(call, mode),
         )
+        if page.all_selected and not random and native is None:
+            # Cached membership must not freeze Navidrome's scan metadata or the
+            # caller's annotations. Keep the native page only when its identities
+            # and selected aggregate counts still agree with this selection.
+            read_call = representation(call)
+            if call.name == "getIndexes":
+                read_call = changed(read_call, {"ifModifiedSince": "0"})
+            native = await raw_library_answer(self.upstream, read_call, max_bytes=32 << 20)
+            found = await native.parsed(container) if native else None
+            if found is None:
+                raise IndexFailed("The native library page is unavailable.")
+            native_rows = list(found[1].get(field) or [])
+            if call.name in ("getArtists", "getIndexes"):
+                native_rows = [
+                    artist
+                    for group in found[1].get("index", [])
+                    for artist in group.get("artist", [])
+                ]
+            if not same_native_rows(page.rows, native_rows):
+                native = None
         if native is not None and page.all_selected:
             if call.fmt == "jsonp":
                 found = await native.parsed(container)
                 assert found is not None
                 return response(call, 200, found[0]["subsonic-response"], total=page.total)
-            return selected_native(native, page.total)
+            return replace(selected_native(native, page.total), original_songs=page.original_songs)
         return self._render(call, page, container, field)
 
     async def _direct(
@@ -753,4 +791,23 @@ class Visibility:
             out an item the library has only when its library copy is among them."""
             return await self.index.shown(binding, mode, kind, idents)
 
+        if pages and all(page.all_selected for page in pages):
+            native = await raw_library_answer(
+                self.upstream, representation(call), max_bytes=32 << 20
+            )
+            found = await native.parsed(container) if native else None
+            if found is not None and all(
+                same_native_rows(page.rows, found[1].get(kind) or [])
+                for (_, kind, _, _), page in zip(requests, pages, strict=True)
+            ):
+                if call.fmt == "jsonp":
+                    return response(
+                        call,
+                        200,
+                        found[0]["subsonic-response"],
+                        original_songs=originals,
+                        shown=shown,
+                    )
+                assert native is not None
+                return replace(selected_native(native, None), original_songs=originals, shown=shown)
         return response(call, 200, root, original_songs=originals, shown=shown)

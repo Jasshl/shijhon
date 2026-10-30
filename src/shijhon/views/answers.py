@@ -18,8 +18,16 @@ import httpx
 
 from shijhon.proxy import xmlform
 from shijhon.proxy.app import Reply
+from shijhon.proxy.auth import Caller
 from shijhon.proxy.params import RestCall, header
-from shijhon.proxy.upstream import HOP_BY_HOP, Receive, Send, Upstream, request_headers, send_bytes
+from shijhon.proxy.upstream import (
+    Receive,
+    Send,
+    Upstream,
+    request_headers,
+    response_headers,
+    send_bytes,
+)
 
 log = logging.getLogger(__name__)
 # A selected view's check of library items: (kind - "song" or "album" -, IDs) -> those of
@@ -190,9 +198,11 @@ async def captured(reply: Reply) -> LibraryAnswer:
     )
 
 
-async def library_answer(upstream: Upstream, call: RestCall) -> LibraryAnswer | None:
+async def library_answer(
+    upstream: Upstream, call: RestCall, *, caller: Caller | None = None
+) -> LibraryAnswer | None:
     if upstream.library_answer is not None:
-        selected = await upstream.library_answer(call)
+        selected = await upstream.library_answer(call, caller=caller)
         if selected is not None:
             return selected
     return await raw_library_answer(upstream, call)
@@ -224,5 +234,5 @@ async def raw_library_answer(
     except httpx.HTTPError as exc:
         log.warning("navidrome unreachable: %s", type(exc).__name__)
         return None
-    headers = [(k, v) for k, v in response.headers.raw if k.lower() not in HOP_BY_HOP]
+    headers = response_headers(response)
     return LibraryAnswer(response.status_code, headers, body)

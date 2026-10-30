@@ -661,7 +661,7 @@ def test_recreated_username_cannot_read_previous_owner_history(
         assert browser.sign_in("helper", "invented-helper-password").status_code == 303
         assert "private-old-history" not in browser.get("playlists").text
         assert "Private old mix" not in browser.get(f"playlists/{mix}").text
-        assert browser.post("playlists/disconnect", {"csrf": browser.csrf()}).status_code == 303
+        assert browser.post("playlists/forget", {"csrf": browser.csrf()}).status_code == 303
         assert world.server.call(lambda: service.repo.connection("old-helper-id")) is not None
         connected = browser.submit(
             "playlists",

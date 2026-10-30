@@ -2,11 +2,13 @@
 
 The SDK validates clients, redirects and S256 PKCE. This provider binds every
 authorization to this installation and a freshly checked native owner. Only
-credential hashes are retained for codes, browser flows and bearer tokens.
+credential hashes are persisted for codes, browser flows and bearer tokens;
+rotated pairs remain briefly in memory for idempotent refresh retries.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import secrets
@@ -24,10 +26,11 @@ from mcp.server.auth.provider import (
     RefreshToken,
     RegistrationError,
     TokenError,
+    TokenErrorCode,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
-from shijhon.playlists.model import PlaylistError
+from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 from shijhon.playlists.requests import RequestError, digest
 from shijhon.playlists.service import Playlists
 
@@ -41,6 +44,9 @@ SCOPES = {
 }
 ACCESS_SECONDS = 3600
 REFRESH_SECONDS = 30 * 86400
+# Enough for overlapping requests and an immediate lost-response retry, while
+# limiting how long possession of a spent credential can recover its successor.
+REFRESH_REPLAY_SECONDS = 20
 FLOW_SECONDS = 600
 CODE_SECONDS = 120
 
@@ -60,6 +66,11 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
         self.issuer = self.base + "/shijhon/agents"
         self.resource = self.base + "/shijhon/mcp"
         self.registration_lock = anyio.Lock()
+        self._refresh_replays: dict[str, tuple[float, OAuthToken]] = {}
+
+    def _forget_refresh_replay(self, ident: str, replay: tuple[float, OAuthToken]) -> None:
+        if self._refresh_replays.get(ident) is replay:
+            del self._refresh_replays[ident]
 
     async def clean(self) -> None:
         now = time.time()
@@ -156,12 +167,27 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
             raise RequestError("This sign-in expired. Connect your agent again.", 400)
         return dict(row)
 
+    async def consent_scopes(self, flow: dict[str, Any], owner: str) -> list[str]:
+        params = AuthorizationParams.model_validate_json(flow["params"])
+        existing = await self.store.fetchone(
+            "SELECT scopes FROM playlist_agent_tokens"
+            " WHERE owner=? AND library=? AND oauth_client=? AND revoked=0",
+            [owner, self.service.requests.library, flow["client"]],
+        )
+        return list(
+            dict.fromkeys(
+                [*(json.loads(existing["scopes"]) if existing else []), *(params.scopes or [])]
+            )
+        )
+
     async def approve(self, raw: str, owner: str, scopes: list[str]) -> str:
         flow = await self.flow(raw)
         params = AuthorizationParams.model_validate_json(flow["params"])
+        if flow["owner"] and flow["owner"] != owner:
+            raise RequestError("This consent belongs to another account.", 403)
         if params.resource != self.resource:
             raise RequestError("This installation's address changed. Connect your agent again.")
-        if not scopes or not set(scopes) <= set(params.scopes or []):
+        if not scopes or not set(scopes) <= set(await self.consent_scopes(flow, owner)):
             raise RequestError("Choose only the permissions this connection requested.")
         await self.service.connection(owner)
         client = await self.get_client(flow["client"])
@@ -248,37 +274,88 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
             if not grant or grant["revoked"] or grant["library"] != self.service.requests.library:
                 raise PlaylistError("Connection unavailable.")
             await self.service.connection(grant["owner"])
+        except UpstreamUnavailable:
+            raise
         except PlaylistError:
             raise TokenError("invalid_grant", "Reconnect this agent.") from None
-        access, refresh = secrets.token_urlsafe(48), secrets.token_urlsafe(48)
-        now = time.time()
+        issued: OAuthToken | None = None
         error = ""
+        error_code: TokenErrorCode = "invalid_grant"
         async with self.store.transaction() as db:
+            now = time.time()
             fresh = await (
                 await db.execute(
-                    "SELECT revoked,scopes FROM playlist_agent_tokens WHERE id=?", [grant_id]
+                    "SELECT g.revoked,g.scopes FROM playlist_agent_tokens g"
+                    " JOIN agent_oauth_clients c ON c.id=g.oauth_client"
+                    " WHERE g.id=? AND c.id=?",
+                    [grant_id, client_id],
                 )
             ).fetchone()
-            if not fresh or fresh["revoked"] or not set(scopes) <= set(json.loads(fresh["scopes"])):
+            if not fresh or fresh["revoked"]:
                 error = "Reconnect this agent."
             else:
+                permitted = set(scopes) <= set(json.loads(fresh["scopes"]))
                 kind, ident = consume
                 if kind == "code":
-                    result = await db.execute(
-                        "DELETE FROM agent_oauth_codes WHERE id=? AND expires>?", [ident, now]
-                    )
-                else:
-                    result = await db.execute(
-                        "UPDATE agent_oauth_tokens SET used=? WHERE id=? AND used=0 AND expires>?",
-                        [now, ident, now],
-                    )
-                if result.rowcount != 1:
-                    error = "This credential has already been used."
-                    if kind == "refresh":
-                        await db.execute(
-                            "UPDATE playlist_agent_tokens SET revoked=? WHERE id=?", [now, grant_id]
+                    if not permitted:
+                        error = "Reconnect this agent."
+                    else:
+                        result = await db.execute(
+                            "DELETE FROM agent_oauth_codes WHERE id=? AND expires>?", [ident, now]
                         )
-            if not error:
+                        if result.rowcount != 1:
+                            error = "This credential has already been used."
+                else:
+                    credential = await (
+                        await db.execute(
+                            "SELECT used,scopes FROM agent_oauth_tokens"
+                            " WHERE id=? AND kind='refresh'"
+                            " AND client=? AND grant_id=? AND resource=? AND expires>?",
+                            [ident, client_id, grant_id, self.resource, now],
+                        )
+                    ).fetchone()
+                    if not credential:
+                        error = "Reconnect this agent."
+                    elif credential["used"]:
+                        replay = self._refresh_replays.get(ident)
+                        if (
+                            replay
+                            and now < credential["used"] + REFRESH_REPLAY_SECONDS
+                            and time.monotonic() < replay[0]
+                        ):
+                            successor = await (
+                                await db.execute(
+                                    "SELECT used FROM agent_oauth_tokens"
+                                    " WHERE id=? AND kind='refresh' AND expires>?",
+                                    [digest(replay[1].refresh_token or ""), now],
+                                )
+                            ).fetchone()
+                            if not successor or successor["used"]:
+                                error = "This refresh has already been superseded."
+                            elif not permitted:
+                                error = "Reconnect this agent."
+                            elif set(scopes) != set((replay[1].scope or "").split()):
+                                error_code = "invalid_scope"
+                                error = "Retry a refresh with the same permissions."
+                            else:
+                                issued = replay[1].model_copy()
+                        else:
+                            error = "This credential has already been used."
+                            await db.execute(
+                                "UPDATE playlist_agent_tokens SET revoked=? WHERE id=?",
+                                [now, grant_id],
+                            )
+                    elif not set(scopes) <= set(json.loads(credential["scopes"])):
+                        error_code = "invalid_scope"
+                        error = "Refresh cannot add permissions."
+                    elif not permitted:
+                        error = "Reconnect this agent."
+                    else:
+                        await db.execute(
+                            "UPDATE agent_oauth_tokens SET used=? WHERE id=?", [now, ident]
+                        )
+            if not error and issued is None:
+                access, refresh = secrets.token_urlsafe(48), secrets.token_urlsafe(48)
                 await db.execute(
                     "DELETE FROM agent_oauth_tokens WHERE grant_id=? AND kind='access'", [grant_id]
                 )
@@ -299,16 +376,27 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
                             now + seconds,
                         ],
                     )
+                issued = OAuthToken(
+                    access_token=access,
+                    refresh_token=refresh,
+                    expires_in=ACCESS_SECONDS,
+                    scope=" ".join(scopes),
+                )
+                if consume[0] == "refresh":
+                    # Publish under the DB lock: the next exchange must see this
+                    # pair when it sees used!=0. A rollback cannot replay it because
+                    # the persisted credential remains unused. Never persist plaintext.
+                    replay = (time.monotonic() + REFRESH_REPLAY_SECONDS, issued.model_copy())
+                    self._refresh_replays[consume[1]] = replay
+                    asyncio.get_running_loop().call_later(
+                        REFRESH_REPLAY_SECONDS, self._forget_refresh_replay, consume[1], replay
+                    )
         # SDK exceptions are frozen dataclasses. Raise outside the async-generator
         # transaction context, and keep replay revocation committed.
         if error:
-            raise TokenError("invalid_grant", error)
-        return OAuthToken(
-            access_token=access,
-            refresh_token=refresh,
-            expires_in=ACCESS_SECONDS,
-            scope=" ".join(scopes),
-        )
+            raise TokenError(error_code, error)
+        assert issued is not None
+        return issued
 
     async def exchange_authorization_code(
         self,
@@ -330,18 +418,31 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
         refresh_token: str,
     ) -> Refresh | None:
         ident = digest(refresh_token)
-        row = await self.store.fetchone(
-            "SELECT * FROM agent_oauth_tokens WHERE id=? AND kind='refresh' AND client=?",
-            [ident, client.client_id],
-        )
-        if not row or row["expires"] <= time.time() or row["resource"] != self.resource:
-            return None
-        if row["used"]:
-            await self.store.execute(
-                "UPDATE playlist_agent_tokens SET revoked=? WHERE id=?",
-                [time.time(), row["grant_id"]],
-            )
-            return None
+        async with self.store.transaction() as db:
+            row = await (
+                await db.execute(
+                    "SELECT * FROM agent_oauth_tokens WHERE id=? AND kind='refresh' AND client=?",
+                    [ident, client.client_id],
+                )
+            ).fetchone()
+            now = time.time()
+            if not row or row["expires"] <= now or row["resource"] != self.resource:
+                return None
+            replay = self._refresh_replays.get(ident)
+            if row["used"] and not (
+                replay
+                and now < row["used"] + REFRESH_REPLAY_SECONDS
+                and time.monotonic() < replay[0]
+            ):
+                # The SDK checks scopes before exchange. Recognize spent-token
+                # reuse here too, so a wider scope cannot hide its revocation signal.
+                await db.execute(
+                    "UPDATE playlist_agent_tokens SET revoked=? WHERE id=?",
+                    [now, row["grant_id"]],
+                )
+                return None
+        # In-window used credentials reach exchange too: check their live successor
+        # atomically with rotation. Preloaded credentials also recheck replay/reuse.
         return Refresh(
             token=ident,
             client_id=client.client_id,
@@ -357,8 +458,6 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
         refresh_token: Refresh,
         scopes: list[str],
     ) -> OAuthToken:
-        if not set(scopes) <= set(refresh_token.scopes):
-            raise TokenError("invalid_scope", "Refresh cannot add permissions.")
         return await self._issue(
             client.client_id,
             refresh_token.grant_id,
@@ -396,9 +495,11 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
                 or dict(fresh) != dict(grant)
                 or not current
                 or dict(current) != dict(row)
-                or await self.service.repo.connection(grant["owner"]) != connection
+                or not connection.same_settings(await self.service.repo.connection(grant["owner"]))
             ):
                 return None
+        except UpstreamUnavailable:
+            raise
         except PlaylistError:
             return None
         return AccessToken(

@@ -42,8 +42,9 @@ playlist, downloaded it or got it in a playlist Shijhon made for you (**Shijhon 
 To upload your own music files, enable the optional
 [music-import storage](deployment.md) and open **Collection → Import music**.
 An administrator first reviews who imported the existing server music. After
-that setup, new accounts start empty; each person's uploads join their Original
-and All libraries. Other people can choose shared music without receiving import credit.
+that setup, new accounts start empty; each person's uploads join their
+**Original imported library** and **All**. Other people can choose shared music without
+receiving import credit.
 
 The connection is not encrypted, as with a plain Navidrome, so this is for a network you
 trust. For access from outside, put a TLS reverse proxy in front
@@ -108,7 +109,7 @@ The same installation, from `packaging/`.
    until docker compose logs navidrome | grep -q "server is ready"; do sleep 1; done
    docker compose run --rm -it navidrome user create -u shijhon --admin
    docker compose run --rm -it navidrome user create -u yourname --admin
-   read -rs pw && printf '%s\n' "$pw" > config/navidrome-password && unset pw
+   (umask 077; read -rs pw && printf '%s\n' "$pw" > config/navidrome-password && unset pw)
    chmod 600 config/navidrome-password
    ```
 

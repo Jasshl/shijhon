@@ -61,6 +61,10 @@ class PlaylistError(Exception):
     """Only fixed, safe messages reach the dashboard; never remote error bodies."""
 
 
+class UpstreamUnavailable(PlaylistError):
+    """Native authorization could not be checked due to an upstream failure."""
+
+
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True, allow_inf_nan=False)
 
@@ -99,6 +103,16 @@ class Connection(Model):
         ):
             raise ValueError("invalid runner model")
         return self
+
+    def same_settings(self, other: Connection | None) -> bool:
+        """Fresh salted native credentials do not change the owner's playlist choices.
+
+        Navidrome accepts earlier token/salt pairs after login, so in-flight work can
+        keep its pair. Every native call still verifies credentials and current grants.
+        """
+        return other is not None and self.model_dump(exclude={"token", "salt"}) == other.model_dump(
+            exclude={"token", "salt"}
+        )
 
     def stored(self) -> str:
         data = self.model_dump(mode="json")

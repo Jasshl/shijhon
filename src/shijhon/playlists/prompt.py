@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
@@ -197,6 +198,7 @@ async def context(
     history: bool,
     library: bool,
     limit: int = 100,
+    history_days: int | None = None,
     authorize: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """No broad library/history reads unless each influence was explicitly enabled."""
@@ -211,7 +213,8 @@ async def context(
         listens, _ = await service.history.sync(connection, authorize=authorize)
         await check()
         # Aggregated music names, with no timeline, account name or credentials.
-        counts = Counter((s["artist"], s["title"]) for s in listens)
+        since = time.time() - history_days * 86400 if history_days is not None else 0
+        counts = Counter((s["artist"], s["title"]) for s in listens if s.get("at", 0) >= since)
         result["history"] = [
             {"artist": a, "title": t, "listens": n} for (a, t), n in counts.most_common(limit)
         ]

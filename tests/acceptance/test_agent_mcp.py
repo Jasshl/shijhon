@@ -76,6 +76,16 @@ def test_official_client_discovers_oauth_and_completes_browser_consent(
                         "scope_status": "true",
                     },
                 )
+                assert response.status_code == 200 and 'class="agent-permissions"' in response.text
+                response = await browser.post(
+                    location,
+                    data={
+                        "csrf": csrf[1],
+                        "action": "allow",
+                        "scope_create": "true",
+                        "scope_status": "true",
+                    },
+                )
                 query = parse_qs(urlsplit(callback_target(response)).query)
                 callback = AuthorizationCodeResult(
                     **{key: values[0] for key, values in query.items()}
@@ -110,6 +120,27 @@ def test_official_client_discovers_oauth_and_completes_browser_consent(
             assert not info.is_error
             assert storage.tokens and storage.tokens.refresh_token
             assert info.structured_content["features"]["agent_curated_playlist"]["ready"]
+            previous = storage.tokens
+            auth.context.token_expiry_time = time.time() - 1
+            refreshed = await session.call_tool("get_capabilities")
+            assert not refreshed.is_error
+            assert storage.tokens.access_token != previous.access_token
+            assert storage.tokens.refresh_token != previous.refresh_token
+            # A lost-response retry recovers what the SDK now uses, without
+            # invalidating its connection or requiring another consent flow.
+            async with httpx.AsyncClient() as retry_client:
+                retry = await retry_client.post(
+                    w.server.base_url + "/shijhon/agents/token",
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": storage.client.client_id,
+                        "refresh_token": previous.refresh_token,
+                        "resource": url,
+                    },
+                )
+            assert retry.status_code == 200, retry.text
+            assert OAuthToken.model_validate(retry.json()) == storage.tokens
+            assert not (await session.call_tool("get_capabilities")).is_error
 
     anyio.run(run)
 

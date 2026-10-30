@@ -897,3 +897,169 @@ async def test_a_search_answered_directly_lets_a_build_finish_only_while_awaited
         await until(lambda: cancelled == ["abandoned", "given up"] and not index.jobs)
         assert index.waiting == {} and index.job_lanes == {}
         await index.close()
+
+
+@pytest.mark.anyio
+async def test_stale_ready_view_survives_a_full_build_queue(tmp_path):
+    collection = tmp_path / "collection.sqlite3"
+    rows = seed(collection, 3)
+    binding = Binding("one", frozenset({"1"}), (("1", "gen"),))
+
+    async def fetch(start, limit):
+        return SourcePage(rows, len(rows))
+
+    async with anyio.create_task_group() as group:
+        index = QueryIndex(tmp_path / "cache" / "db", collection, group.start_soon)
+        key = await index.ensure(binding, "songs", fetch, valid)
+        await index.invalidate()
+        index.attempted.clear()
+        # Queued jobs need not have begun their upstream reads yet.
+        index.jobs.update(
+            {
+                f"queued-{i}": (anyio.Event(), anyio.CancelScope())
+                for i in range(index.budgets.workers * 4)
+            }
+        )
+        try:
+            assert await index.ensure(binding, "songs", fetch, valid) == key
+            assert (await index.page(key, binding, "song", None, 0, 10)).total == 1
+            with pytest.raises(IndexPending):
+                await index.ensure(binding, "new-query", fetch, valid)
+        finally:
+            index.jobs.clear()
+            await index.close()
+
+
+@pytest.mark.anyio
+async def test_annotation_changes_retire_only_filtered_answers_and_stop_old_builds(tmp_path):
+    collection = tmp_path / "collection.sqlite3"
+    rows = seed(collection, 3)
+    one = Binding("one", frozenset({"1"}), (("1", "gen"),))
+    two = replace(one, owner_id="two")
+    annotations = {"starred": False, "userRating": 0, "playCount": 0}
+    started = anyio.Event()
+    filtered = ("getAlbumList2", (("type", "starred"),))
+
+    async def fetch(start, limit):
+        return SourcePage([{**r, **annotations} for r in rows], len(rows))
+
+    async def old(start, limit):
+        snapshot = [{**r, **annotations} for r in rows]
+        started.set()
+        await anyio.sleep_forever()
+        return SourcePage(snapshot, len(snapshot))
+
+    async with anyio.create_task_group() as group:
+        index = QueryIndex(tmp_path / "cache" / "db", collection, group.start_soon)
+        key = await index.ensure(one, "songs", fetch, valid)
+        other = await index.ensure(two, "songs", fetch, valid)
+        with pytest.raises(IndexPending):
+            await index.ensure(one, filtered, old, valid, wait=False)
+        await started.wait()
+        annotations.update(starred=True, userRating=4, playCount=1)
+        await index.annotations_changed("one")
+        assert not index.jobs
+        assert await index.has_ready(one, "songs")
+        assert not await index.has_ready(one, filtered)
+        assert await index.has_ready(two, "songs")
+        assert (await index.page(other, two, "song", None, 0, 10)).rows[0]["starred"] is False
+        key = await index.ensure(one, filtered, fetch, valid)
+        page = await index.page(key, one, "song", None, 0, 10)
+        assert all(page.rows[0][k] == v for k, v in annotations.items())
+        await index.close()
+
+
+@pytest.mark.anyio
+async def test_play_count_refresh_keeps_browsing_ready_during_scrobble(tmp_path):
+    collection = tmp_path / "collection.sqlite3"
+    rows = seed(collection, 3)
+    binding = Binding("one", frozenset({"1"}), (("1", "gen"),))
+    started, release = anyio.Event(), anyio.Event()
+
+    async def initial(start, limit):
+        return SourcePage(rows, len(rows))
+
+    async def refresh(start, limit):
+        started.set()
+        await release.wait()
+        return SourcePage([{**r, "playCount": 1} for r in rows], len(rows))
+
+    async with anyio.create_task_group() as group:
+        index = QueryIndex(tmp_path / "cache" / "db", collection, group.start_soon)
+        key = await index.ensure(binding, "songs", initial, valid)
+        await index.invalidate("one")
+        index.attempted.clear()
+        assert await index.ensure(binding, "songs", refresh, valid) == key
+        await started.wait()
+        await index.invalidate("one")
+        with anyio.fail_after(1):
+            assert await index.ensure(binding, "songs", refresh, valid) == key
+            assert (await index.page(key, binding, "song", None, 0, 10)).total == 1
+        release.set()
+        await until(lambda: not index.jobs)
+        assert (await index.page(key, binding, "song", None, 0, 10)).rows[0]["playCount"] == 1
+        await index.close()
+
+
+@pytest.mark.anyio
+async def test_annotation_cancel_does_not_wait_for_cleanup_or_block_other_owners(tmp_path):
+    collection = tmp_path / "collection.sqlite3"
+    rows = seed(collection, 3)
+    one = Binding("one", frozenset({"1"}), (("1", "gen"),))
+    two = replace(one, owner_id="two")
+    started, cancelled, release = anyio.Event(), anyio.Event(), anyio.Event()
+    query = ("getAlbumList2", (("type", "starred"),))
+
+    async def old(start, limit):
+        started.set()
+        try:
+            await anyio.sleep_forever()
+        finally:
+            with anyio.CancelScope(shield=True):
+                cancelled.set()
+                await release.wait()
+
+    async def fetch(start, limit):
+        return SourcePage(rows, len(rows))
+
+    async with anyio.create_task_group() as group:
+        index = QueryIndex(tmp_path / "cache" / "db", collection, group.start_soon)
+        with pytest.raises(IndexPending):
+            await index.ensure(one, query, old, valid, wait=False)
+        await started.wait()
+        with anyio.fail_after(1):
+            await index.annotations_changed("one")
+            await cancelled.wait()
+            await index.ensure(two, "songs", fetch, valid)
+            await index.ensure(one, query, fetch, valid)
+        release.set()
+        await index.close()
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        ("getAlbumList2", (("type", "starred"),)),
+        ("getAlbumList", (("type", "highest"),)),
+        ("getAlbumList2", (("type", "frequent"),)),
+        ("getAlbumList2", (("type", "recent"),)),
+        ("native", "song", (("starred", "true"),)),
+        ("native", "album", (("_sort", "rating"),)),
+    ],
+)
+@pytest.mark.anyio
+async def test_retired_filtered_generation_cannot_publish_after_annotation_write(tmp_path, query):
+    collection = tmp_path / "collection.sqlite3"
+    rows = seed(collection, 3)
+    binding = Binding("one", frozenset({"1"}), (("1", "gen"),))
+    from shijhon.collection.query_index import annotation_filtered
+
+    index = QueryIndex(tmp_path / "cache" / "db", collection, lambda job: None)
+    await index.open()
+    assert annotation_filtered(query)
+    index._begin("staging", binding, True)
+    index._append("staging", 0, SourcePage(rows, len(rows)))
+    await index.annotations_changed("one")
+    index._publish("staging", binding.key(query), binding)
+    assert not await index.has_ready(binding, query)
+    await index.close()

@@ -60,14 +60,16 @@ class LibraryArtists:
 
     async def entries(self) -> dict[str, dict[str, Any]]:
         """Folded artist name -> Navidrome's entry for that artist."""
-        if self._entries is not None and self.clock() < self._until:
-            return self._entries
+        if self.clock() < self._until:
+            return self._entries or {}
         if self._entries is not None and self.spawn is not None:
             if not self._lock.locked():
                 self.spawn(self._refresh)
             return self._entries  # the old index while a new one is fetched
-        with anyio.move_on_after(self.first_wait):
+        with anyio.move_on_after(self.first_wait) as scope:
             await self._refresh()
+        if scope.cancel_called:
+            self._until = self.clock() + self.retry_seconds
         return self._entries or {}
 
     def forget(self) -> None:
@@ -77,7 +79,7 @@ class LibraryArtists:
 
     async def _refresh(self) -> None:
         async with self._lock:
-            if self._entries is not None and self.clock() < self._until:
+            if self.clock() < self._until:
                 return
             generation = self._generation
             try:

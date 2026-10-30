@@ -18,7 +18,8 @@ your Navidrome / Subsonic apps ──► Shijhon ──► Navidrome ──► y
                                       └──► add-ons      (audio for catalog tracks)
 ```
 
-- Search results and artist pages include catalog releases next to your own albums.
+- Once you add a catalog, search results and artist pages include its releases next to
+  your own albums.
 - An album you have only part of shows as one complete album, once it is matched with the
   catalog.
 - Catalog tracks play through your add-ons. Once you use one, it becomes a normal
@@ -43,7 +44,7 @@ git clone https://github.com/Jasshl/shijhon && cd shijhon
 
 The script asks where your music is and for a username and a password for your own
 account, starts Navidrome and Shijhon, and prints the address your apps connect to. On
-Windows, run it inside WSL. Then add a catalog ([catalogs](docs/catalogs.md)) and
+Windows, run it inside WSL (untested). Then add a catalog ([catalogs](docs/catalogs.md)) and
 add-ons ([add-ons](docs/add-ons.md)); without an add-on, catalog tracks show but do not
 play.
 
@@ -77,7 +78,7 @@ play.
 
 ## Status
 
-Shijhon is in beta (0.2.1), tested with Navidrome 0.64.2. The configuration and the
+Shijhon is in beta (0.3.0), tested with Navidrome 0.64.2. The configuration and the
 database can change between beta versions; the database migrates itself at startup, so
 keep a backup from before an upgrade. What changed is in [CHANGELOG.md](CHANGELOG.md).
 

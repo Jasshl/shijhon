@@ -91,9 +91,7 @@ COMMITS: dict[str, tuple[str, ...]] = {
     "createShare": ("id",),
 }
 _PARALLEL = 4  # releases materialized at the same time for one request
-REFUSED_DOWNLOAD = (
-    "downloading a whole album, artist or playlist with catalog tracks is not supported"
-)
+REFUSED_DOWNLOAD = "downloading a whole album or artist with catalog tracks is not supported"
 
 
 # (call, context, catalog song) -> the song served from the add-ons; None: commit first
@@ -278,9 +276,10 @@ class Commits:
             return
         keys = _ALBUM_ACTIONS[method]
         albums = {v for k, v in call.params if k in keys and "." not in v and v}
-        pending = [a for a in sorted(albums) if await self.owned.pending(a)]
-        if pending and await ctx.caller() is not None:
-            for album_id in pending:
+        if not albums or await ctx.caller() is None:
+            return
+        for album_id in sorted(albums):
+            if await self.owned.pending(album_id):
                 await self.owned.fill_album(album_id, method)
 
     async def _queue(
@@ -552,6 +551,7 @@ class Commits:
                 "search3",
                 [
                     ("query", artist.name),
+                    ("musicFolderId", str(self.navidrome.library_id)),
                     ("artistCount", "20"),
                     ("albumCount", "0"),
                     ("songCount", "0"),

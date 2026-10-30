@@ -260,3 +260,9 @@ def test_a_reading_of_anyone_overtaken_by_a_change_is_never_kept(
             await store.close()
 
     anyio.run(main)
+
+
+@pytest.mark.parametrize("codec", ["AAC", "mp3", "opus", "vorbis", "wma"])
+def test_a_native_lossy_codec_with_a_bit_depth_stays_below_the_minimum(codec: str) -> None:
+    quality = native_quality({"suffix": "m4a", "codec": codec, "bitDepth": 16, "bitRate": 128})
+    assert not quality.lossless and not DEFAULT.met_by(quality)

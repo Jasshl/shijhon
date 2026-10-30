@@ -69,8 +69,13 @@ def test_invalid_input_is_rejected_without_silently_dropping_rows(
 
 
 def test_bounded_multipart_and_urlencoded_form_reader() -> None:
-    async def endpoint(request: Request) -> JSONResponse:
-        return JSONResponse(await read_form(request))
+    async def endpoint(request: Request):
+        from shijhon.dashboard.app import Refused
+
+        try:
+            return JSONResponse(await read_form(request))
+        except Refused as refused:
+            return refused.response
 
     async def run() -> None:
         app = Starlette(routes=[Route("/", endpoint, methods=["POST"])])
@@ -286,5 +291,31 @@ def test_failed_native_authorization_does_not_render_private_import_evidence(
             context = render.call_args.kwargs
             assert context["shown"] is None and context["listing"] == []
             assert context["error"] == "Reconnect your account."
+
+    anyio.run(run)
+
+
+def test_import_without_a_run_shows_the_normal_error_notice(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with service_at(tmp_path / "db") as service:
+            ident = await service.imports.create("owner", "no-run-key", "Quiet", "A — One")
+            await service.repo.store.execute("DELETE FROM playlist_runs WHERE mix=?", [ident])
+            dashboard = SimpleNamespace(
+                services=SimpleNamespace(playlists=service),
+                _render=AsyncMock(return_value=HTMLResponse("Imports")),
+            )
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path_params": {"ident": ident},
+                    "query_string": b"",
+                }
+            )
+            response = await Pages(dashboard).detail(request, SimpleNamespace(user_id="owner"))
+            assert response.status_code == 200
+            values = dashboard._render.call_args.kwargs
+            assert values["shown"] is None
+            assert "no current run" in values["error"]
 
     anyio.run(run)

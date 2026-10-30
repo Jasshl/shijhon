@@ -112,6 +112,7 @@ from shijhon.matching.matcher import (
     confirm,
     displaced,
     doubled,
+    editions_agree,
     owned_fingerprint,
     unfit,
 )
@@ -590,9 +591,7 @@ class Fills:
                     "the owned files' track totals say every track is there",
                     category="owned_complete",
                 )
-            if owned.clean is not None and (
-                (owned.clean and release.explicit) or (not owned.clean and release.clean)
-            ):
+            if not editions_agree(owned, release):
                 raise ChoiceRefused(
                     "the exact release has a different clean or explicit edition",
                     category="owned_incompatible",

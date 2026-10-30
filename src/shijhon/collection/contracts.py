@@ -131,7 +131,7 @@ class Query:
     # import was linked to) and "catalog" (every other song). 'original', 'own' and
     # 'shared' remain only for the recorded changes that used them.
     origin: Literal["all", "imported", "catalog", "original", "own", "shared"] = "all"
-    sort: Literal["title", "artist", "newest"] = "artist"
+    sort: Literal["title", "artist"] = "artist"
     album_id: str = ""
     artist_id: str = ""
     offset: int = 0
@@ -146,7 +146,7 @@ class Query:
             or self.pool not in ("personal", "server")
             or self.scope not in ("song", "album", "artist")
             or self.origin not in ("all", "imported", "catalog", "original", "own", "shared")
-            or self.sort not in ("title", "artist", "newest")
+            or self.sort not in ("title", "artist")
             or not 1 <= self.limit <= 100
             or not 0 <= self.offset <= 10_000_000
             or len(self.search) > 200

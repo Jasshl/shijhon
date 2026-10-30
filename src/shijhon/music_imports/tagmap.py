@@ -716,10 +716,10 @@ def replace_album(audio: Any, tags: Any, kind: str, wanted: Mapping[str, Sequenc
         if not texts:
             continue
         logical = tagging.VORBIS_KEY.get(name, name)
-        if kind == "mp4" and logical == "date":
-            continue  # MPEG-4 has no recording date apart from its release date
+        if kind == "mp4" and logical in ("date", "releasedate"):
+            continue  # written together below, using the delivery writer's date mapping
         if kind == "asf" and logical == "date":
-            continue  # nor ASF: its year is read as the release date as well
+            continue  # ASF has no separate recording date; its year is also the release date
         place = _name(logical, kind)
         if not place:
             continue
@@ -739,6 +739,9 @@ def replace_album(audio: Any, tags: Any, kind: str, wanted: Mapping[str, Sequenc
                 tags[place] = texts
         else:
             tags[place] = texts
+
+    if kind == "mp4":
+        tagging.write_mp4_dates(tags, {tagging.VORBIS_KEY.get(k, k): v for k, v in wanted.items()})
 
 
 def save(audio: Any, tags: Any, fileobj: Any) -> None:

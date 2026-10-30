@@ -62,7 +62,7 @@ class Publisher:
 
     async def guard(self, connection: Connection, mix: dict[str, Any], ident: str) -> None:
         await self.imports.running(mix, ident, "publishing")
-        if await self.service.repo.connection(connection.user_id) != connection:
+        if not connection.same_settings(await self.service.repo.connection(connection.user_id)):
             raise PlaylistError("The connection changed. Retry with the current connection.")
         await self.service.requests.guard(mix)
 

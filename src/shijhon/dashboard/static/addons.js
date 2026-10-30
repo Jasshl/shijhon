@@ -198,12 +198,13 @@
     const to = cancelled ? from : drag.to;
     window.cancelAnimationFrame(frame);
     drag = null;
+    busy = true;
     chain.classList.remove("is-pulling");
     await settle(row, items, boxes, from, to);
     if (to !== from) {
       say(`${nameOf(row)} moved to place ${to + 1}`);
       await saveOrder();
-    }
+    } else busy = false;
   }
   chain.addEventListener("pointerup", () => release(false));
   chain.addEventListener("pointercancel", () => release(true));
@@ -216,8 +217,9 @@
 
   chain.addEventListener("submit", async (event) => {
     const move = event.target.closest(".source-move");
-    if (!move || busy || drag) return;
+    if (!move) return;
     event.preventDefault();
+    if (busy || drag) return;
     const button = event.submitter;
     const direction = button && button.value;
     const items = rows();
@@ -225,6 +227,7 @@
     const from = items.indexOf(row);
     const to = direction === "up" ? from - 1 : from + 1;
     if (to < 0 || to >= items.length) return;
+    busy = true;
     row.classList.add("is-lifted");
     await settle(row, items, items.map((item) => item.getBoundingClientRect()), from, to);
     // The press stays on its arrow, or on the other one where it can't go further.

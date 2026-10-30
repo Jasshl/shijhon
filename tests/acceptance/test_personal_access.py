@@ -518,7 +518,7 @@ def test_personal_requests_idempotency_status_and_disconnect_are_isolated(
             == 404
         )
         assert first.json()["id"] not in b.get("playlists/describe/" + first.json()["id"]).text
-        assert a.post("playlists/disconnect", {"csrf": a.csrf()}).status_code == 303
+        assert a.post("playlists/forget", {"csrf": a.csrf()}).status_code == 303
 
         async def verify() -> None:
             assert await service.repo.connection(owner(world, "listener-a")) is None

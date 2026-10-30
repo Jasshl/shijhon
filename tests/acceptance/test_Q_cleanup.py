@@ -282,7 +282,7 @@ def test_the_downloaded_audio_limits_are_set_here(world: DeliveryWorld, admin: B
         assert saved_rows(world, "delivery") == {"delivered_days": "14.0"}
         page = admin.get("cleanup").text
         # The expiry is built at startup.
-        assert "after Shijhon restarts: kept unused for (Cleanup)." in page
+        assert "after Shijhon restarts: Kept unused for (Cleanup)." in page
         assert 'name="delivered_days"' not in admin.get("playback").text
         bad = admin.submit("cleanup", {"delivered_gb": "-1"}, "cleanup/downloads")
         assert bad.status_code == 400 and "Not saved" in bad.text

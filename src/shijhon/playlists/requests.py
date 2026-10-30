@@ -7,10 +7,12 @@ import json
 import re
 import secrets
 import time
+from collections import Counter
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from shijhon.matching.normalize import fold
 from shijhon.playlists.edits import forget
 from shijhon.playlists.model import (
     LIBRARY_LOST,
@@ -89,6 +91,11 @@ class PlaylistRequest(Model):
             or self.save_instructions
         ):
             raise ValueError("explicit tracks must match count and cannot use context or recur")
+        if (
+            self.tracks
+            and max(Counter(fold(s.artist) for s in self.tracks).values()) > self.max_per_artist
+        ):
+            raise ValueError("explicit tracks exceed max_per_artist")
         if self.cadence != "manual" and not self.save_instructions:
             raise ValueError("refreshes need explicit saved instructions")
         self.definition()  # Validate the native playlist name too.
@@ -167,7 +174,7 @@ class Requests:
             "SELECT count(*) AS n FROM playlist_agent_tokens WHERE owner=? AND revoked=0", [owner]
         )
         if active and active["n"] >= 20:
-            raise RequestError("Revoke an existing agent key before creating another.")
+            raise RequestError("Revoke an existing agent connection before creating another.")
         raw = "sjp_" + secrets.token_urlsafe(48)
         scopes = [
             "create",
@@ -202,14 +209,14 @@ class Requests:
     async def grant(self, ident: str, scope: str) -> tuple[Connection, dict[str, Any]]:
         row = await self.store.fetchone("SELECT * FROM playlist_agent_tokens WHERE id=?", [ident])
         if not row or row["revoked"] or row["library"] != self.library:
-            raise RequestError("The agent key is invalid or revoked.", 401)
+            raise RequestError("The agent connection is invalid or revoked.", 401)
         if scope not in json.loads(row["scopes"]):
-            raise RequestError("This agent key does not grant that operation.", 403)
+            raise RequestError("This agent connection does not grant that operation.", 403)
         connection = await self.service.connection(row["owner"])
         # Native validation can wait while this grant is revoked.
         fresh = await self.store.fetchone("SELECT * FROM playlist_agent_tokens WHERE id=?", [ident])
         if not fresh or dict(fresh) != dict(row):
-            raise RequestError("The agent key is invalid or revoked.", 401)
+            raise RequestError("The agent connection is invalid or revoked.", 401)
         return connection, dict(fresh)
 
     async def guard(self, mix: dict[str, Any], data: dict[str, Any] | None = None) -> None:
@@ -235,6 +242,7 @@ class Requests:
             connection, grant = await self.grant(row["creator"], "create")
             if connection.user_id != mix["owner"]:
                 raise RequestError("This request belongs to another owner.", 403)
+            self.context_scopes(spec, {"scopes": row["scopes"]})
             self.context_scopes(spec, grant)
         else:
             await self.service.connection(mix["owner"])
@@ -242,7 +250,9 @@ class Requests:
     async def reads_library(self, ident: str) -> bool:
         """Whether request ``ident`` may now read the library beyond what it names: the
         owner's own requests always; an agent's while its grant includes library."""
-        row = await self.store.fetchone("SELECT creator FROM playlist_requests WHERE id=?", [ident])
+        row = await self.store.fetchone(
+            "SELECT creator,scopes FROM playlist_requests WHERE id=?", [ident]
+        )
         if row is None:
             return False
         if not row["creator"]:
@@ -251,7 +261,8 @@ class Requests:
             "SELECT * FROM playlist_agent_tokens WHERE id=?", [row["creator"]]
         )
         return bool(
-            grant
+            "library" in json.loads(row["scopes"])
+            and grant
             and not grant["revoked"]
             and grant["library"] == self.library
             and "library" in json.loads(grant["scopes"])
@@ -268,7 +279,9 @@ class Requests:
         if (spec.use_history and "history" not in scopes) or (
             reads_library and "library" not in scopes
         ):
-            raise RequestError("The requested context needs a separate agent key grant.", 403)
+            raise RequestError(
+                "The requested context needs a separate agent connection grant.", 403
+            )
 
     def usable_ai(self, connection: Connection) -> None:
         try:
@@ -283,6 +296,7 @@ class Requests:
         spec: PlaylistRequest,
         *,
         creator: str = "",
+        scopes: list[str] | None = None,
     ) -> tuple[str, bool]:
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
             raise RequestError("Send an Idempotency-Key of 8 to 128 plain characters.")
@@ -293,6 +307,9 @@ class Requests:
             _, grant = await self.grant(creator, "create")
             if grant["owner"] != owner:
                 raise RequestError("This request belongs to another owner.", 403)
+            if scopes is None or "create" not in scopes:
+                raise RequestError("The submitting token must grant playlist creation.", 403)
+            self.context_scopes(spec, {"scopes": json.dumps(scopes)})
             self.context_scopes(spec, grant)
         old = await self.store.fetchone(
             "SELECT * FROM playlist_requests WHERE owner=? AND request_key=?", [owner, key]
@@ -341,9 +358,19 @@ class Requests:
             )
             await db.execute(
                 "INSERT INTO playlist_requests"
-                " (id,owner,creator,library,request_key,input_hash,input,first_run)"
-                " VALUES (?,?,?,?,?,?,?,?)",
-                [ident, owner, creator, self.library, key, digest(canonical), canonical, run],
+                " (id,owner,creator,library,request_key,input_hash,input,first_run,scopes)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                [
+                    ident,
+                    owner,
+                    creator,
+                    self.library,
+                    key,
+                    digest(canonical),
+                    canonical,
+                    run,
+                    json.dumps(scopes or []),
+                ],
             )
         self.service.notify()
         return ident, True

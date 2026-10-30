@@ -2,16 +2,26 @@
 
 Optional [personal music-file imports](music-imports.md) need an additional
 dedicated writable directory. In Compose, provision `MUSIC_IMPORTS_DIR`, give
-`PUID:PGID` access, add it to `.env`, then include
-[`compose.imports.yaml`](../packaging/compose.imports.yaml):
+`PUID:PGID` access and add it to `packaging/.env`. Keep the
+[`compose.imports.yaml`](../packaging/compose.imports.yaml) overlay enabled by adding:
 
-```sh
-docker compose -f compose.yaml -f compose.imports.yaml up -d --build
+```dotenv
+COMPOSE_FILE=compose.yaml:compose.imports.yaml
 ```
 
-Use both files for later Compose operations. The overlay refuses a missing host
-directory, exposes published originals read-only to Navidrome and enables imports
-in Shijhon. Include this entire directory and Shijhon's state in backups; it must
+Then start from `packaging/`:
+
+```sh
+docker compose up -d --build
+```
+
+Compose and `./setup.sh` use this file set on later runs. If an existing project was
+started with `-f` instead, setup reads its containers' Compose file set and saves it in
+`packaging/.env` when no `COMPOSE_FILE` is specified. An explicit `COMPOSE_FILE` in the
+shell or `.env` takes precedence; keep the intended set in `.env` for future commands.
+The overlay refuses a missing host directory, exposes published originals read-only to
+Navidrome and enables imports in Shijhon. Include this entire directory and Shijhon's
+state in backups; it must
 not be treated as disposable catalog audio. Complete the reviewed administrator
 setup from **Collection → Import music** before accepting uploads.
 
@@ -26,7 +36,7 @@ catalog adapters and moving from an existing container installation.
 ## Starting from an existing Navidrome
 
 Shijhon's Navidrome can start from a copy of the one you run, keeping its users, IDs,
-playlists, favorites and play counts. These steps have not been tested with Compose yet.
+playlists, favorites and play counts.
 
 1. Write `.env` and the configuration as in the quick start's
    [steps by hand](quick-start.md#by-hand), steps 1 and 2. Start nothing yet.
@@ -204,10 +214,13 @@ account's Navidrome user name. It can run while Shijhon runs; other accounts nev
 (`--replace` gives them to another account instead), and `shijhon carry-over` alone shows
 them and who has them.
 
-This release's database is at schema 24: playlists, collections, music imports and agent
-access add tables, and cached album matches gain a matching revision and an
-owned-metadata fingerprint, so existing negative matches are checked again when an album
-is next considered by a view or the library pass. Keep a coordinated pre-upgrade backup of
+This release's database is at schema 31: playlists, collections, music imports and agent
+access add tables, discovery mixes remember their creation requests, agents' playlist
+requests keep the permissions they were made with, discarded import uploads are deleted
+through recorded steps, placeholders and track links gain release indexes, and cached
+album matches gain a matching revision and an owned-metadata fingerprint, so existing
+negative matches are checked again when an album is next considered by a view or the
+library pass. Keep a coordinated pre-upgrade backup of
 Shijhon's and Navidrome's databases and, with music imports enabled, the complete imports
 directory, including private retained originals. Older application versions refuse the
 newer schema; rollback requires coordinated recovery and review of activity since the
@@ -215,6 +228,18 @@ backup ([restoring a backup](reference/advanced-deployment.md#restoring-a-backup
 undo an import's removal, use its **Restore** instead. A pre-upgrade backup is a rollback
 option only before newer library, playlist, import or history activity; after that,
 reconcile the current data instead of restoring an older snapshot over it.
+
+On first start, import jobs are rebound using their verified library and imports root,
+including jobs blocked by earlier limit or local mount-path changes. Frozen reviews
+remain approvable. Migration `0029_import_received_cleanup.sql` records deletion of
+unpublished uploads; migrations 0030–0031 record cleanup refusals and visible destination
+names. Startup finishes pending deletions; the worker cleans other eligible stopped or
+finished jobs. Refused files retain their reservation and a recorded reason.
+
+Before upgrading, stop Shijhon and back up its state and entire imports root together.
+Deleted unpublished uploads require that backup to recover. To roll back before newer
+activity, restore the paired backup and its previous settings; older versions cannot
+use the converted bindings or newer schema.
 
 ### Docker Desktop on macOS and Windows
 

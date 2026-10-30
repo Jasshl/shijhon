@@ -315,6 +315,18 @@ async def test_upgrading_an_own_import_keeps_the_song(navidrome_factory, tmp_pat
     )
     status = await w.imports.status(ana, done["id"], overlap_only=True)
     assert all(i["upgraded"]["to"].startswith("FLAC") for i in status["items"])
+    # A later upgrade keeps the received original's receipt, as well as the first upgrade.
+    first_upgrade = await w.store.fetchone(
+        "SELECT * FROM music_import_items WHERE id=?", [items[1]["id"]]
+    )
+    assert await w.imports.upgrades.upgrade(ana, unused, fetched[0], got) == ""
+    second_upgrade = await w.store.fetchone(
+        "SELECT * FROM music_import_items WHERE id=?", [items[1]["id"]]
+    )
+    history = json.loads(second_upgrade["upgraded_from"])
+    assert history["staging"] == json.loads(first_upgrade["upgraded_from"])["staging"]
+    assert history["upgrades"][0]["staging"] == first_upgrade["staging_name"]
+    assert (await w.call("ana", "getSong", {"id": unused}))["song"]["id"] == unused
     # Removal takes the unused upgraded file out (the favorite keeps the other); restoring
     # puts the upgraded file back.
     other = await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?", [items[1]["id"]])
@@ -356,3 +368,28 @@ async def test_a_linked_song_is_not_upgraded_by_the_one_who_linked_it(navidrome_
     await w.caller.aclose()
     await w.imports.aclose()
     await w.store.close()
+
+
+async def test_installed_catalog_audio_is_not_pending_free_space(
+    navidrome_factory, tmp_path, monkeypatch
+):
+    from tests.acceptance.test_R_stops import _audio_ready
+
+    w, engine, song, _ = await _audio_ready(navidrome_factory(), tmp_path)
+    try:
+        await drain(w)
+        [link] = await w.store.fetchall("SELECT * FROM music_import_links")
+        assert link["reserved"] > 0 and (await engine.placeholder_row(song))["state"] == "delivered"
+        w.imports.limits = replace(w.imports.limits, min_free_bytes=10)
+        monkeypatch.setattr(w.imports.storage, "free", lambda: 15)
+        await w.imports._capacity(link["owner_id"], 5)
+        # Once taken out, the still-held reservation covers a future copy again.
+        await engine.revert_to_placeholder(song, pinned=link["item_id"])
+        from shijhon.music_imports import ImportError
+
+        with pytest.raises(ImportError, match="unreserved space"):
+            await w.imports._capacity(link["owner_id"], 5)
+    finally:
+        await w.caller.aclose()
+        await w.imports.aclose()
+        await w.store.close()

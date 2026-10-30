@@ -68,9 +68,17 @@ class Layout:
     def release_folder(self, ref: CatalogRef, artist: str, title: str) -> str:
         """Library-relative folder for a release."""
         digest = hashlib.sha256(str(ref).encode()).hexdigest()[:8]
-        folder = str(
-            PurePosixPath(self.folder, safe_name(artist), f"{safe_name(title)} [{digest}]")
-        )
+        artist_name = safe_name(artist)
+        if self.root.is_dir():
+            artist_name = next(
+                (
+                    p.name
+                    for p in sorted(self.root.iterdir())
+                    if p.is_dir() and p.name.casefold() == artist_name.casefold()
+                ),
+                artist_name,
+            )
+        folder = str(PurePosixPath(self.folder, artist_name, f"{safe_name(title)} [{digest}]"))
         self.contained(folder)
         return folder
 

@@ -10,12 +10,13 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import anyio
 import httpx
 
 if TYPE_CHECKING:
+    from shijhon.proxy.auth import Caller
     from shijhon.proxy.params import RestCall
     from shijhon.views.answers import LibraryAnswer
 
@@ -42,10 +43,27 @@ HOP_BY_HOP = {
 _REQUEST_DROP = HOP_BY_HOP | {b"content-length"}
 
 
+def connection_headers(headers: list[tuple[bytes, bytes]]) -> set[bytes]:
+    """Header names nominated as hop-by-hop by every Connection field."""
+    return {
+        token.strip().lower()
+        for name, value in headers
+        if name.lower() == b"connection"
+        for token in value.split(b",")
+        if token.strip()
+    }
+
+
+class LibraryView(Protocol):
+    async def __call__(
+        self, call: RestCall, *, caller: Caller | None = None
+    ) -> LibraryAnswer | None: ...
+
+
 def request_headers(
     headers: list[tuple[bytes, bytes]], *, keep_length: bool = False
 ) -> list[tuple[bytes, bytes]]:
-    drop = HOP_BY_HOP if keep_length else _REQUEST_DROP
+    drop = (HOP_BY_HOP if keep_length else _REQUEST_DROP) | connection_headers(headers)
     return [(k, v) for k, v in headers if k.lower() not in drop]
 
 
@@ -68,7 +86,7 @@ class Upstream:
         )
         # Optional selected-library adapter. Only enumerations are intercepted; raw
         # forwarding and direct media access retain Navidrome's permission checks.
-        self.library_answer: Callable[[RestCall], Awaitable[LibraryAnswer | None]] | None = None
+        self.library_answer: LibraryView | None = None
 
     def url(self, raw_path: bytes, query: bytes = b"") -> httpx.URL:
         prefix = self.base.raw_path.rstrip(b"/")
@@ -177,7 +195,7 @@ async def _cancel_on_disconnect(receive: Receive, scope: anyio.CancelScope) -> N
 
 
 def response_headers(response: httpx.Response) -> list[tuple[bytes, bytes]]:
-    return [(k, v) for k, v in response.headers.raw if k.lower() not in HOP_BY_HOP]
+    return request_headers(response.headers.raw, keep_length=True)
 
 
 async def send_bytes(
@@ -188,7 +206,7 @@ async def send_bytes(
     *,
     head: bool = False,
 ) -> None:
-    out = [(k, v) for k, v in headers if k.lower() not in HOP_BY_HOP | {b"content-length"}]
+    out = request_headers(headers)
     out.append((b"content-length", str(len(body)).encode()))
     try:
         await send({"type": "http.response.start", "status": status, "headers": out})

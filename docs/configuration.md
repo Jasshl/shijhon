@@ -45,7 +45,7 @@ for reverse-proxy routes, permissions and features that work without AI.
 |---|---|
 | `[navidrome] url` | Navidrome's address, as Shijhon reaches it |
 | `[navidrome] user`, `password` or `password_file` | The service account: a Navidrome admin account used only by Shijhon |
-| `[navidrome] library_id` (1), `library_path` | The library that holds your music, and where Shijhon sees it on disk |
+| `[navidrome] library_id` (1), `library_path` | The library that holds your music (ID at least 1), and where Shijhon sees it on disk |
 | `[navidrome] artist_participations` (`false`) | Match Navidrome's `Subsonic.ArtistParticipations` setting for artist album counts in personal library views. Set both to `true` if artists should include albums on which they perform as a track artist. Artist indexes still list album artists, as Navidrome does |
 | `[navidrome] usage_export_path` | The usage export, which the cleanup reads ([deployment.md](deployment.md#the-usage-export)) |
 | `[server] trusted_proxies` (loopback) | The reverse proxies whose `X-Forwarded-For` is trusted ([deployment.md](deployment.md#network-and-reverse-proxy)) |

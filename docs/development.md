@@ -301,10 +301,20 @@ SHIJHON_NAVIDROME_VERSION=<x.y.z> uv run pytest -m canary -n 3   # or =latest
 
 A failure is a difference in Navidrome to look at before upgrading, not something to adapt
 the tests to. `SHIJHON_NAVIDROME_BIN` points the harness at a local binary. The canary runs each suite on a fresh Navidrome, so it cannot see a
-migration that changes existing IDs. Once it passes, update the version in three places:
+migration that changes existing IDs. Once it passes, update the version and pins:
 `PINNED_VERSION` and `PINNED_SHA256` in `tests/harness/navidrome.py`, `TESTED_VERSION` in
 `src/shijhon/navidrome/checks.py`, and the image tag and digest in
-`packaging/compose.yaml`.
+`packaging/compose.yaml`. Update the CI cache key in `.github/workflows/ci.yml` too.
+Find version references in the public guides and code with:
+
+```sh
+rg -n '0\.64\.2' README.md .github/workflows/ci.yml packaging/compose.yaml src tests docs
+```
+
+Check the version claims and source links in `README.md`, `docs/deployment.md`,
+`docs/known-issues.md`, `docs/reference/advanced-deployment.md`,
+`docs/reference/library-visibility.md` and `docs/music-imports.md`; recheck their
+version-specific behavior before changing them.
 
 ### The scale runner
 

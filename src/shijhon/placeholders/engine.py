@@ -35,6 +35,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import subprocess
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
@@ -446,7 +447,12 @@ class PlaceholderEngine:
                 is None
             )
             confirmed = await self._roll_back(
-                paths, pending.folder, cover, removed_folder=pending.new_folder, bound=bound
+                paths,
+                pending.folder,
+                cover,
+                removed_folder=pending.new_folder,
+                bound=bound,
+                release_ref=pending.ref,
             )
             if not confirmed:
                 raise MaterializeError("Navidrome still lists them")
@@ -701,6 +707,8 @@ class PlaceholderEngine:
     async def _swappable(self) -> None:
         if why := await self.refused():
             raise ReplaceError(why)
+        for authorize in self._write_guards.get():
+            await authorize()
 
     async def _still_swappable(self, staged: Path) -> None:
         """``_swappable``, asked again once ``staged`` is made, right before a file moves, a
@@ -779,9 +787,17 @@ class PlaceholderEngine:
             # Never the name of a file already there (a retag keeps a placeholder's name,
             # so another track can come to want it).
             name = Layout.file_name(track)
+            try:
+                self.layout.contained(f"{folder}/{name}")
+            except LayoutError as exc:
+                raise MaterializeError(f"{exc}: nothing written") from None
             if name.casefold() in taken:
                 digest = hashlib.sha256(str(track.ref).encode()).hexdigest()[:6]
                 name = Layout.file_name(track, f" [{digest}].flac")
+                counter = 2
+                while name.casefold() in taken:
+                    name = Layout.file_name(track, f" [{digest}-{counter}].flac")
+                    counter += 1
             taken.add(name.casefold())
             relative = f"{folder}/{name}"
             planned.append(
@@ -924,7 +940,13 @@ class PlaceholderEngine:
         path = self.layout.absolute(first[0]["path"])
         try:
             return await anyio.to_thread.run_sync(tagging.album_tags_of, path)
-        except (tagging.UnsupportedFormat, OSError) as exc:
+        except (
+            tagging.UnsupportedFormat,
+            OSError,
+            ValueError,
+            subprocess.SubprocessError,
+            mutagen.MutagenError,
+        ) as exc:
             raise MaterializeError(f"cannot read the owned album's tags ({exc})") from None
 
     async def _album_state(self, album_id: str | None) -> dict[str, str]:
@@ -953,13 +975,14 @@ class PlaceholderEngine:
         target = self.layout.contained(folder)
         await anyio.to_thread.run_sync(self._really_inside, [p.relative for p in planned])
         staged: list[tuple[Path, Path]] = []
+        tracks = {self.layout.absolute(p.relative): str(p.track.ref) for p in planned}
 
         async def prepare(item: _Planned) -> None:
             stage = self.layout.staging / f"{uuid.uuid4().hex}.flac"
+            staged.append((stage, self.layout.absolute(item.relative)))
             await self.silence.write(item.track.duration_ms, stage)
             await anyio.to_thread.run_sync(tagging.write_flac, stage, item.comments)
             await anyio.to_thread.run_sync(durable.sync_file, stage)
-            staged.append((stage, self.layout.absolute(item.relative)))
 
         try:
             async with anyio.create_task_group() as tg:
@@ -986,7 +1009,10 @@ class PlaceholderEngine:
                 durable.sync_file(cover_stage)
                 os.replace(cover_stage, target / "cover.jpg")
             for stage, final in staged:
-                os.replace(stage, final)
+                if _own_silence(final, tracks[final]):  # as a stop left this very write
+                    os.replace(stage, final)
+                else:
+                    _place_unused(stage, final)
             # On disk - the files' names, and the folders made for them - before anything
             # records them.
             durable.sync_dirs(target, *(d.parent for d in made), self.layout.staging)
@@ -1045,6 +1071,7 @@ class PlaceholderEngine:
         *,
         removed_folder: bool,
         bound: float | None = None,
+        release_ref: str | None = None,
     ) -> bool:
         """New files go again (the folder too when it was new and is empty now), then a
         targeted scan until Navidrome lists none of them (``bound``: waited for so long at
@@ -1054,8 +1081,13 @@ class PlaceholderEngine:
         paths = set(relative)
 
         def remove() -> None:
-            for path in paths:
+            for path in list(paths):
                 if (file := self._own(path)) is not None:
+                    if release_ref is not None and os.path.lexists(file):
+                        marker = None if file.is_symlink() else tagging.marker_of(file)
+                        if marker is None or not marker.silence or marker.release != release_ref:
+                            paths.remove(path)  # a foreign occupant was never ours to undo
+                            continue
                     file.unlink(missing_ok=True)
             target = self._own(folder, folder=True)
             if target is None:
@@ -1181,6 +1213,13 @@ class PlaceholderEngine:
             async with AsyncExitStack() as held:
                 for song in songs:  # a swap or a download of one waits (or is waited for)
                     await held.enter_async_context(self.lock_for(f"song:{song['song_id']}"))
+                for song in songs:
+                    try:
+                        await self._recover(str(song["song_id"]))
+                    except (ReplaceError, OSError) as exc:
+                        return Removal(
+                            kept=[f"an interrupted swap is not repaired: {exc}"], unfinished=True
+                        )
                 await self._writable()  # asked again under the locks (they may take long)
                 rows = await self._release_rows(ref)
                 if not rows:
@@ -1320,11 +1359,11 @@ class PlaceholderEngine:
         """A release whose removal did not finish: its files back from its rows (the same
         paths and tags, so the same song IDs), its mark cleared. False when that failed
         too, or Navidrome did not confirm it within ``bound`` seconds (it stays marked:
-        tried again at the next start). ``gated``: a repair (not a removal's own
-        compensation) - Navidrome is asked again once the files are staged, before they
-        move and the scan; refused, nothing moved and it stays marked. The caller holds the
-        release's lock and its songs' locks (a swap of one of its songs meanwhile - after a
-        stop - leaves delivered audio, which stays as it is)."""
+        tried again within a minute (and at the next start)). ``gated``: a repair (not a
+        removal's own compensation) - Navidrome is asked again once the files are staged,
+        before they move and the scan; refused, nothing moved and it stays marked.
+        The caller holds the release's lock and its songs' locks (a swap of one of its
+        songs meanwhile - after a stop - leaves delivered audio, which stays as it is)."""
         ref = str(release["ref"])
         folder = str(release["folder"])
         rows = await self._release_rows(ref)
@@ -1360,7 +1399,12 @@ class PlaceholderEngine:
                 raise MaterializeError("the placeholders did not come back")
         except Exception as exc:
             reason = getattr(exc, "reason", None) or type(exc).__name__
-            log.error("%s could not be put back (%s): tried again at the next start", ref, reason)
+            log.error(
+                "%s could not be put back (%s): tried again within a minute (and at the next"
+                " start)",
+                ref,
+                reason,
+            )
             return False
         await self.store.execute("UPDATE releases SET removing_at = NULL WHERE ref = ?", [ref])
         log.info("put back %s - %s: it stays in the library", release["artist"], release["title"])
@@ -1911,7 +1955,7 @@ class PlaceholderEngine:
                 backup=backup,
                 update=(
                     "UPDATE placeholders SET title = ?, artist = ?, isrc = ?, disc = ?,"
-                    " track = ?, duration_ms = ?, tags = ? WHERE song_id = ?",
+                    " track = ?, duration_ms = ?, tags = ?, backing_song_id = ? WHERE song_id = ?",
                     [
                         track.title,
                         track.artist,
@@ -1920,6 +1964,9 @@ class PlaceholderEngine:
                         track.number,
                         track.duration_ms,
                         json.dumps(comments),
+                        None
+                        if _recording_changed(row, track, comments)
+                        else row["backing_song_id"],
                         song_id,
                     ],
                 ),
@@ -1984,19 +2031,22 @@ class PlaceholderEngine:
                 # Another file where its audio would go: never replaced (it is not Shijhon's
                 # to remove; the backup of a swap holds only the silent file).
                 raise ReplaceError(f"another file is at {Path(new).name}: left as it is")
-            if source_fd is not None:
-                await anyio.to_thread.run_sync(_copy_descriptor, source_fd, staged)
-            else:
-                assert delivered is not None
-                await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
+            retained = await self.navidrome.song(song_id)
             try:
+                if source_fd is not None:
+                    await anyio.to_thread.run_sync(_copy_descriptor, source_fd, staged)
+                else:
+                    assert delivered is not None
+                    await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
                 size = source.stat().st_size if new == old else None
                 await anyio.to_thread.run_sync(
                     lambda: tagging.write_delivered(staged, comments, not_size=size)
                 )
                 await anyio.to_thread.run_sync(durable.sync_file, staged)
-            except Exception as exc:
+            except BaseException as exc:
                 staged.unlink(missing_ok=True)
+                if not isinstance(exc, Exception):
+                    raise
                 raise ReplaceError(
                     f"cannot tag the delivered file ({type(exc).__name__})"
                 ) from None
@@ -2009,6 +2059,7 @@ class PlaceholderEngine:
             await self._swap(
                 song_id,
                 "replacement",
+                retained=retained,
                 swap=swap,
                 at=new,
                 staged=staged,
@@ -2057,15 +2108,17 @@ class PlaceholderEngine:
                 raise ReplaceError(f"another file is at {Path(new).name}: left as it is")
             self.layout.ensure()
             staged = self.layout.staging / f"{uuid.uuid4().hex}{suffix}"
-            await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
             try:
+                await anyio.to_thread.run_sync(shutil.copyfile, delivered, staged)
                 size = source.stat().st_size if new == current else None
                 await anyio.to_thread.run_sync(
                     lambda: tagging.write_delivered(staged, comments, not_size=size)
                 )
                 await anyio.to_thread.run_sync(durable.sync_file, staged)
-            except Exception as exc:
+            except BaseException as exc:
                 staged.unlink(missing_ok=True)
+                if not isinstance(exc, Exception):
+                    raise
                 raise ReplaceError(
                     f"cannot tag the delivered file ({type(exc).__name__})"
                 ) from None
@@ -2155,6 +2208,31 @@ class PlaceholderEngine:
         original: str = row["placeholder_path"]
         source, target = self._inside(current), self._inside(original)
         await self._swappable()
+        if source.is_symlink():
+            raise ReplaceError("the delivered file is a link: left as it is")
+        own_target = False
+        if original != current and (target.is_symlink() or target.exists()):
+            marker = (
+                None
+                if target.is_symlink()
+                else await anyio.to_thread.run_sync(tagging.marker_of, target)
+            )
+            own_target = (
+                marker is not None
+                and marker.track == row["track_ref"]
+                and marker.release == row["release_ref"]
+            )
+            if not own_target:
+                raise ReplaceError(f"another file is at {target.name}: left as it is")
+        if present:
+            marker = await anyio.to_thread.run_sync(tagging.marker_of, source)
+            if (
+                marker is None
+                or marker.silence
+                or marker.track != row["track_ref"]
+                or marker.release != row["release_ref"]
+            ):
+                raise ReplaceError("its file is not Shijhon's delivered audio: left as it is")
         if not present:
             # The delivered file is gone: the row says "placeholder" first - from then on
             # its plays come from the add-ons, never from a silent file under a delivered
@@ -2181,10 +2259,6 @@ class PlaceholderEngine:
             # row says "placeholder" already - and nothing is moved or scanned.)
             await self._recover(song_id)
             return True
-        if source.is_symlink():
-            # A link someone put there is not Shijhon's file: never moved, never followed
-            # (a swap undone would have to put its audio back through it).
-            raise ReplaceError("the delivered file is a link: left as it is")
         size = source.stat().st_size if original == current else None
         staged = await self._silent_file(row["duration_ms"], comments, not_size=size)
         # A name of its own: "backup-<id>.flac" is always the silent placeholder.
@@ -2192,7 +2266,10 @@ class PlaceholderEngine:
 
         def swap() -> None:
             os.replace(source, backup)
-            os.replace(staged, target)
+            if original == current or own_target:
+                os.replace(staged, target)
+            else:
+                _place_unused(staged, target)
             durable.sync_dirs(target.parent, self.layout.staging)
 
         await self._swap(
@@ -2223,6 +2300,7 @@ class PlaceholderEngine:
         unconfirmed: str,
         failed: str,
         album_id: str | None = None,
+        retained: dict[str, Any] | None = None,
     ) -> None:
         """Swap a placeholder's file, under the song's lock: ``swap`` puts the new file in
         place (the old one in ``backup``), a targeted scan waits until Navidrome lists the
@@ -2243,6 +2321,10 @@ class PlaceholderEngine:
             await self._at(f"{what} swapped")
             if not await self._song_at(song_id, at, album_id, size=size):
                 raise _Unconfirmed(unconfirmed)
+            if retained is not None:
+                after = await self.navidrome.song(song_id)
+                if after is None or _retained_metadata(after) != _retained_metadata(retained):
+                    raise _Unconfirmed("the retained metadata changed; the old file was restored")
             await self._at(f"{what} verified")
             with anyio.CancelScope(shield=True):  # a canceled wait would still update it
                 await self.store.execute(*update)
@@ -2257,14 +2339,19 @@ class PlaceholderEngine:
                     try:
                         await self._recover(song_id, bound=_bound(exc), gated=False)
                     except Exception as failure:
-                        log.error("the %s of %s is not undone yet (%s): put right at the next"
-                                  " start", what, song_id, failure)  # fmt: skip
+                        log.error(
+                            "the %s of %s is not undone yet (%s): tried again within a minute"
+                            " (and at the next start)",
+                            what,
+                            song_id,
+                            failure,
+                        )
                 elif committed:
                     await self._drop(backup)
                 else:
                     log.error(
                         "the %s of %s may or may not be recorded: its files stay as they are"
-                        " until the next start puts them right",
+                        " until repair is tried again within a minute (and at the next start)",
                         what,
                         song_id,
                     )
@@ -2275,7 +2362,7 @@ class PlaceholderEngine:
             if committed is None:
                 raise ReplaceError(
                     f"{what} failed ({type(exc).__name__}): not known whether it is recorded;"
-                    " put right at the next start"
+                    " tried again within a minute (and at the next start)"
                 ) from None
             raise ReplaceError(failed.format(type(exc).__name__)) from None
         await self._drop(backup)
@@ -2298,8 +2385,12 @@ class PlaceholderEngine:
         try:
             await anyio.to_thread.run_sync(lambda: backup.unlink(missing_ok=True))
         except OSError as exc:
-            log.warning("backup %s not removed (%s): the next start removes it", backup.name,
-                        exc.strerror or type(exc).__name__)  # fmt: skip
+            log.warning(
+                "backup %s not removed (%s): removal is tried again within a minute"
+                " (and at the next start)",
+                backup.name,
+                exc.strerror or type(exc).__name__,
+            )
 
     def interrupted(self) -> set[str]:
         """The songs with a swap of their file not finished: a backup in the staging folder."""
@@ -2674,7 +2765,7 @@ def _names_row(path: Path, row: Any) -> bool:
     another length to the sample, as another version wrote it, is not it either: it is
     written anew from its row)."""
     marker = tagging.marker_of(path)
-    if marker is None:
+    if marker is None or marker.track != row["track_ref"] or marker.release != row["release_ref"]:
         return False
     if row["state"] != "placeholder":
         return not marker.silence
@@ -2709,3 +2800,94 @@ def _like_prefix(folder: str) -> str:
 
 def release_json(release: CatalogRelease) -> str:
     return json.dumps(release_data(release))
+
+
+def _own_silence(path: Path, track_ref: str) -> bool:
+    """Whether ``path`` holds Shijhon's silent file of this very track (its marker says
+    so; never a link): one a stopped write of it left, which writing it again replaces."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    marker = tagging.marker_of(path)
+    return marker is not None and marker.silence and marker.track == track_ref
+
+
+def _place_unused(staged: Path, target: Path) -> None:
+    """Publish without replacing an occupied name; caller holds the write's locks.
+
+    Prefer an atomic exclusive operation. Some library filesystems offer neither hard
+    links nor exclusive renames: there, check the name under those locks before renaming.
+    """
+    unavailable = {errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV,
+                   errno.EINVAL}  # fmt: skip
+    try:
+        os.link(staged, target, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno not in unavailable:
+            raise
+        # Try a native exclusive rename on macOS/Linux before the locked fallback.
+        # Python exposes no flags for these calls.
+        import ctypes
+        import sys
+
+        if os.name == "nt":
+            os.rename(staged, target)  # Windows rename already refuses an occupied name
+            return
+        libc = ctypes.CDLL(None, use_errno=True)
+        args: tuple[Any, ...]
+        rename = None
+        if sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+            rename = libc.renamex_np
+            rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            args = (os.fsencode(staged), os.fsencode(target), 4)  # RENAME_EXCL
+        elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+            rename = libc.renameat2
+            rename.argtypes = [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
+            args = (-100, os.fsencode(staged), -100, os.fsencode(target), 1)  # NOREPLACE
+        if rename is not None:
+            rename.restype = ctypes.c_int
+            if rename(*args) == 0:
+                return
+            error = ctypes.get_errno()
+            if error not in unavailable:
+                raise OSError(error, os.strerror(error), str(target)) from None
+        log.warning("exclusive rename was unavailable; publishing under Shijhon's locks")
+        if os.path.lexists(target):
+            raise FileExistsError(errno.EEXIST, os.strerror(errno.EEXIST), str(target)) from None
+        os.rename(staged, target)
+    else:
+        staged.unlink()
+
+
+def _recording_changed(row: Any, track: CatalogTrack, comments: dict[str, list[str]]) -> bool:
+    previous = json.loads(row["tags"])
+    return (
+        (row["isrc"] or None) != (track.isrc or None)
+        or row["title"] != track.title
+        or row["artist"] != track.artist
+        or row["duration_ms"] != track.duration_ms
+        or previous.get("artists") != comments.get("artists")
+        or previous.get("itunesadvisory") != comments.get("itunesadvisory")
+    )
+
+
+def _retained_metadata(song: dict[str, Any]) -> dict[str, Any]:
+    """Album identity and grouping a delivery must preserve.
+
+    Every supported delivery writer can express the release date. Descriptive metadata
+    (including recording year, original date and genres) is kept as the format permits.
+    """
+    return {
+        key: song.get(key)
+        for key in (
+            "albumId",
+            "releaseDate",
+            "trackNumber",
+            "discNumber",
+        )
+    }

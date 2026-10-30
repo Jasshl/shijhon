@@ -14,6 +14,7 @@ catalog failure answers every request of a play with an error). Only for failure
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import OrderedDict
@@ -24,7 +25,13 @@ import anyio
 from async_lru import alru_cache
 
 from shijhon.catalog.artwork import ArtworkIndex, raster_type
-from shijhon.catalog.base import Catalog, CatalogError, addresses_for_clients
+from shijhon.catalog.base import (
+    Catalog,
+    CatalogError,
+    PartialReleases,
+    addresses_for_clients,
+    client_artwork_template,
+)
 from shijhon.catalog.model import (
     CatalogArtist,
     CatalogRef,
@@ -70,7 +77,6 @@ class CachedCatalog:
         self.inner = inner
         self.key = inner.key
         self.region = inner.region
-        self.client_artwork = addresses_for_clients(inner)
         self.index = index or ArtworkIndex()
         index = self.index
         # Songs of recent answers, by catalog ID: a song while the catalog fails (0: none,
@@ -108,6 +114,46 @@ class CachedCatalog:
         self.artists_of = alru_cache(maxsize=maxsize, ttl=ttl)(self._artists_of)
         # Images are larger: fewer are kept (clients' covers are kept on disk).
         self.artwork = alru_cache(maxsize=64, ttl=ttl)(self._artwork)
+        guard = getattr(inner, "validate_identity", None)
+        if guard is not None:
+            for name in (
+                "search",
+                "album",
+                "_song",
+                "songs_by_isrc",
+                "artist",
+                "artist_releases",
+                "top_songs",
+                "artists_of",
+                "artwork",
+            ):
+                setattr(self, name, self._guarded(getattr(self, name), guard))
+
+    @staticmethod
+    def _guarded(call: Any, guard: Any) -> Any:
+        async def checked(*args: Any, **kwargs: Any) -> Any:
+            await guard()
+            answer = await call(*args, **kwargs)
+            await guard()
+            return answer
+
+        for name in ("cache_clear", "cache_invalidate"):
+            if hasattr(call, name):
+                setattr(checked, name, getattr(call, name))
+        return checked
+
+    @property
+    def client_artwork(self) -> bool:
+        return addresses_for_clients(self.inner)
+
+    async def client_artwork_template(self, template: str | None) -> str | None:
+        return await client_artwork_template(self.inner, template)
+
+    async def validate_identity(self) -> None:
+        """Apply the same guard before a view serves a saved catalog list."""
+        guard = getattr(self.inner, "validate_identity", None)
+        if guard is not None:
+            await guard()
 
     async def fresh_album(self, ident: str) -> CatalogRelease:
         """The album as the catalog answers it now, past the cache, which then keeps
@@ -130,6 +176,9 @@ class CachedCatalog:
         """The catalog's song; while the catalog fails, or keeps the lookup waiting
         more than a moment, the song as a recent answer showed it (a search result, an
         album). A lookup given up on goes on for the next request (shared, cached)."""
+        guard = getattr(self.inner, "validate_identity", None)
+        if guard is not None:
+            await guard()
         shown = self._shown.get(song_id)
         if shown is None:
             return await self._song(song_id)
@@ -141,6 +190,8 @@ class CachedCatalog:
             if exc.kind == "not_found":
                 raise
             why = exc.reason
+        if guard is not None:
+            await guard()  # a changed identity during the lookup cannot use the fallback
         now = time.monotonic()
         if now - self._told.get(song_id, -60.0) >= 60.0:
             self._told[song_id] = now
@@ -192,6 +243,12 @@ class CachedCatalog:
         # The catalog's own answer (a remembered song has no artist items).
         item = await (self._song(item_id) if kind == "t" else self.album(item_id))
         refs = item.artist_refs
+        if not refs:
+            label = "songs" if kind == "t" else "albums"
+            lookup = await self._artists_of(
+                (item_id,) if kind == "t" else (), (item_id,) if kind == "a" else ()
+            )
+            refs = lookup.get(f"{label}:{item_id}", ())
         if index < len(refs):
             return refs[index].id
         if len(refs) == 1:  # the credit named more artists than the catalog lists
@@ -215,4 +272,12 @@ class CachedCatalog:
         return await self.inner.artist(await self._real_artist(artist_id))
 
     async def _artist_releases(self, artist_id: str) -> tuple[CatalogRelease, ...]:
-        return await self.inner.artist_releases(await self._real_artist(artist_id))
+        real = await self._real_artist(artist_id)
+        answer = await self.inner.artist_releases(real)
+        if isinstance(answer, PartialReleases):
+            asyncio.get_running_loop().call_later(
+                answer.retry_after,
+                self.artist_releases.cache_invalidate,  # type: ignore[attr-defined]
+                artist_id,
+            )
+        return answer

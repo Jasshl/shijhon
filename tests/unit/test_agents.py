@@ -19,7 +19,6 @@ import anyio
 import httpx
 import pytest
 from jinja2 import Environment, PackageLoader
-from mcp.server.auth.provider import TokenError
 from pydantic import SecretStr
 
 from shijhon.agents.app import Agents
@@ -119,6 +118,17 @@ async def finish(http: httpx.AsyncClient, flow: dict[str, Any], scopes: str) -> 
         data={
             "username": "owner",
             "password": "synthetic-password",
+            "csrf": flow["csrf"],
+            "action": "allow",
+            **{"scope_" + s: "true" for s in scopes.split()},
+        },
+    )
+    assert approved.status_code == 200, approved.text
+    assert 'class="agent-permissions"' in approved.text
+    flow["consent_page"] = approved.text
+    approved = await http.post(
+        flow["location"],
+        data={
             "csrf": flow["csrf"],
             "action": "allow",
             **{"scope_" + s: "true" for s in scopes.split()},
@@ -323,9 +333,10 @@ def test_missing_ai_does_not_block_reads_or_ordered_creation_and_refresh_keeps_o
             replay = await call(http, new, "create_playlist", payload)
             assert replay["request"]["id"] == ident and not replay["created"]
             assert await app.oauth.verify_token(raw) is None
-            # Reusing a rotated refresh token ends that connection, including its new token.
-            assert (await http.post(ISSUER + "/token", data=refresh)).status_code == 400
-            assert await app.oauth.verify_token(new) is None
+            # An immediate retry recovers the same credentials and keeps scheduled work alive.
+            retry = await http.post(ISSUER + "/token", data=refresh)
+            assert retry.status_code == 200 and retry.json() == reply.json()
+            assert await app.oauth.verify_token(new)
 
     anyio.run(run)
 
@@ -363,7 +374,7 @@ def test_scope_reduction_and_revocation_during_native_validation(tmp_path: Path)
     anyio.run(run)
 
 
-def test_preloaded_refresh_replay_revokes_replacement_without_rollback(tmp_path: Path) -> None:
+def test_concurrent_preloaded_refreshes_return_the_same_replacement(tmp_path: Path) -> None:
     async def run() -> None:
         async with app_at(tmp_path / "db") as (app, http):
             tokens = await finish(http, await begin(http), "create status library")
@@ -371,12 +382,24 @@ def test_preloaded_refresh_replay_revokes_replacement_without_rollback(tmp_path:
             first = await app.oauth.load_refresh_token(client, tokens["refresh_token"])
             concurrent = await app.oauth.load_refresh_token(client, tokens["refresh_token"])
             assert first and concurrent
-            replacement = await app.oauth.exchange_refresh_token(client, first, first.scopes)
-            assert await app.oauth.verify_token(replacement.access_token)
-            with pytest.raises(TokenError) as exc:
-                await app.oauth.exchange_refresh_token(client, concurrent, concurrent.scopes)
-            assert exc.value.error == "invalid_grant"
-            assert await app.oauth.verify_token(replacement.access_token) is None
+            replacements = []
+
+            async def exchange(credential):
+                replacements.append(
+                    await app.oauth.exchange_refresh_token(client, credential, credential.scopes)
+                )
+
+            async with anyio.create_task_group() as group:
+                group.start_soon(exchange, first)
+                group.start_soon(exchange, concurrent)
+            assert len(replacements) == 2 and replacements[0] == replacements[1]
+            assert await app.oauth.verify_token(replacements[0].access_token)
+            rows = await app.oauth.store.fetchall("SELECT kind,used FROM agent_oauth_tokens")
+            assert sorted((r["kind"], bool(r["used"])) for r in rows) == [
+                ("access", False),
+                ("refresh", False),
+                ("refresh", True),
+            ]
 
     anyio.run(run)
 
@@ -718,5 +741,63 @@ def test_revocation_while_waiting_for_the_change_lock_is_rechecked(
                 )
                 release.set()
             assert result["error"]["code"] == "authentication_required"
+
+    anyio.run(run)
+
+
+@pytest.mark.parametrize("change_settings", [False, True])
+def test_access_verification_accepts_only_credential_refreshes(tmp_path: Path, change_settings):
+    async def run():
+        async with app_at(tmp_path / "db") as (app, http):
+            tokens = await finish(http, await begin(http), "create status library")
+
+            async def rotate(connection):
+                await app.service.repo.connect(
+                    connection.model_copy(
+                        update={"history_user": "different-listener"}
+                        if change_settings
+                        else {"token": SecretStr("refreshed-secret"), "salt": SecretStr("new-salt")}
+                    )
+                )
+
+            app.service.client.validate.side_effect = rotate
+            verified = await app.oauth.verify_token(tokens["access_token"])
+            assert bool(verified) is not change_settings
+
+    anyio.run(run)
+
+
+@pytest.mark.parametrize("change_settings", [False, True])
+def test_history_read_survives_native_signin_but_refuses_changed_settings(
+    tmp_path: Path, change_settings
+):
+    async def run():
+        async with app_at(tmp_path / "db") as (app, http):
+            tokens = await finish(http, await begin(http, "history"), "history")
+            connection = await app.service.repo.connection("owner")
+            await app.service.repo.connect(
+                connection.model_copy(
+                    update={"history_user": "invented-listener", "history_key": SecretStr("key")}
+                )
+            )
+
+            async def sync(connection, **kwargs):
+                await app.service.repo.connect(
+                    connection.model_copy(
+                        update={"history_user": "different-listener"}
+                        if change_settings
+                        else {"token": SecretStr("refreshed-secret"), "salt": SecretStr("new-salt")}
+                    )
+                )
+                return [{"artist": "Glass Orchard", "title": "First Light", "at": time.time()}], {}
+
+            app.service.history.sync = AsyncMock(side_effect=sync)
+            result = await call(http, tokens["access_token"], "get_listening_history", {"limit": 5})
+            if change_settings:
+                assert not result["ok"]
+                assert "history connection changed" in result["error"]["message"]
+            else:
+                assert result["ok"], result
+                assert "Glass Orchard" in json.dumps(result)
 
     anyio.run(run)

@@ -249,7 +249,7 @@ def test_the_catalogs_are_those_of_the_enabled_add_ons_that_declare_one(
             installed.registry.sources = list(installed.sources)
             assert [name for name, _ in await catalogs.catalogs()] == ["Fake"]
             # The add-on that is the catalog is asked as that one.
-            skipping = AddonCatalogs(installed.registry, skip=KEY)  # type: ignore[arg-type]
+            skipping = AddonCatalogs(installed.registry, skip="Fake")  # type: ignore[arg-type]
             assert await skipping.catalogs() == [] and await skipping.by_key(KEY) is None
         finally:
             await catalogs.aclose()
@@ -566,16 +566,32 @@ def test_entries_say_when_an_add_on_did_not_answer_until_a_new_attempt(tmp_path:
 
 def test_a_slow_add_on_s_own_time_budget_bounds_its_catalog_requests(
     installed: Installed,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def run() -> None:
-        catalogs = AddonCatalogs(installed.registry, timeout=15.0)  # type: ignore[arg-type]
+        catalogs = AddonCatalogs(installed.registry, timeout=0.1)  # type: ignore[arg-type]
         try:
             [(_, first)] = await catalogs.catalogs()
-            assert first.inner.timeout == 15.0  # type: ignore[attr-defined]
+            assert first.inner.timeout == 0.1  # type: ignore[attr-defined]
+            closed = anyio.Event()
+            close = first.aclose
+
+            async def close_first() -> None:
+                await close()
+                closed.set()
+
+            monkeypatch.setattr(first, "aclose", close_first)
             installed.sources[1].budget = 170.0
             [(_, slow)] = await catalogs.catalogs()
             assert slow is not first and slow.inner.timeout == 170.0  # type: ignore[attr-defined]
             assert await catalogs.by_key(KEY) is slow
+            await anyio.lowlevel.checkpoint()
+            assert not closed.is_set()
+            assert not first.inner.http.is_closed  # type: ignore[attr-defined]
+            with anyio.fail_after(2):
+                await closed.wait()
+            assert first.inner.http.is_closed  # type: ignore[attr-defined]
+            assert not slow.inner.http.is_closed  # type: ignore[attr-defined]
         finally:
             await catalogs.aclose()
 
@@ -674,7 +690,11 @@ def test_slow_release_checks_still_prepare_something_every_turn(tmp_path: Path) 
                 )  # fmt: skip
 
             slow.album = album  # type: ignore[method-assign]
-            slow.songs_by_isrc = AsyncMock(return_value=())  # type: ignore[attr-defined]
+
+            async def songs_by_isrc(isrc: str) -> tuple[CatalogTrack, ...]:
+                return ()
+
+            slow.songs_by_isrc = songs_by_isrc  # type: ignore[attr-defined]
             cached = CachedCatalog(slow, ttl=3600)  # type: ignore[arg-type]
 
             async def catalog_of(key: str, *, addons: bool = False) -> CachedCatalog:

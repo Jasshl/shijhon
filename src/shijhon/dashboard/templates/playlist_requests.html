@@ -97,7 +97,7 @@
     <p class="page-summary">Write what you want to hear. The AI chooses the songs and Shijhon publishes the playlist to your music app.</p>
   </div>
   <details class="page-about"><summary>How described playlists work</summary>
-    <p>It uses your saved AI connection. Your listening history and your library are optional influences; the exact recording lookup still checks your library when library context is off.</p>
+    <p>Connect your Navidrome account on Playlists and choose the shared AI service. Your listening history and your library are optional influences; the exact recording lookup still checks your library when library context is off.</p>
     <p>Regular refreshes need saved instructions and AI. Publishing can add whole catalog releases as placeholders; it does not download audio. Audio is fetched through normal playback and download rules.</p>
   </details>
 </div>
@@ -137,7 +137,7 @@
 <p class="field-help">Publishing can add whole catalog releases as placeholders. Audio is fetched through normal playback and download rules.</p>
 <div class="form-actions"><button class="btn-primary">Create playlist</button></div>
 </form></section>
-{% else %}<div class="notice notice-info"><p class="notice-title">Connect first</p><p><a href="{{ prefix }}/playlists#settings">Connect your native account and save an AI connection</a> to describe a playlist. Last.fm is optional.</p></div>{% endif %}
+{% else %}<div class="notice notice-info"><p class="notice-title">Connect first</p><p><a href="{{ prefix }}/playlists#settings">Connect your Navidrome account on Playlists and choose the shared AI service</a> to describe a playlist. Last.fm is optional.</p></div>{% endif %}
 <section class="group" aria-labelledby="requests-title"><div class="group-head"><h2 id="requests-title">Your described playlists</h2>{% if listing %}<p class="group-meta">{{ listing|length }}</p>{% endif %}</div>
 {% if listing %}<ul class="rows playlist-list">{% for item in listing %}<li><a href="{{ prefix }}/playlists/describe/{{ item.id }}">{{ item.spec.name }}</a><span>{{ item.spec.count }} tracks</span></li>{% endfor %}</ul>{% else %}<p class="empty">No described playlists yet.</p>{% endif %}
 </section>
