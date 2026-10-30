@@ -55,21 +55,14 @@ trust. For access from outside, put a TLS reverse proxy in front
 
 ## What to add next
 
-Add a catalog ([catalogs.md](catalogs.md)) and add-ons, which supply the audio for
-catalog tracks ([add-ons.md](add-ons.md)).
+Add add-ons, which supply the audio for catalog tracks, on the dashboard's **Add-ons**
+page ([add-ons.md](add-ons.md)).
 
-To try a catalog, install the example adapter for
-[MusicBrainz](https://musicbrainz.org), which needs no account or key
-([its limits](catalogs.md#the-musicbrainz-adapter)). Give this address when the script
-asks for catalog adapters, or add it to `.env` later and build again, from `packaging/`:
-
-```sh
-echo 'SHIJHON_ADAPTERS=https://github.com/Jasshl/shijhon-catalog-musicbrainz/archive/refs/tags/v0.1.0b1.tar.gz' >> .env
-docker compose up -d --build
-docker compose exec shijhon shijhon catalogs       # lists "musicbrainz"
-```
-
-Then choose MusicBrainz on the dashboard's Catalog page and press **Restart Shijhon**.
+Then choose a catalog on the dashboard's **Catalog** page: an installed catalog adapter,
+or the catalog of one of your add-ons ([catalogs.md](catalogs.md)). An adapter is a
+separate package built into Shijhon's image: give its address when the script asks for
+catalog adapters, or add it to `.env` later and build again
+([installing an adapter](catalogs.md#installing-an-adapter)).
 
 ## By hand
 

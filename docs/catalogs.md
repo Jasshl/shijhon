@@ -10,8 +10,8 @@ that has a catalog. The default is none.
 With the Compose file, set `SHIJHON_ADAPTERS` in `packaging/.env` to the adapter's
 address: its source archive or its wheel. Then build the image again from `packaging/`
 with `docker compose up -d --build`; `docker compose exec shijhon shijhon catalogs` then
-lists the adapter. The [quick start](quick-start.md#what-to-add-next) has the line for the
-MusicBrainz adapter. An adapter that is not published is installed from its wheel
+lists the adapter ([the MusicBrainz adapter](#the-musicbrainz-adapter) has its line). An
+adapter that is not published is installed from its wheel
 ([deployment.md](deployment.md#catalog-adapters)); to write one, see
 [development.md](development.md#writing-a-catalog-adapter).
 
@@ -115,7 +115,15 @@ library for half a minute.
 An example adapter: [`shijhon-catalog-musicbrainz`](https://github.com/Jasshl/shijhon-catalog-musicbrainz),
 for [MusicBrainz](https://musicbrainz.org), the open music encyclopedia, with its own
 repository and notes. It needs no account or key
-(`kind = "musicbrainz"`).
+(`kind = "musicbrainz"`). To install it, from `packaging/`:
+
+```sh
+echo 'SHIJHON_ADAPTERS=https://github.com/Jasshl/shijhon-catalog-musicbrainz/archive/refs/tags/v0.1.0b1.tar.gz' >> .env
+docker compose up -d --build
+docker compose exec shijhon shijhon catalogs       # lists "musicbrainz"
+```
+
+Then choose MusicBrainz on the dashboard's Catalog page and press **Restart Shijhon**.
 
 - **First searches and pages take a few seconds**: MusicBrainz allows one request a
   second, so a first search takes four to five seconds. Once Shijhon has cached a page, it

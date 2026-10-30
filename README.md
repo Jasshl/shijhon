@@ -44,9 +44,9 @@ git clone https://github.com/Jasshl/shijhon && cd shijhon
 
 The script asks where your music is and for a username and a password for your own
 account, starts Navidrome and Shijhon, and prints the address your apps connect to. On
-Windows, run it inside WSL (untested). Then add a catalog ([catalogs](docs/catalogs.md)) and
-add-ons ([add-ons](docs/add-ons.md)); without an add-on, catalog tracks show but do not
-play.
+Windows, run it inside WSL (untested). Then add add-ons ([add-ons](docs/add-ons.md)) and
+choose a catalog ([catalogs](docs/catalogs.md)); without an add-on, catalog tracks show
+but do not play.
 
 In your apps, add Shijhon's address as a **Subsonic** (or OpenSubsonic) server, not a
 Navidrome one. An app's Navidrome option uses Navidrome's own API for some or all of
