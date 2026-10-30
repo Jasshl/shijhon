@@ -11,7 +11,8 @@
 - **Any user can add releases**, and nothing limits how many.
 - **Catalog results appear in the API's ID3 methods** (`search3`, `getArtist`,
   `getAlbum`, `getAlbumList2`, `getStarred2`). Apps that browse by folders, and
-  Navidrome's own API (its web interface), show your library without them.
+  Navidrome's own API (its web interface, and apps set up as a Navidrome server rather
+  than a Subsonic one), show your library without them.
 - **Apps that sync the library and search on the device** show no catalog results.
 - **One library, no `BaseURL`, and Navidrome 0.64.2**, the only version Shijhon is
   tested with.

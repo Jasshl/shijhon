@@ -27,10 +27,13 @@ tells Shijhon which releases are used. Their data is in Docker volumes
 ## Connecting
 
 Connect your apps to Shijhon, never to Navidrome: `http://127.0.0.1:4533` on this
-machine, `http://<this machine's address>:4533` from other devices. Navidrome's web
-interface is at `/app` (to add other people's accounts), the dashboard at `/shijhon/`. To
-check the installation, play something from your library and look at the dashboard's
-Diagnostics page.
+machine, `http://<this machine's address>:4533` from other devices. Add it as a
+**Subsonic** (or OpenSubsonic) server, even in apps that offer a Navidrome option: that
+option uses Navidrome's own API for some or all of what the app shows, and that API
+shows your library without the catalog ([known issues](known-issues.md#before-you-install)).
+Navidrome's web interface is at `/app` (to add other people's accounts), the dashboard
+at `/shijhon/`. To check the installation, play something from your library and look at
+the dashboard's Diagnostics page.
 
 Before first using a music app, sign in to **Collection** in the dashboard to prepare your
 library. Apps default to **All**: everything you collected - whole albums of your imports,

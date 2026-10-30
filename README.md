@@ -48,6 +48,10 @@ Windows, run it inside WSL (untested). Then add a catalog ([catalogs](docs/catal
 add-ons ([add-ons](docs/add-ons.md)); without an add-on, catalog tracks show but do not
 play.
 
+In your apps, add Shijhon's address as a **Subsonic** (or OpenSubsonic) server, not a
+Navidrome one. An app's Navidrome option uses Navidrome's own API for some or all of
+what it shows, and that API shows your library without the catalog.
+
 ## Documentation
 
 - [Quick start](docs/quick-start.md): the setup, connecting your apps, the same steps by
