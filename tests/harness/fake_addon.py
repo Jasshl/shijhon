@@ -182,21 +182,21 @@ class FakeAddon:
 
     # --- server ----------------------------------------------------------------------
 
-    def _record(self, request: Request, endpoint: str, **extra: Any) -> None:
+    def _record(self, request: Request, endpoint: str, **extra: Any) -> dict[str, Any]:
+        entry = {
+            "endpoint": endpoint,
+            "path": request.url.path,
+            "params": dict(request.query_params),
+            "range": request.headers.get("range"),
+            "if_match": request.headers.get("if-match"),
+            "x_key": request.headers.get("x-key"),
+            "user_agent": request.headers.get("user-agent"),
+            "at": time.monotonic(),
+            **extra,
+        }
         with self.lock:
-            self.log.append(
-                {
-                    "endpoint": endpoint,
-                    "path": request.url.path,
-                    "params": dict(request.query_params),
-                    "range": request.headers.get("range"),
-                    "if_match": request.headers.get("if-match"),
-                    "x_key": request.headers.get("x-key"),
-                    "user_agent": request.headers.get("user-agent"),
-                    "at": time.monotonic(),
-                    **extra,
-                }
-            )
+            self.log.append(entry)
+        return entry
 
     def _app(self, origin: str) -> Starlette:
         async def manifest(request: Request) -> Response:
@@ -454,7 +454,7 @@ class FakeAddon:
             name = request.path_params["name"]
             track = self.tracks[isrc]
             probe = request.headers.get("range") == "bytes=0-0"  # (a size asked for)
-            self._record(
+            entry = self._record(
                 request, "segment", isrc=isrc, origin=origin, generation=generation, name=name,
                 probe=probe, method=request.method,
             )  # fmt: skip
@@ -489,6 +489,7 @@ class FakeAddon:
                 if fault is not None:
                     return Response(status_code=fault)
                 if generation != self.generation.get(isrc):
+                    entry["expired"] = True  # (answered, after its delay: a newer link came)
                     return Response(status_code=track.expire_status)
                 assert track.dash is not None
                 data = (track.dash / name).read_bytes()

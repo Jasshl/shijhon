@@ -388,7 +388,11 @@ def test_a_new_link_while_the_file_is_fetched_reprobes_and_keeps_its_bytes(
     assert seek.content == segments[-1][-300:]
     assert len(a.requests("stream")) == 2 and len(a.requests("mpd")) == 2
     assert len(probes(a)) == 2 * len(names)  # each link has its own size/validator probes
-    assert {r["generation"] for r in media(a) if r["name"] == names[-1]} == {2}
+    # A segment asked of the old link once the new one came is refused; its bytes come
+    # from the new link (how many are asked of the old one first depends on timing).
+    last = [r for r in media(a) if r["name"] == names[-1]]
+    assert {r["generation"] for r in last if not r.get("expired")} == {2}
+    assert all(r.get("expired") for r in last if r["generation"] == 1)
     whole = stream(world, song)
     assert whole.content[:100] == first.content and whole.content.endswith(segments[-1])
 
