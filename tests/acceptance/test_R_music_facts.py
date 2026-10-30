@@ -28,6 +28,7 @@ from tests.acceptance.test_agent_song_facts import agent, ask
 from tests.acceptance.test_R_playlists import wait_state
 from tests.conftest import NavidromeFactory
 from tests.harness.agents import connect_agent
+from tests.harness.collection import refresh_collection
 from tests.harness.dashboard import Browser
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_audiomuse import FakeAudioMuse, FakeSong
@@ -112,6 +113,8 @@ def music(
     ) as w:
         browser = Browser(w.server.base_url)
         assert browser.sign_in(ADMIN_USER, ADMIN_PASSWORD).status_code == 303
+        # Sign-in queues source preparation; model calls must not race that work.
+        refresh_collection(w.server, str(nd.login()["id"]))
         admin = nd.client()  # (the IDs are Navidrome's; the app reads them there too)
         found = admin.ok("search3", [("query", ""), ("songCount", "100")])
         ids = {s["title"]: s["id"] for s in found["searchResult3"]["song"]}

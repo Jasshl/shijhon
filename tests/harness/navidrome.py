@@ -426,6 +426,26 @@ class NavidromeInstance:
             raw=raw,
         )
 
+    def wait_artwork(self, timeout: float = 60.0) -> None:
+        """Wait for the pinned server's artwork worker after a completed music scan.
+
+        Scan status covers the music scanner, not the separate artwork queue. Until
+        that queue drains, cover IDs can gain a hash or disappear (no artwork found).
+        Fixtures comparing metadata across requests must await both, not sleep for
+        the worker's five-second polling interval. Queue rows remain while in flight.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            with contextlib.closing(
+                sqlite3.connect(f"file:{self.data / 'navidrome.db'}?mode=ro", uri=True)
+            ) as db:
+                pending = db.execute("SELECT count(*) FROM artwork_queue").fetchone()[0]
+            if not pending:
+                return
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"navidrome artwork did not settle: {pending} queued items")
+            time.sleep(0.05)
+
     def scan(
         self, *, full: bool = False, targets: Iterable[str] = (), timeout: float = 120.0
     ) -> float:

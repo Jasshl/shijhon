@@ -37,6 +37,7 @@ def cached_completion(
     companion = "Framing Companion " + "Synthetic " * 10 + "Album"
     write_album(nd.music, simple_album(OPENED.artist, companion, 1))
     nd.scan(full=True)
+    nd.wait_artwork()
     owner = nd.create_user("compression-listener", "fixture-password")
     native = nd.client("compression-listener", "fixture-password", salt="compression-salt")
     replay = Replay()

@@ -111,6 +111,7 @@ import logging
 import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -650,6 +651,15 @@ class _Page:
 # --- the catalog --------------------------------------------------------------------------
 
 
+def _release_page_done(task: asyncio.Task[Any]) -> None:
+    """Retrieve expected failures of an abandoned cached page; readers still raise them."""
+    if task.cancelled():
+        return
+    # The request boundary reports it; unexpected exceptions remain visible.
+    with suppress(CatalogError):
+        task.result()
+
+
 class AddonCatalog:
     """The catalog interface over the add-on named ``name``. ``registry``: the
     installation's add-ons (None: none here - every request fails as unavailable); the
@@ -1117,6 +1127,13 @@ class AddonCatalog:
         return tuple(releases.values())
 
     async def _releases_page(self, own: str, cursor: str, service: str) -> tuple[Any, Space]:
+        # async_lru cancels a page when its last reader leaves. Its own deadline can
+        # race that cancellation and finish with CatalogError instead: no reader is
+        # left to retrieve the exception. Observe that expected outcome without
+        # changing what active readers await or caching a failed page.
+        task = asyncio.current_task()
+        assert task is not None
+        task.add_done_callback(_release_page_done)
         data, space = await self._ask(
             lambda addon: addon.catalog_releases(own, cursor), service=service or None
         )

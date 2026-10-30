@@ -1238,6 +1238,7 @@ def test_a_view_of_an_album_the_owner_now_has_drops_its_record(world: DeliveryWo
     world.audio("m-taken-view-real").replace(owned)
     tagging.write_flac(owned, comments)
     world.nd.scan(full=True)
+    world.nd.wait_artwork()
     prepare_collection(world.nd, world.server)
     view = world.client().request("getAlbum", {"id": album}, fmt="xml").text
     assert view == world.nd.client().request("getAlbum", {"id": album}, fmt="xml").text

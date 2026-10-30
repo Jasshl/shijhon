@@ -104,6 +104,16 @@ def fresh_listening(world: DeliveryWorld) -> None:
     """What earlier tests reported playing must not steer this test's warm-ahead."""
     warm = world.services.interceptor.warm
     assert warm is not None
+
+    async def busy() -> bool:
+        # A previous play can still be warming another recording. Clear listening
+        # and request logs only once that work has finished, including delayed jobs.
+        return bool(warm._busy)
+
+    deadline = time.monotonic() + 30
+    while world.server.call(busy):
+        assert time.monotonic() < deadline, "previous warm-ahead did not finish"
+        time.sleep(0.05)
     warm.listening.clear()
 
 

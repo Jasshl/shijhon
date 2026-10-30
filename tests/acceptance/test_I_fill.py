@@ -37,6 +37,7 @@ OPENED = Album(
     "Northern Letters (Remastered)",
     (Track("Velvet Tides", 11, seconds=67), Track("Crimson Canyon", 17, seconds=24)),
     recording_date="1962",
+    cover_file=True,
 )
 # One track of a 19-track soundtrack.
 EXPOSED = Album(
@@ -110,6 +111,7 @@ def world(
     for album in albums:
         write_album(nd.music, album)
     nd.scan(full=True)
+    nd.wait_artwork()
     # A generous budget for opening (fills take about a second; the budget itself is not
     # what these tests are about), and no pause between background matches.
     fill = {

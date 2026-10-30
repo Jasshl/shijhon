@@ -86,6 +86,9 @@ def world(
     app = CollectionApp(
         nd, tmp_path_factory.mktemp("collection-proxy"), songs, wait=2, removed=True
     )
+    # Native IDs depend on the disposable paths. Pick two originals per album by
+    # track number, so every genre has originals and every album is partly selected.
+    app.originals = {s["id"] for s in songs if s["trackNumber"] in (1, 4)}
     with running(app) as proxy:
         yield World(nd, app, proxy, users)
 

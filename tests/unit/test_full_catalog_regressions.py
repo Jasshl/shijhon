@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -174,7 +176,6 @@ async def test_release_deadline_returns_partial_and_resumes(full: FullWorld, cap
     addon = full.world.registry.sources[0].addon
     original = addon.catalog_releases
     held = anyio.Event()
-    done = anyio.Event()
     calls: list[str] = []
 
     async def read(own: str, cursor: str) -> Any:
@@ -182,22 +183,69 @@ async def test_release_deadline_returns_partial_and_resumes(full: FullWorld, cap
         if cursor == "third":
             await held.wait()
         answer = await original(own, cursor)
-        if cursor == "third":
-            done.set()
         return answer
 
     addon.catalog_releases = read  # type: ignore[method-assign]
-    full.catalog.timeout = 0.08
+    full.catalog.timeout = 1.0
     partial = await full.catalog.artist_releases("ar1")
     assert len(partial) == 3 and isinstance(partial, PartialReleases)
     assert partial.retry_after == 60
     assert "incomplete" in caplog.text
     held.set()
-    # async_lru may cancel an unobserved page; either resuming or finishing it is valid.
-    with anyio.move_on_after(0.03):
-        await done.wait()
+    # The retry awaits the actual page, whether the abandoned fetch was cancelled
+    # or completed. It has a fresh budget, not the first request's tiny deadline.
+    full.catalog.timeout = 5.0
     assert len(await full.catalog.artist_releases("ar1")) == 4
     assert calls.count("second") == 1
+
+
+async def test_cancelled_release_page_observes_its_late_catalog_error(full: FullWorld) -> None:
+    """A page timeout racing its last reader's cancellation must not escape the cache.
+
+    Real deadline races can turn cancellation into the page's expected CatalogError.
+    The abandoned task must consume that error; active readers still receive errors
+    normally, and a later request retries the failed page.
+    """
+    pages(full)
+    addon = full.world.registry.sources[0].addon
+    original = addon.catalog_releases
+    entered = anyio.Event()
+    calls: list[str] = []
+
+    async def read(own: str, cursor: str) -> Any:
+        calls.append(cursor)
+        if cursor == "third" and calls.count("third") == 1:
+            entered.set()
+            try:
+                await anyio.sleep_forever()
+            except asyncio.CancelledError:
+                raise CatalogError("unavailable", "no answer in time") from None
+        return await original(own, cursor)
+
+    addon.catalog_releases = read  # type: ignore[method-assign]
+    loop = asyncio.get_running_loop()
+    handler = loop.get_exception_handler()
+    errors: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda loop, context: errors.append(context))
+    try:
+        caller = asyncio.create_task(full.catalog.artist_releases("ar1"))
+        with anyio.fail_after(5):
+            await entered.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        # Let task completion callbacks and discarded-task finalizers run. Do not
+        # await the page task here: that would conceal the missing cache observer.
+        await anyio.lowlevel.checkpoint()
+        gc.collect()
+        await anyio.lowlevel.checkpoint()
+        assert errors == []
+        assert len(await full.catalog.artist_releases("ar1")) == 4
+        assert calls.count("second") == 1 and calls.count("third") == 2
+    finally:
+        caller.cancel()
+        await asyncio.gather(caller, return_exceptions=True)
+        loop.set_exception_handler(handler)
 
 
 async def test_first_full_artist_page_keeps_five_hundred_releases(full: FullWorld) -> None:

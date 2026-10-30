@@ -85,6 +85,7 @@ def world(navidrome_factory: NavidromeFactory, shijhon_factory: Any) -> Iterator
     for album in (flac, mp3, m4a, long):
         write_album(nd.music, album)
     nd.scan(full=True)
+    nd.wait_artwork()
     nd.create_user("listener", "listener-password")
     admin = nd.client()
 

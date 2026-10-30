@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -463,11 +464,40 @@ def test_a_refusal_is_not_remembered_as_a_miss(
 
 
 def test_the_reliable_source_is_looked_up_only_while_the_primary_s_lookup_keeps_it_waiting(
-    world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
+    world: DeliveryWorld,
+    sources: dict[str, FakeAddon],
+    playback_log: list[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Not on every play - only when the primary's lookup has not answered within
     reliable_lookup_after_seconds (0.5 s), when the primary is skipped (above), or once the
     primary's attempt has ended without audio."""
+    # This test checks ordering, not the byte-zero timeout. Keep the primary pending
+    # until the reliable lookup actually arrives, even on a loaded runner.
+    monkeypatch.setattr(world.services.deliverer.settings, "primary_budget_seconds", 30.0)
+    monkeypatch.setattr(world.services.deliverer.settings, "budget_seconds", 30.0)
+    monkeypatch.setattr(world.services.deliverer.settings, "reliable_lookup_after_seconds", 30.0)
+
+    def while_pending(song: str, primary: FakeTrack) -> httpx.Response:
+        gate = threading.Event()
+        primary.lookup_gate = gate
+        reliable = sources["reliable"]
+        before = len(reliable.requests("resolve-isrc"))
+        streams = len(reliable.requests("stream"))
+        with ThreadPoolExecutor(1) as pool:
+            played = pool.submit(play, world, song)
+            try:
+                deadline = time.monotonic() + 15
+                while len(reliable.requests("resolve-isrc")) == before:
+                    assert not played.done(), "play ended before the parallel lookup"
+                    assert time.monotonic() < deadline, "reliable lookup never started"
+                    time.sleep(0.01)
+                assert not played.done(), "primary lookup did not remain pending"
+                assert len(reliable.requests("stream")) == streams
+            finally:
+                gate.set()
+            return played.result(timeout=30)
+
     # The primary has the song and answers at once: the reliable source is not asked.
     served, fakes, audio = missing_at_primary(world, "lookup-served", sources)
     fakes["primary"][0].available = True
@@ -479,24 +509,29 @@ def test_the_reliable_source_is_looked_up_only_while_the_primary_s_lookup_keeps_
     assert play(world, quick).content == quick_audio
     assert len(sources["reliable"].requests("resolve-isrc")) == 1
     [line] = lines_with(playback_log, "playing 'Title lookup-quick Song 1' from Reliable")
-    assert "Reliable: looked up meanwhile (from 0.0s)" in line
-    assert "Reliable: lookup 0.0s" in line
+    assert re.search(r"Reliable: looked up meanwhile \(from \d+\.\ds\)", line), line
+    # Its answer is reused (one lookup), after the primary's immediate miss. The
+    # printed duration rounds scheduler/HTTP overhead and need not be exactly 0.0s.
+    assert (
+        sources["reliable"].requests("resolve-isrc")[0]["at"]
+        >= sources["primary"].requests("resolve-isrc")[-1]["at"]
+    )
+    assert re.search(r"Reliable: lookup \d+\.\ds", line), line
     # Its lookup keeps the play waiting: the reliable source is looked up from 0.5 s on,
     # and its attempt uses that answer.
+    monkeypatch.setattr(world.services.deliverer.settings, "reliable_lookup_after_seconds", 0.5)
     [slow], fakes, [slow_audio] = missing_at_primary(world, "lookup-slow", sources)
-    fakes["primary"][0].lookup_delay = 1.0
-    assert play(world, slow).content == slow_audio
+    assert while_pending(slow, fakes["primary"][0]).content == slow_audio
     assert len(sources["reliable"].requests("resolve-isrc")) == 2
     [line] = lines_with(playback_log, "playing 'Title lookup-slow Song 1' from Reliable")
     started = re.search(r"Reliable: looked up meanwhile \(from (\d+\.\d)s\)", line)
-    assert started is not None and 0.5 <= float(started.group(1)) < 1.0, line
-    assert "Reliable: lookup 0.0s" in line
+    assert started is not None and float(started.group(1)) >= 0.5, line
+    assert re.search(r"Reliable: lookup \d+\.\ds", line), line
     # The same slow lookup that finds the song: the reliable source was asked, never
     # streamed.
     [found], fakes, [found_audio] = missing_at_primary(world, "lookup-found", sources)
     fakes["primary"][0].available = True
-    fakes["primary"][0].lookup_delay = 1.0
     streams = len(sources["reliable"].requests("stream"))
-    assert play(world, found).content == found_audio
+    assert while_pending(found, fakes["primary"][0]).content == found_audio
     assert len(sources["reliable"].requests("resolve-isrc")) == 3
     assert len(sources["reliable"].requests("stream")) == streams

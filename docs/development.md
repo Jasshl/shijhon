@@ -52,6 +52,12 @@ or catalogs), `client` (playback in a real audio player).
   locked or the lid closed they fail.
 - **Tests that make a folder read-only fail when run as root.**
 
+Fixtures that compare native metadata across requests call `nd.wait_artwork()` after
+`nd.scan()`: scan completion does not include Navidrome's background artwork queue.
+Fixtures that enumerate the selected library use `prepare_collection` (or
+`refresh_collection` after their own sign-in) to await its complete source snapshot;
+signing in starts that work in the background.
+
 When matching or title normalization changes can turn a negative album match into a
 match, increment `MATCH_REVISION` in `matching/matcher.py`. This lets existing negative
 results be checked again without discarding saved fill plans or owner decisions.

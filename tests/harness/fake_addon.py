@@ -67,6 +67,7 @@ class FakeTrack:
     # first request (the preparation goes on when a request is given up).
     prepare_seconds: float = 0.0
     lookup_delay: float = 0.0  # delay of /resolve-isrc
+    lookup_gate: threading.Event | None = None  # hold its answer until explicitly released
     first_byte_delay: float = 0.0
     body_delay: float = 0.0  # the answer's headers come at once, its first bytes this late
     # After that delay the audio answers this status instead (a link that fails late).
@@ -227,6 +228,10 @@ class FakeAddon:
             track = self.tracks.get(isrc)
             if track is not None and track.lookup_delay:
                 await asyncio.sleep(track.lookup_delay)
+            if track is not None and track.lookup_gate is not None:
+                assert await asyncio.to_thread(track.lookup_gate.wait, 30), (
+                    "lookup gate not released"
+                )
             if track is None or not track.available:
                 return JSONResponse({"trackId": None})
             return JSONResponse({"trackId": track.track_id or track.isrc})

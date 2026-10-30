@@ -121,6 +121,7 @@ def protocol_world(
     write_album(nd.music, simple_album("Protocol One", "First Fiction", 3, genre="Fiction"))
     write_album(nd.music, simple_album("Protocol Two", "Second Fable", 3, genre="Fable"))
     nd.scan(full=True)
+    nd.wait_artwork()
     owner = nd.create_user("protocol-listener", "fixture-password")
     token = nd.login("protocol-listener", "fixture-password")["token"]
     with delivery_world(nd, tmp_path_factory.mktemp("collection-protocol")) as world:

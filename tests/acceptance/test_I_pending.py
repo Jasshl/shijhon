@@ -105,6 +105,7 @@ def world(
     for album in (LISTED, SHOWN, *SYNCED, IN_XML, FAILING, CHANGED):
         write_album(nd.music, album)
     nd.scan(full=True)
+    nd.wait_artwork()
     fill = {
         "enabled": True,
         "open_budget_seconds": 15,
