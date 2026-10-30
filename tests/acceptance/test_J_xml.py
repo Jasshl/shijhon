@@ -60,6 +60,7 @@ def world(
     for album in OWNED:
         write_album(nd.music, album)
     nd.scan(full=True)
+    nd.wait_artwork()  # (cover IDs settle: responses are compared with Navidrome's)
     admin = nd.client()
     found = admin.ok("search3", {"query": "Hollow 2", "artistCount": 0})["searchResult3"]
     admin.ok("star", {"id": found["song"][0]["id"]})  # listener's marks in the own entries

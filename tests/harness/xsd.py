@@ -283,8 +283,10 @@ def same_data(value: dict[str, Any], element: ET.Element, where: str = "") -> li
         elif isinstance(json_value, dict):
             kids = children.pop(key, [])
             if not any(json_value.values()):
-                if kids:
-                    found.append(f"{here}: empty in JSON, an element in XML")
+                # Navidrome leaves such an element out, or writes it empty (an artist's
+                # info with nothing found: ``{}``, ``<artistInfo2></artistInfo2>``).
+                if len(kids) > 1 or any(k.attrib or len(k) or (k.text or "").strip() for k in kids):
+                    found.append(f"{here}: empty in JSON, data in XML")
             elif len(kids) != 1:
                 found.append(f"{here}: {len(kids)} elements in XML")
             else:
