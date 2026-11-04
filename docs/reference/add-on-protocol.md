@@ -16,7 +16,9 @@ Shijhon does not send the `quality` and `atmos` request parameters.
 ## Finding a song
 
 An add-on needs `stream` and at least one way to find a song: `isrc`, `resolve` or
-`search`. Shijhon asks, in this order:
+`search`. An add-on whose manifest lists no `stream` is used only for its catalog: plays,
+availability checks, downloads and preparation never ask it for a song. Shijhon asks, in
+this order:
 
 1. `/resolve-isrc`, when the add-on declares `isrc` and the song has an ISRC.
 2. If that is not asked or finds nothing: `/resolve`, when the add-on declares `resolve`.
@@ -56,9 +58,21 @@ limits. Of several tracks that match:
   1 MiB at most.
 - HTTP 404 means "not here", 401 and 403 are refusals (at `/resolve` and `/search`: the
   add-on does not have the song), 410 an expired link, 5xx errors.
-- HTTP 429 is a rate limit: nothing new is asked until its `Retry-After` (seconds, a
-  fraction accepted, or an HTTP date; an hour at most; 30 seconds when it names none). A
-  later 429 can only make that longer. When the audio request answers 429, audio requests
+- HTTP 503 with a valid `Retry-After` (seconds or an HTTP date; any body) means "not ready
+  yet": the add-on is preparing the audio. At `/stream/{id}`, Shijhon asks again after
+  that time (half a second at least), as often as the add-on's time for the song allows
+  (its `budget_seconds` or its share of the play's budget, and the app's wait,
+  `max_wait_seconds`). When the time named is longer than what is left, it stops asking.
+  This is no error: it counts toward no cooldown, and a retry of the song, or a routing
+  that continues it, asks that add-on again. An attempt that waited until its time ran
+  out counts as a timeout; one whose first answer named more time than was left moves on
+  at once and counts as none. Either way its time counts against the add-on's place in
+  the measured order. Elsewhere such an answer is not counted as an
+  error either and is not asked again. A 503 without a valid `Retry-After` is an error.
+- HTTP 429 is a rate limit: nothing new is asked of that add-on until its `Retry-After`
+  (seconds, a fraction accepted, or an HTTP date; an hour at most; 30 seconds when it
+  names none). Other add-ons at its address are asked as before. A later 429 can only make
+  that longer. When the audio request answers 429, audio requests
   stop too. The pause is kept in memory, so a restart asks again.
 - The audio link is a file (progressive HTTP, ranges welcome) or a DASH manifest, told by
   the answer's `"manifest": "dash"`, a path ending in `.mpd`, or `Content-Type:
@@ -177,7 +191,7 @@ Only the configured catalog can use a declared identity, confirmed in `[catalog]
 `identity` as `key.region` (or `key` without a region). The Catalog page shows the
 chosen add-on's claim beside the saved identity; selecting **Confirm this identity**
 and saving confirms it. An unrelated save preserves the saved identity. Without
-confirmation, the catalog keeps its name-based key and tagged IDs, while still reading
+confirmation, the catalog keeps the add-on's key and tagged IDs, while still reading
 the extension.
 Confirming later changes the catalog key and starts saved matches and catalog lists
 over. Before catalog requests, including cached answers, a confirmed catalog rechecks
@@ -192,12 +206,12 @@ Saved discographies and top songs remain usable after restart while the manifest
 cannot be read: an unchecked identity is not a confirmed change.
 With confirmation, item IDs are used unchanged: letters, digits and dots, at most 190
 characters; `.` and `..` are not path segments. Invalid IDs are left
-out. Playlist imports' other add-on catalogs always keep name-based keys; the
-configured add-on is skipped by name. For audio, only that configured add-on receives
+out. Playlist imports' other add-on catalogs always keep their add-ons' keys; the
+configured add-on is skipped by its key. For audio, only that configured add-on receives
 an unchanged catalog item ID directly, and only while its current declaration matches
 the confirmed identity and the song's catalog key. Other add-ons, unconfirmed claims
-and changed declarations use ordinary recording lookup and matching. Name-based
-catalog references retain their existing direct-ID behavior.
+and changed declarations use ordinary recording lookup and matching. Catalog references
+under an add-on's key retain their existing direct-ID behavior.
 
 ### Fields
 
@@ -253,9 +267,9 @@ substitution and a restart.
 | `GET /catalog/artist/{id}/releases?cursor=…` | `{"albums": […], "next": "cursor"}`; null or absent `next` ends the list |
 
 Single-song and ISRC requests provide album references without a search for the album.
-Confirmed catalogs can look a song up immediately after restart. A name-keyed catalog
-uses these requests once its manifest has been read; until then, the legacy no-request
-song lookup is preserved.
+Confirmed catalogs can look a song up immediately after restart. A catalog under the
+add-on's key uses these requests once its manifest has been read; until then, the
+legacy no-request song lookup is preserved.
 
 Cursors are opaque strings of at most 512 characters, returned unchanged in
 the URL-encoded query. Shijhon reads at most 50 pages including the artist answer,
@@ -275,8 +289,8 @@ characters.
 
 Every request uses the add-on's settings, network policy and API request limit,
 behind the song being played. HTTP 404 is not found, 401/403 unauthorized, 429 pauses
-requests using `Retry-After`, and 5xx is unavailable. Failures contain no addresses or
-credentials.
+requests using `Retry-After`, and 5xx is unavailable (a 503 with `Retry-After` too, but
+it is not counted as an add-on error). Failures contain no addresses or credentials.
 
 ## The availability extension
 
@@ -327,7 +341,7 @@ Selectors must be nonempty, at most 512 characters, and neither `.` nor `..`.
 
 | Limit | Default | Setting in `[delivery]` |
 |---|---|---|
-| API requests to one add-on | 2 a second, after 4 at once following a quiet moment | `addon_requests_per_second`, `addon_request_burst` |
+| API requests to one add-on | 5 a second, after 10 at once following a quiet moment | `addon_requests_per_second`, `addon_request_burst` |
 | Audio requests being opened at one add-on at once, besides the songs being played | 4 | `addon_audio_openings` |
 | Songs one user looks up at once | 4 | `user_routings` |
 | Scheduled whole-song fetches for everyone at once | 4 | `bulk_downloads` |
@@ -343,10 +357,19 @@ Selectors must be nonempty, at most 512 characters, and neither `.` nor `..`.
 - Transfer and preparation limits are installation settings, not limits discovered in a
   standard manifest. Add-on overrides `downloads` and `preparations` inherit when omitted;
   0 removes that cap. Slots cover the full transfer, including a DASH background fetch.
-- Add-ons at one origin share transfer capacity. Add-ons with the same nonempty
-  `capacity_group` also share it; connected groups use the strictest nonzero limit.
-  Different origins do not prove independent accounts or workers. API pacing remains
-  per origin and does not follow an account group to other origins.
+- One add-on is its origin (scheme, host and port) and the `id` in its manifest. Add-ons
+  served at one origin count separately: each has its own requests a second, audio
+  openings, rate-limit pause and transfer capacity. One add-on configured twice shares
+  them, with the stricter of its entries' settings. A manifest request made before the
+  add-on's `id` is known (the first read of its manifest since Shijhon started, a
+  dashboard check of a new address) waits its turn at the origin as a whole, under the
+  strictest settings of the add-ons there, and once the `id` is known counts at the add-on
+  too. Redirect hops to another origin count at that origin as a whole. An add-on whose manifest names no `id`
+  counts at its origin as a whole.
+- Add-ons with the same nonempty `capacity_group` share transfer capacity; connected
+  groups use the strictest nonzero limit. Different origins do not prove independent
+  accounts or workers. API pacing and rate-limit pauses stay per add-on and do not follow
+  an account group.
 - A source without the cached extension is unknown, not rejected. The scheduler chooses
   one source before its normal stream request, so it does not start preparation at every
   source while checking availability. Failures can move to another source in turn.

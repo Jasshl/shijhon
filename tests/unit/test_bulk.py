@@ -355,45 +355,95 @@ async def test_unreadable_temporary_manifests_use_the_background_pause_bound(
 
 
 @pytest.mark.anyio
-async def test_grouped_429_prevents_sibling_requests_and_a_preparation_waits_it_out(
+async def test_a_429_pauses_only_that_add_on_and_its_group_still_shares_transfer_slots(
     tmp_path: Path,
 ) -> None:
+    """A 429 leaves that add-on alone, not the others of its
+    ``capacity_group`` - which still share their transfer slots."""
     async with world(tmp_path, 2, cached=True) as (bulk, sources, servers):
         for source in sources:
             source.capacity_group = "one account"
             await source.addon.manifest()
-        assert sources[0].pace is not None
-        sources[0].pace.limited(0.5)  # (a rate limit lasts a second at least)
+        assert sources[0].pace is not None and sources[0].pace is not sources[1].pace
+        sources[0].pace.limited(30)
         for server in servers:
             server.calls.clear()
-        # A client's download is not kept waiting: it fails at once.
-        with pytest.raises(NoSource):
-            await bulk.open(track(1), "ann")
-        assert not servers[1].calls
-        # A background song (playlist preparation) waits for the group's pause instead of
-        # failing - and sends nothing to the group meanwhile: no check, no link, no audio.
+        # A client's download and a background song: from the other add-on of the group,
+        # nothing sent to the paused one.
+        first = await bulk.open(track(1), "ann")
         waited: list[Opened] = []
-        async with anyio.create_task_group() as group:
-            group.start_soon(lambda: background(bulk, 1, waited))
-            await anyio.sleep(0.5)
-            assert sources[0].pace.blocked > 0
-            assert not waited and not servers[0].calls and not servers[1].calls
-            assert not bulk._active and not bulk._waiting
-        assert len(waited) == 1 and sources[0].pace.blocked == 0
+        await background(bulk, 2, waited)
+        assert not servers[0].calls and servers[1].paths().count("/audio") == 2
+        await first.close()
         await waited[0].close()
-        sources[0].pace._blocked_until = 0
+        # The group's one transfer slot, held by a play at the paused add-on: a download
+        # from the other waits for it.
         bulk.source_downloads = 1
         held = bulk.observe_playback(sources[0])
         answers: list[Opened] = []
-        async with anyio.create_task_group() as group:
-            group.start_soon(opened, bulk, 2, answers)
-            await anyio.sleep(0.03)
-            sources[0].pace.limited(1)
-            before = len(servers[1].calls)
-            held()
-            await anyio.sleep(0.05)
-            assert not answers and len(servers[1].calls) == before
-            group.cancel_scope.cancel()
+        with anyio.fail_after(3):
+            async with anyio.create_task_group() as group:
+                group.start_soon(opened, bulk, 3, answers)
+                await anyio.sleep(0.05)
+                assert not answers
+                held()
+        await answers[0].close()
+        assert not servers[0].calls and not bulk._active
+
+
+@pytest.mark.anyio
+async def test_a_live_429_pauses_new_preparations_at_that_add_on_only(tmp_path: Path) -> None:
+    """A cold attempt answered 429 pauses new preparations at that add-on, not at
+    the others of its ``capacity_group`` (an uncertain preparation still pauses the group)."""
+    async with world(tmp_path, 2) as (bulk, sources, servers):
+        bulk.deliverer.settings.cooldown_seconds = 30.0  # (the preparation pause)
+        for source in sources:
+            source.capacity_group = "one account"
+            await source.addon.manifest()
+        servers[0].limited_streams = 1  # its link request: 429
+        first = await bulk.open(track(1), "ann")  # ... so the other prepares it
+        assert servers[0].paths().count("/audio") == 0 and servers[1].paths().count("/audio") == 1
+        await first.close()
+        assert [(s.id, wide) for s, _, wide in bulk._paused] == [(sources[0].id, False)]
+        group = {s.id for s in sources}
+        assert bulk._cold_paused(sources[0], group) and not bulk._cold_paused(sources[1], group)
+        second = await bulk.open(track(2), "ann")  # a new cold start at the other: at once
+        assert servers[1].paths().count("/audio") == 2
+        await second.close()
+        bulk._pause(sources[1])  # an uncertain preparation there: its whole group waits
+        assert bulk._cold_paused(sources[0], group) and bulk._cold_paused(sources[1], group)
+        assert not bulk._active
+
+
+@pytest.mark.anyio
+async def test_a_cached_link_request_keeps_the_attempts_deadline(tmp_path: Path) -> None:
+    """After a wait for the song's routing, a cached link is asked for within
+    what is left of the attempt's time - and not at all when nothing is."""
+    async with world(tmp_path, cached=True) as (bulk, sources, servers):
+        await sources[0].addon.manifest()
+        bulk.deliverer.settings.budget_seconds = 0.5
+        servers[0].streams = anyio.Event()  # a cached link that never answers
+
+        async def held_for(seconds: float) -> float:
+            held = anyio.Event()
+
+            async def hold() -> None:
+                async with bulk.deliverer._routing_lock("1"):
+                    held.set()
+                    await anyio.sleep(seconds)
+
+            async with anyio.create_task_group() as group:
+                group.start_soon(hold)
+                await held.wait()
+                began = anyio.current_time()
+                with anyio.fail_after(5), pytest.raises(NoSource):
+                    await bulk.open(track(1), "ann")
+                return anyio.current_time() - began
+
+        assert await held_for(0.8) < 1.2  # its time was up: nothing sent
+        assert not [p for p in servers[0].paths() if p.startswith("/cached-stream/")]
+        assert await held_for(0.2) < 1.2  # asked, and given up at its deadline
+        assert len([p for p in servers[0].paths() if p.startswith("/cached-stream/")]) == 1
         assert not bulk._active
 
 
@@ -618,9 +668,9 @@ async def test_a_paused_add_on_keeps_a_preparation_waiting_instead_of_failing(
 ) -> None:
     async with world(tmp_path) as (bulk, sources, servers):
         source = sources[0]
-        pace = source.pace
-        assert pace is not None
         await source.addon.manifest()
+        pace = source.pace  # (the add-on's own, once its manifest named it)
+        assert pace is not None
 
         def paused() -> None:
             if pause == "rate limit":  # another request was answered "Retry-After: 1"
@@ -949,7 +999,7 @@ async def test_a_paused_backend_s_new_preparations_count_against_the_wait_bound(
     async with world(tmp_path, cached=cached) as (bulk, sources, _):
         await sources[0].addon.manifest()
         # An uncertain preparation ended: new ones wait a long while on this backend.
-        bulk._paused.append((sources[0], time.monotonic() + 60))
+        bulk._paused.append((sources[0], time.monotonic() + 60, True))
         if cached:  # cached work stays admissible
             waited: list[Opened] = []
             await background(bulk, 1, waited)

@@ -41,7 +41,14 @@ from shijhon.playlists.model import (
     UpstreamUnavailable,
 )
 from shijhon.playlists.prompt import context
-from shijhon.playlists.requests import PlaylistRequest, RequestError, SetupRequired
+from shijhon.playlists.requests import (
+    ADDITIONS,
+    PlaylistRequest,
+    RequestError,
+    SetupRequired,
+    TrackAddition,
+    TrackChange,
+)
 from shijhon.playlists.resolve import native_track
 from shijhon.playlists.sound import SongSound, Sound, SoundUnavailable
 
@@ -190,7 +197,7 @@ class Tools:
         choices = await self.service.ai_choices(connection.user_id)
         ai_missing: list[str] = []
         try:
-            await self.service.ai_connection(connection)
+            await self.service.ai_connection(connection, wait=False)
         except PlaylistError as exc:
             ai_missing = [str(exc)]
         history_missing = (
@@ -248,7 +255,10 @@ class Tools:
                     "setup_url": self.sound_url,
                 },
                 "listening_history": feature(("history",), history_missing),
-                "agent_curated_playlist": feature(("create",), []),
+                "agent_curated_playlist": {
+                    **feature(("create",), []),
+                    "tools": ["create_playlist", "add_playlist_tracks"],
+                },
                 "description_playlist": feature(("create",), ai_missing),
                 "recurring_description_playlist": feature(("create",), ai_missing),
                 "request_status": feature(("status",), []),
@@ -295,6 +305,7 @@ class Tools:
             },
             "limits": {
                 "playlist_tracks": 100,
+                "playlist_additions": ADDITIONS,
                 "read_page": 100,
                 "song_facts_songs": MAX_SONG_IDS,
                 "sound_seed_songs": MAX_SEEDS,
@@ -311,6 +322,8 @@ class Tools:
                 "Song facts, Last.fm tags and sound analysis are approximate hints and many "
                 "songs have none. Your own musical knowledge comes first; a missing fact is "
                 "never a reason to drop a song.",
+                "Explicit tracks publish what resolves; the request's tracks report each "
+                "one's outcome and why any was left out (require_all publishes all or none).",
                 "Configured AI has not been tested by a model call. Failures report an error.",
                 "OAuth authorizes music access, without delegating the agent's AI subscription.",
             ],
@@ -823,7 +836,7 @@ class Tools:
                 else ()
             ),
         )
-        async with self.service.changes:
+        async with self.service.changing():
             ident, created = await self.service.requests.create(
                 str(token.subject),
                 idempotency_key,
@@ -843,13 +856,16 @@ class Tools:
         owner, grant_id = str(token.subject), self.grant(token)
         if not ident or len(ident) > 100:
             raise RequestError("Use a playlist request ID.")
-        async with self.service.changes:
-            token = await self.auth("status" if action == "status" else "create")
+        if action == "status":  # a read: it does not wait for a publication to finish
+            await self.service.requests.owned(owner, ident, grant_id)
+            return {"request": await self.service.requests.status(owner, ident, creator=grant_id)}
+        async with self.service.changing():
+            token = await self.auth("create")
             owner, grant_id = str(token.subject), self.grant(token)
             await self.service.requests.owned(owner, ident, grant_id)
             mix = await self.service.repo.mix(ident, owner)
             definition = Definition.model_validate_json(mix["definition"])
-            if action not in ("status", "pause", "forget_edits"):
+            if action not in ("pause", "forget_edits"):
                 await self.auth(
                     "create",
                     *(("history",) if definition.use_history else ()),
@@ -884,6 +900,21 @@ class Tools:
                 self.service.notify()
             return {"request": await self.service.requests.status(owner, ident, creator=grant_id)}
 
+    async def add(self, ident: str, tracks: TrackAddition, idempotency_key: str) -> dict[str, Any]:
+        token = await self.auth("create")
+        if not ident or len(ident) > 100:
+            raise RequestError("Use a playlist request ID.")
+        async with self.service.changing():
+            token = await self.auth("create")
+            owner, grant_id = str(token.subject), self.grant(token)
+            added = await self.service.requests.add_tracks(
+                owner, ident, idempotency_key, tracks, creator=grant_id
+            )
+            return {
+                "added": added,
+                "request": await self.service.requests.status(owner, ident, creator=grant_id),
+            }
+
     async def listing(self, limit: int) -> dict[str, Any]:
         token = await self.auth("status")
         if not 1 <= limit <= 100:
@@ -904,7 +935,7 @@ class Tools:
 
     async def configure(self, choices: Choices) -> dict[str, Any]:
         token = await self.auth("settings")
-        async with self.service.changes:
+        async with self.service.changing():
             await self.auth("settings")
             await self.service.choose_ai_model(str(token.subject), choices.model)
         return {"updated": ["model"], "capabilities": await self.capabilities()}
@@ -1086,8 +1117,29 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         AI. Context defaults off. Keep one key and identical input through recovery.
         Publication may add library placeholders, not download audio. preview=true waits
         for human dashboard approval.
+        Explicit tracks: each resolves to the library's recording, else the catalog's (the
+        original release when several versions match). The tracks that resolve are
+        published in order; get_playlist_request's `tracks` reports every track's outcome
+        and, for a left-out one, its reason and candidates. Fix gaps with
+        add_playlist_tracks, not a new request. require_all=true publishes all or none.
         """
         return await tools.guarded(lambda: tools.create(request, idempotency_key))
+
+    @mcp.tool(annotations=write)
+    async def add_playlist_tracks(
+        request_id: str, tracks: list[TrackChange], idempotency_key: str
+    ) -> CallToolResult:
+        """Add explicit tracks to this connection's published explicit-track playlist (or
+        one whose tracks all failed), without a new request. A track with `replaces` (a
+        left-out track's position in the request's `tracks` report) takes its place;
+        others go at the end. Published tracks stay; still unresolved ones are looked up
+        again; the same playlist is republished. Refused when the playlist was edited in
+        Navidrome since publication. Use a new key
+        for each addition and keep it through recovery; confirm with get_playlist_request.
+        """
+        return await tools.guarded(
+            lambda: tools.add(request_id, TrackAddition(tracks=tracks), idempotency_key)
+        )
 
     @mcp.tool(annotations=read)
     async def get_playlist_request(request_id: str) -> CallToolResult:

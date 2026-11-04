@@ -123,7 +123,7 @@ catalog of add-on …").
 
 Add-ons are read from the current Add-ons page for every match. If you add or turn on an
 add-on with a catalog, **Recheck** can use it without restarting
-Shijhon. These catalogs keep name-based keys even when an add-on declares a stable
+Shijhon. These catalogs keep their add-ons' keys even when an add-on declares a stable
 identity through the full-catalog extension. The configured catalog does not change.
 Add-on catalog requests count against the add-on's [limits](add-ons.md#limits) and wait
 behind requests from apps. An add-on's

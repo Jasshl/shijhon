@@ -136,8 +136,9 @@ GROUPS: dict[str, list[Group]] = {
         Group(
             "addons",
             "Limits per add-on",
-            "Limits on what Shijhon sends one add-on, for all users together. Add-ons at the"
-            " same address share them. An add-on can have its own limits on the Add-ons page.",
+            "Limits on what Shijhon sends each add-on, for all users together; add-ons at one"
+            " address count separately. An add-on can be given other limits on the Add-ons"
+            " page.",
             more=True,
         ),
         Group("joining", "Joining DASH streams", more=True),
@@ -461,8 +462,8 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "addon_requests_per_second": Meta(
             "Requests a second",
-            "Requests sent to one add-on each second: lookups, links and ready checks. More"
-            " wait their turn. 0: no limit.",
+            "Requests sent to one add-on each second: lookups, links and ready checks. Add-ons"
+            " at one address count separately. More wait their turn. 0: no limit.",
             "addons",
             unit="/s",
             spoken="requests a second",

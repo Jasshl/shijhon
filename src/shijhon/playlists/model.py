@@ -49,6 +49,10 @@ NativeId = Annotated[
 REFERENCE_PLAYLISTS = 3
 REFERENCE_SONGS = 50
 LIBRARY_LOST = "The agent connection no longer grants library access. Generate again."
+EDITED = (
+    "The playlist was changed in Navidrome after it was published. Shijhon keeps those "
+    "edits: change it there, or create a new playlist."
+)
 
 
 def distinct(values: list[str]) -> list[str]:
@@ -205,6 +209,8 @@ class Definition(Model):
     use_library: bool = False
     save_instructions: bool = False
     tracks: list[Suggestion] = Field(default_factory=list, max_length=100)
+    # Explicit tracks: publish only when every one resolves (else what resolves).
+    require_all: bool = False
     # Described playlists only: read again at every generation, so refreshes follow them.
     reference_playlists: list[NativeId] = Field(
         default_factory=list, max_length=REFERENCE_PLAYLISTS
@@ -245,6 +251,8 @@ class Definition(Model):
             raise ValueError("a brief needs AI curation")
         if self.mode == "prompt" and (not self.brief.strip() or not self.ai):
             raise ValueError("a prompt needs instructions and saved AI")
+        if self.require_all and self.mode != "tracks":
+            raise ValueError("require_all is for explicit tracks")
         if self.mode == "tracks" and (
             len(self.tracks) != self.count
             or self.ai

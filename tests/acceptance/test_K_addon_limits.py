@@ -397,8 +397,9 @@ def test_a_lookup_meanwhile_that_gets_no_turn_ends_its_attempt_once(
 def test_a_single_play_on_an_idle_add_on_waits_for_nothing(
     world: DeliveryWorld, addon: FakeAddon
 ) -> None:
-    """With the built-in limits (2 requests a second, 4 at once): a cold play - the add-on's
-    manifest, the lookup, the link, the audio - is not held up anywhere."""
+    """With strict limits (2 requests a second, 4 at once; the built-in ones are higher): a
+    cold play - the add-on's manifest, the lookup, the link, the audio - is not held up
+    anywhere."""
     (song,) = songs(world, addon, "l-idle", 1)
     (source,) = world.server.call(world.services.sources.enabled)
     assert source.pace is not None and source.pace.limits == Limits(2.0, 4, 4)
@@ -446,9 +447,7 @@ def test_a_request_that_gets_no_turn_in_its_time_is_a_timeout_and_not_the_add_on
     assert again.status_code == 200 and again.content[:4] == b"fLaC"
 
 
-def test_two_add_ons_at_one_address_share_its_limits(
-    world: DeliveryWorld, addon: FakeAddon
-) -> None:
+def test_one_add_on_added_twice_shares_its_limits(world: DeliveryWorld, addon: FakeAddon) -> None:
     limit(world, 10.0, 2)
     # A second entry at the same origin (the same add-on, configured another way).
     world.server.call(
@@ -500,7 +499,7 @@ def test_a_listening_session_with_every_limit_at_its_built_in_value(
 ) -> None:
     """The limits together, as an installation has them: primary-first routing with an
     availability check at the other add-on, warm-ahead of the next two songs, the per-user
-    limits, 2 requests a second per add-on after 4 at once. A listener playing an album -
+    limits, 5 requests a second per add-on after 10 at once. A listener playing an album -
     and skipping on - hears each song promptly, the next ones are warm, and no add-on is
     asked faster than its limit."""
     with delivery_world(
@@ -512,8 +511,8 @@ def test_a_listening_session_with_every_limit_at_its_built_in_value(
         warm_ahead_delay_seconds=0.3,
         budget_seconds=9.0,
         max_wait_seconds=30.0,
-        addon_requests_per_second=2.0,
-        addon_request_burst=4,
+        addon_requests_per_second=5.0,
+        addon_request_burst=10,
         addon_audio_openings=4,
         user_download_burst=4,
     ) as world:
@@ -543,10 +542,10 @@ def test_a_listening_session_with_every_limit_at_its_built_in_value(
         # next two of each song played): never twice.
         looked_up = [r["isrc"] for r in primary.requests("resolve-isrc")]
         assert len(looked_up) == len(set(looked_up)) == 6
-        for addon, burst in ((primary, 4), (checked, 4)):
+        for addon, burst in ((primary, 10), (checked, 10)):
             sent = api_requests(addon)
-            assert most_within(sent, 1.0) <= burst + 2 + 2, addon.name
-            assert most_within(sent, 4.0) <= burst + 2 * 4 + 2, addon.name
+            assert most_within(sent, 1.0) <= burst + 5 + 2, addon.name
+            assert most_within(sent, 4.0) <= burst + 5 * 4 + 2, addon.name
         # No play was held up at a limit (whatever the machine's speed: a wait there is in
         # the play's log line), and none went without audio.
         played = [line for line in lines if line.startswith("playing ")]

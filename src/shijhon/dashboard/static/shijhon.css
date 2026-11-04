@@ -1637,6 +1637,10 @@ select.select-small {
 .source-off::before {
   background: repeating-linear-gradient(to bottom, var(--rule) 0 3px, transparent 3px 7px);
 }
+/* Add-ons that are a catalog only are never asked for audio: no path joins them. */
+.chain-unordered .source::before {
+  display: none;
+}
 
 .source-order {
   grid-area: order;

@@ -36,6 +36,7 @@ OAuth login and refresh. The MCP interface handles this through its client.
 | `reference_playlists` | `[]` | Up to 3 distinct Navidrome playlist IDs the account can read; prompt mode; token library grant |
 | `reference_songs` | `[]` | Up to 50 distinct Navidrome song IDs the account can read; prompt mode; token library grant |
 | `exclude_reference` | `true` | Boolean; leave the chosen references' songs out of the result |
+| `require_all` | `false` | Boolean; explicit tracks only: publish nothing unless every track resolves |
 
 Require a nonblank prompt or a nonempty `tracks` list whose length equals `count`.
 Each track requires nonblank `artist` and `title`, at most 300 characters each;
@@ -46,7 +47,14 @@ generation); an over-limit list is rejected before a request is created.
 Explicit tracks preserve order, require manual cadence and both context flags
 false, cannot save refresh instructions, and make no model call even if an original
 prompt is retained. `version` is a literal recording qualifier, such as `Live` or
-`Radio Edit`; leave it empty for an unqualified recording title. Prompt mode
+`Radio Edit`; leave it empty for an unqualified recording title. Each explicit
+track becomes the library's recording, else the catalog's (a library placeholder on
+publication). When several releases match, the original is chosen: not a clean edit,
+no remaster or deluxe marker, the earliest year. The credit may differ in featured artists
+and in "and" for "&" ("A and B feat. C" matches "A & B"). The tracks that resolve are published in
+their order and the others are left out and reported in status; with `require_all`
+nothing is published unless every track resolves. A request whose tracks all fail is
+not published. Prompt mode
 uses only saved server AI. A nonmanual cadence also requires a prompt, saved
 instructions and usable saved server AI; the server enforces AI availability.
 
@@ -126,6 +134,36 @@ status. Changed input for the same owner/key returns `409`.
   run: after `manage_playlist_refresh` with `action: "forget_edits"` (MCP only, on the
   user's request; it returns `forgotten`, the number of songs cleared) later refreshes
   start without them, and the earlier run's `edits` stays as it was.
+  Explicit-track requests report `resolution` (`requested`, `library`, `catalog`,
+  `unresolved` counts) and `tracks`, one entry per submitted track in order:
+  `position` (1-based), `input` (`artist`, `title`, `album`, `version`), `outcome`
+  (`"library"`, `"catalog"` or `"unresolved"`) and, when resolved, `song` (`artist`,
+  `title`, `album`). Without the library permission, `outcome` and the count say only
+  `"resolved"` and candidates come from the catalog alone. An unresolved track has
+  `reason`, a fixed `detail` sentence and, when something near was found, up to five
+  `candidates` (`artist`, `title`, `album`). Reasons: `not_found`; `album_mismatch`
+  (only on other albums); `version_mismatch` (only other versions of the title, such as
+  `Song (Live)` or `Song - Main Title`); `artist_mismatch` (the title with a different
+  credit that shares a name); `title_mismatch` (a similar title by the artist, such as
+  one without a leading "The"); `unconfirmed` (listed, but its release could not be
+  confirmed); `catalog_unavailable` (the catalog did not answer, also after a pause; add
+  it again later); `not_checked` (the run's time ran out first); `duplicate` (the same
+  recording as the track at `same_as`); `library_refused` (found, but the library would
+  not add it to its album, such as an owned album kept as it is; `detail` says what to
+  review in Library; without the library permission it reads `not_added`). Status after a run that published nothing still
+  has `tracks`.
+- `POST /requests/{id}/tracks` (MCP: `add_playlist_tracks`) with
+  `{"tracks":[...]}` and a new `Idempotency-Key` adds 1..100 tracks to an explicit-track
+  request that is published, or whose selection failed. A track with `replaces` (the
+  `position` of a track status reports `unresolved`) takes its place; tracks without it
+  go at the end. The request's list then has at most 100 tracks within `max_per_artist`.
+  A new run of the same request keeps the published tracks as they are, looks up the new
+  ones and the still unresolved ones again, and republishes the same native playlist;
+  status reports it like the first. It is accepted after a publication, a failed
+  selection or a discarded preview, and refused (`409`) while a run is active, when the
+  playlist was edited in Navidrome after publication (Shijhon keeps those edits), and
+  after 10 additions. Replaying the key with the same tracks returns
+  `200` and adds nothing; other tracks under it return `409`.
 - `POST /requests/{id}/retry` with `{}` retries that same request. Frozen selections
   are reused; selection may regenerate if not frozen. It does not create a new
   request. The client never retries automatically.
@@ -142,7 +180,10 @@ Errors: `400` bad input, `401` invalid token, `403` forbidden scope/context, `40
 changed input under an existing key, `413` oversized body, `415` unsupported media
 type, `424` missing required setup, and `429` too many active requests. These errors
 do not create a new request. `503` means a temporary upstream/server failure; keep
-the same input and key for recovery. A Navidrome outage does not revoke OAuth
+the same input and key for recovery. A change that waited about 10 seconds behind
+another playlist's publication answers `503` with `Retry-After: 30` (over MCP,
+`temporarily_unavailable` saying nothing was changed): send the same call again. Status
+reads do not wait for a publication. A Navidrome outage does not revoke OAuth
 credentials or require new consent. The client prints fixed error messages rather
 than HTTP response bodies or exception details; it redacts the bearer token from
 decoded successful responses too. It exits 1 on client/HTTP failures, 2 on invalid

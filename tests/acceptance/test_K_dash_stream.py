@@ -613,7 +613,10 @@ def test_probes_are_audio_openings_at_the_add_on_s_limits(
     song, _, folder = dash_song(world, "s-paced", a, seconds=LONG, probe_delay=0.05)
     assert stream(world, song).status_code == 200
     assert a.most_probes_at_once == 8  # the song being played: 8 at once
-    pace = world.services.sources.paces.of(a.base_url)
+    # (The add-on's own, its manifest read.)
+    pace = next(
+        s.pace for s in world.server.call(world.services.sources.enabled) if s.name == a.name
+    )
     assert pace is not None
     pace.configure(Limits(0.0, 4, 1))  # one audio opening at once, for all but a play
     try:

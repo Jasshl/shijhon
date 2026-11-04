@@ -9,6 +9,7 @@ redirect. Small scripts improve the restart waiting page and playlist forms.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import functools
 import hashlib
@@ -105,7 +106,7 @@ from shijhon.delivery.bulk import effective_capacity
 from shijhon.delivery.netpolicy import Reach, Resolver, system_resolver
 from shijhon.delivery.pacing import AddonPace, Limits, origin
 from shijhon.delivery.quality_gate import CHOICES as QUALITY_CHOICES
-from shijhon.delivery.sources import MAX_LIMIT, StoredSource
+from shijhon.delivery.sources import MAX_LIMIT, NameTaken, StoredSource
 from shijhon.fill.fills import ChoiceRefused
 from shijhon.locks import KeyedLocks
 from shijhon.navidrome.client import NavidromeError
@@ -320,11 +321,23 @@ ADDON_TRANSFER_LIMITS = (
 ADDON_MORE = Group(
     "limits",
     "Time and limits",
-    "An empty field uses Playback's setting. Add-ons at one address, or with the same shared"
-    " group label, share their limits on fetched songs and new preparations, and the"
-    " strictest applies. Request limits are shared by address only.",
+    "An empty field uses Playback's setting. Each add-on has its own limits; add-ons with the"
+    " same shared group label share their limits on fetched songs and new preparations, and"
+    " the strictest applies.",
     more=True,
 )
+# The same for an add-on that is a catalog only: no audio, so its request limits alone.
+ADDON_CATALOG_MORE = Group(
+    "limits",
+    "Time and request limits",
+    "An empty field uses the Catalog page's request timeout or Playback's limits per add-on.",
+    more=True,
+)
+# The limits that count for a catalog only: what is sent to it, not its audio.
+CATALOG_LIMITS = ("requests_per_second", "request_burst")
+MAX_ADDON_NAME = 100
+# The routing's roles: Playback's settings that name an add-on asked for audio.
+ROLES = {"primary_source": "primary add-on", "reliable_source": "preferred fallback"}
 # Where an add-on runs (its settings, and the form that adds one).
 REACH_HELP = (
     "Where the add-on runs. An address on this machine or your local network is refused"
@@ -1001,8 +1014,19 @@ class Dashboard:
             )
         return waiting
 
-    async def _addon_names(self) -> list[str]:
-        return [addon.name for addon in await self._stored()]
+    async def _addon_names(self, section: str = "") -> list[str]:
+        """The add-ons a setting of ``section`` that names one may choose: for Playback's
+        (the routing's), those asked for audio - not one that is a catalog only."""
+        addons = await self._stored()
+        if section != "delivery":
+            return [addon.name for addon in addons]
+        audio = self._audio_ids(addons)
+        return [addon.name for addon in addons if addon.id in audio]
+
+    async def _catalog_only_names(self) -> list[str]:
+        addons = await self._stored()
+        audio = self._audio_ids(addons)
+        return [addon.name for addon in addons if addon.id not in audio]
 
     async def _running_section(
         self, section: str, keys: list[str], values: Any, interim: list[str] | None = None
@@ -1055,7 +1079,11 @@ class Dashboard:
         with a notice in place of the refusal and its marks."""
         assert self.saved is not None
         saved = await self.saved.all()
-        names = await self._addon_names()
+        notes: dict[str, str] = {}
+        if page == "playback":  # (which add-ons are a catalog only: their manifests say)
+            await self.checks.check(await self._stored())
+            notes = {name: "catalog only" for name in await self._catalog_only_names()}
+        names = await self._addon_names(section)
         extra: dict[str, Any] = {}
         shown = dict(problems or {})
         # (The second form's flash is its own: not the main form's status.)
@@ -1096,7 +1124,7 @@ class Dashboard:
             # (A saved value that no longer fits is not in use: said, like the page's own.)
             extra["wait_problem"] = self.problems.get("search")
         if page == "playback":
-            extra = {"missing": self._missing_sources(saved, names)}
+            extra = {"missing": self._missing_sources(saved, names, notes)}
         if page == "sound":
             extra = await self._sound_status(saved)
         groups = sections.rows(
@@ -1104,6 +1132,7 @@ class Dashboard:
             self.host.configured,
             saved,
             addon_names=names,
+            addon_notes=notes,
             form=form,
             problems=shown,
             just_saved=list(flash.keys) if flash else None,
@@ -1172,18 +1201,23 @@ class Dashboard:
             "section.html", session=session, current=page, status_code=status_code, **context
         )
 
-    def _missing_sources(self, saved: Any, names: list[str]) -> list[tuple[str, str]]:
-        """(what is wrong, the environment variable that sets it or "")."""
+    def _missing_sources(
+        self, saved: Any, names: list[str], catalogs: Mapping[str, str]
+    ) -> list[tuple[str, str, bool]]:
+        """(what is wrong, the environment variable that sets it or "", whether the add-on
+        is in the list as a catalog only): a routing role naming an add-on that is not
+        among ``names`` (those asked for audio). It stays as it is until changed."""
         delivery = effective(self.host.configured, saved, locked=self.host.locked)[0].delivery
         env = self.host.locked.get("delivery", {})
         missing = []
-        roles = (("primary_source", "primary add-on"), ("reliable_source", "preferred fallback"))
-        for key, label in roles:
+        for key, label in ROLES.items():
             name = getattr(delivery, key)
-            if name and name not in names:
-                missing.append(
-                    (f"The {label} “{name}” is not in the add-on list.", env.get(key, ""))
-                )
+            if name and name in catalogs:
+                line = f"The {label} “{name}” provides a catalog only: it is not asked for audio."
+                missing.append((line, env.get(key, ""), True))
+            elif name and name not in names:
+                line = f"The {label} “{name}” is not in the add-on list."
+                missing.append((line, env.get(key, ""), False))
         return missing
 
     async def _section_save(
@@ -1259,9 +1293,17 @@ class Dashboard:
         """Check and save a form's settings of one section, and apply the live ones: (the
         submission, what was written or None when it has problems, the keys applied)."""
         assert self.saved is not None
+        if section == "delivery":
+            # What the add-ons the routing's roles name say now - their manifests, as read
+            # within the minute or read now (each within 5 s) - whatever page was seen
+            # before: one that is a catalog only is not chosen (one already chosen stays).
+            chosen = {form.get(key, "").strip() for key in ROLES} - {""}
+            named = [addon for addon in await self._stored() if addon.name in chosen]
+            if named:
+                await self.checks.check(named)
         async with self._section_saves.hold(section):
             saved = await self.saved.all()
-            names = await self._addon_names()
+            names = await self._addon_names(section)
             submitted = await sections.submit(
                 section,
                 self.host.configured,
@@ -1277,11 +1319,13 @@ class Dashboard:
             )
             if written.writes:
                 await self.saved.put(section, written.writes, session.username)
-        if whole:  # a form with all of the section's settings replaces what did not fit
-            self.problems.pop(section, None)
-        applied = await self._running_section(
-            section, written.changed, submitted.candidate, interim
-        )
+            if whole:  # a form with all of the section's settings replaces what did not fit
+                self.problems.pop(section, None)
+            # (Applied before another save of the section - an add-on's rename - may write:
+            # what runs is what was saved last.)
+            applied = await self._running_section(
+                section, written.changed, submitted.candidate, interim
+            )
         if written.changed:
             kind = sections.kind_of(section, submitted.candidate)
             secret = {f.key for f in sections.fields_of(section, kind) if f.kind == "secret"}
@@ -1615,8 +1659,8 @@ class Dashboard:
         marks = self._marks.get(addon.id, {})
         own = dataclasses.astuple(addon.limits)
         content = [
-            addon.base_url, str(addon.reach), addon.settings, addon.budget, declared, marks, own,
-            addon.downloads, addon.preparations, addon.capacity_group
+            addon.name, addon.base_url, str(addon.reach), addon.settings, addon.budget, declared,
+            marks, own, addon.downloads, addon.preparations, addon.capacity_group
         ]  # fmt: skip
         text = json.dumps(content, sort_keys=True, default=str)
         return hmac.new(self._form_key, text.encode(), hashlib.sha256).hexdigest()[:32]
@@ -1676,10 +1720,10 @@ class Dashboard:
             health["detail"] = "; ".join(parts)
         return health
 
-    async def _pace(self, url: str) -> AddonPace | None:
+    async def _pace(self, url: str, base_url: str) -> AddonPace | None:
         """The limits of the add-on origin ``url`` is at: the dashboard's manifest
         requests count there like any request, after everything a listener waits for."""
-        return None if self.services is None else await self.services.sources.pace_at(url)
+        return None if self.services is None else await self.services.sources.pace_at(url, base_url)
 
     async def _stored(self) -> list[StoredSource]:
         services = self.services
@@ -1694,10 +1738,12 @@ class Dashboard:
         problems: dict[str, sections.Problem],
         capacity: tuple[int, int] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """The rows of an add-on's settings form: its manifest's, then where it runs and its
-        address; and those under its "Advanced settings": its time and its limits."""
+        """The rows of an add-on's settings form: its name, its manifest's, then where it
+        runs and its address; and those under its "Advanced settings": its time and its
+        limits - of an add-on that is a catalog only, its request limits alone."""
         running = self.running or self.host.configured
         prefix = f"addon-{addon.id}"
+        catalog_only = self._catalog_only(addon)
         if form is not None:
             budget_text = form.get("budget_seconds", "")
         else:
@@ -1707,6 +1753,18 @@ class Dashboard:
         check = self.checks.known(addon)
         declared = check.manifest.declared if check is not None and check.manifest else ()
         rows: list[dict[str, Any]] = [
+            _setting(
+                id=f"{prefix}-name",
+                name="name",
+                kind="text",
+                label="Name",
+                text=form.get("name", addon.name) if form is not None else addon.name,
+                max_length=MAX_ADDON_NAME,
+                help="How the add-on is shown here and in the settings that choose one. A new"
+                " name changes only that: its catalog, its songs and the settings that name it"
+                " stay with it.",
+                problem=_row(problems.get("name")),
+            ),
             *(self._declared_row(addon, item, form, problems) for item in declared),
             _setting(
                 id=f"{prefix}-reach",
@@ -1769,16 +1827,48 @@ class Dashboard:
                 if form is not None
                 else addon.capacity_group,
                 max_length=100,
-                help="Give add-ons that use one account or worker the same label, even at"
-                " different addresses: Shijhon can't tell that from the address. They then"
-                " share their limits on fetched songs and new preparations, and the strictest"
-                " applies. The label is not sent to the add-on.",
-                default="Default none: only add-ons at one address share limits",
+                help="Give add-ons that use one account or worker the same label, at one"
+                " address or at different ones: Shijhon can't tell that from the address. They"
+                " then share their limits on fetched songs and new preparations, and the"
+                " strictest applies. The label is not sent to the add-on.",
+                default="Default none: each add-on has its own limits",
                 problem=_row(problems.get("capacity_group")),
                 modified=bool(addon.capacity_group),
             ),
         ]
+        if catalog_only:  # (what is not shown is kept as it is: a save leaves it alone)
+            # Its own time is a catalog's too: playlist imports wait that long for it.
+            waits = format_number(running.catalog.timeout_seconds)
+            timed = _setting(
+                id=f"{prefix}-budget",
+                name="budget_seconds",
+                kind="decimal",
+                label="Time for catalog answers",
+                spoken="seconds",
+                unit="s",
+                text=budget_text,
+                help="How long playlist imports wait for this add-on's catalog, when longer"
+                " than the Catalog page's request timeout. Give more to a slow add-on. Empty:"
+                " the request timeout applies.",
+                default=f"Default {waits} s, from Catalog",
+                problem=_row(problems.get("budget_seconds")),
+                modified=addon.budget is not None,
+            )
+            more = [timed, *(row for row in more if row["name"] in CATALOG_LIMITS)]
         return rows, more
+
+    def _catalog_only(self, addon: StoredSource) -> bool:
+        """Whether the add-on is a catalog only: its manifest, as last read, declares no
+        ``stream`` (``Manifest.streams``, as the routing's ``Source.streams``) - Shijhon
+        never asks it for audio. One whose manifest could not be read is not (it stays among
+        the others, with its problem)."""
+        check = self.checks.known(addon)
+        return bool(check is not None and check.manifest and not check.manifest.streams)
+
+    def _audio_ids(self, addons: list[StoredSource]) -> list[int]:
+        """The add-ons in the order audio is asked for: all but those that are a catalog
+        only, in the list's order."""
+        return [addon.id for addon in addons if not self._catalog_only(addon)]
 
     def _limit_row(
         self,
@@ -1920,25 +2010,30 @@ class Dashboard:
         )
         flash = self._flash_for(session, "addons")
         items: list[dict[str, Any]] = []
-        for index, addon in enumerate(addons):
+        audio = self._audio_ids(addons)
+        for addon in addons:
             check = self.checks.known(addon)
             mine = form_for == addon.id
+            catalog_only = addon.id not in audio
             rows, more = self._addon_rows(
                 addon,
                 form if mine else None,
                 problems or {} if mine else {},
                 capacity=capacities.get(addon.id),
             )
-            _, fold = sections.folded([(ADDON_MORE, more)])
+            group = ADDON_CATALOG_MORE if catalog_only else ADDON_MORE
+            _, fold = sections.folded([(group, more)])
             if flash is not None and flash.addon == addon.id and set(flash.keys):
                 fold = dataclasses.replace(fold, open=True)  # (its time or limits saved now)
             items.append(
                 {
                     "addon": addon,
                     "host": host_of(addon.base_url),
-                    "order": index + 1,
-                    "first": index == 0,
-                    "last": index == len(addons) - 1,
+                    # Its place in the order audio is asked for (none: a catalog only).
+                    "catalog_only": catalog_only,
+                    "order": 0 if catalog_only else audio.index(addon.id) + 1,
+                    "first": not catalog_only and audio.index(addon.id) == 0,
+                    "last": not catalog_only and audio.index(addon.id) == len(audio) - 1,
                     "version": check.manifest.version if check and check.manifest else "",
                     "no_downloads": bool(check and check.manifest and not check.manifest.downloads),
                     "health": self._health(addon),
@@ -1993,6 +2088,8 @@ class Dashboard:
             current="addons",
             status_code=status_code,
             items=items,
+            audio=[item for item in items if not item["catalog_only"]],
+            catalogs=[item for item in items if item["catalog_only"]],
             enabled=sum(1 for a in addons if a.enabled),
             errors=errors,
             cooling=cooling,
@@ -2020,6 +2117,31 @@ class Dashboard:
         if running.delivery.reliable_source == name:
             roles.append("the preferred fallback")
         return roles
+
+    async def _renamed(self, addon: StoredSource, name: str, naming: list[tuple[str, str]]) -> None:
+        """After a rename: the settings that named it, saved with the new name, apply at
+        once - the routing's add-ons, and the running catalog's (its catalog is the add-on's
+        key, which the rename kept, so it is the same catalog: no restart waits)."""
+        assert self.saved is not None
+        applying, _ = effective(
+            self.host.configured, await self.saved.all(), locked=self.host.locked
+        )
+        delivery = [key for section, key in naming if section == "delivery"]
+        await self._running_section("delivery", delivery, applying.delivery)
+        services, running = self.services, self.running
+        if services is None or running is None or running.catalog.kind != "addon":
+            return
+        inner = getattr(services.catalog, "inner", services.catalog)
+        if (
+            getattr(running.catalog, "addon", "") == addon.name
+            and isinstance(inner, AddonCatalog)
+            and inner.addon_key == addon.key
+        ):
+            catalog = running.catalog.model_copy(update={"addon": name})
+            self.running = running.model_copy(update={"catalog": catalog})
+            inner.name = name
+            if services.deliverer.settings.catalog_addon == addon.name:
+                services.deliverer.settings.catalog_addon = name
 
     async def addon_add(self, request: Request, session: Session) -> Response:
         self._editable_list()
@@ -2085,11 +2207,14 @@ class Dashboard:
         self._editable_list()
         assert self.services is not None and self.store is not None
         addon = await self._addon(int(request.path_params["addon"]))
-        ids = [item.id for item in await self._stored()]
-        index = ids.index(addon.id)
+        addons = await self._stored()
+        # (Among the add-ons asked for audio: one that is a catalog only has no place.)
+        audio = self._audio_ids(addons)
+        index = audio.index(addon.id) if addon.id in audio else -2
         step = -1 if request.state.form.get("direction") == "up" else 1
-        if 0 <= index + step < len(ids):
-            ids[index], ids[index + step] = ids[index + step], ids[index]
+        if 0 <= index + step < len(audio) and index >= 0:
+            audio[index], audio[index + step] = audio[index + step], audio[index]
+            ids = _placed([item.id for item in addons], audio)
             await self.services.sources.reorder(ids, also=functools.partial(self._owned, session))
             log.info(
                 "dashboard: %s moved the add-on %s",
@@ -2102,13 +2227,15 @@ class Dashboard:
 
     async def addons_order(self, request: Request, session: Session) -> Response:
         """The order addons.js saves after an add-on was pulled to another place: a position
-        for every add-on, answered as JSON. Refused (the list changed meanwhile), the page
-        reloads and its notice says so."""
+        for every add-on asked for audio (those that are a catalog only keep their places),
+        answered as JSON. Refused (the list changed meanwhile), the page reloads and its
+        notice says so."""
         self._editable_list()
         assert self.services is not None
         form: dict[str, str] = request.state.form
         addons = await self._stored()
-        ids = [addon.id for addon in addons]
+        every = [addon.id for addon in addons]
+        ids = self._audio_ids(addons)
         sent = {key for key in form if key.startswith("position-")}
         positions: dict[int, int] = {}
         for source_id in ids:
@@ -2124,7 +2251,7 @@ class Dashboard:
         ordered = sorted(ids, key=lambda source_id: (positions[source_id], ids.index(source_id)))
         if ordered != ids:
             await self.services.sources.reorder(
-                ordered, also=functools.partial(self._owned, session)
+                _placed(every, ordered), also=functools.partial(self._owned, session)
             )
             log.info("dashboard: %s changed the add-ons' order", printable(session.username))
         return JSONResponse({"saved": True}, headers=HEADERS)
@@ -2251,6 +2378,30 @@ class Dashboard:
         reach = form.get("reach", addon.reach)
         if reach not in REACHES:
             problem("reach", "Choose where the add-on runs.", "must be one of the listed places.")
+        # Another name: only what people see changes (its key stays), and the settings
+        # that name the add-on change with it - not one the environment sets.
+        typed = form.get("name", addon.name)
+        new_name = addon.name if typed == addon.name else typed.strip()  # (as the file wrote it)
+        if new_name != addon.name:
+            others = {item.name for item in await self._stored() if item.id != addon.id}
+            assert self.saved is not None
+            configured, locked = self.host.configured, self.host.locked
+            found = sections.naming(configured, await self.saved.all(), locked, addon.name)
+            fixed = list(sections.set_by_environment(configured, locked, found).values())
+            rule = f"up to {MAX_ADDON_NAME} characters, on one line"
+            if not new_name:
+                problem("name", "Enter a name.", "is needed.")
+            elif len(new_name) > MAX_ADDON_NAME or not new_name.isprintable():
+                problem("name", f"Enter {rule}.", f"must be {rule}.")
+            elif new_name in others:
+                problem("name", "Another add-on has this name. Choose another.", "is taken.")
+            elif fixed:
+                variables = ", ".join(fixed)
+                problem(
+                    "name",
+                    f"The environment names this add-on ({variables}). Change it there first.",
+                    f"can't change: the environment names this add-on ({variables}).",
+                )
         new_url = form.get("manifest", "").strip()
         if new_url and not new_url.lower().startswith(("https://", "http://")):
             problem(
@@ -2347,43 +2498,81 @@ class Dashboard:
             )
 
         # The settings and the marks of which may be shown are saved together or not at all:
-        # a secret typed here is never stored without its "not shown" mark.
+        # a secret typed here is never stored without its "not shown" mark. A new name and
+        # the settings that name the add-on, too.
+        renamed = new_name != addon.name
+        naming: list[tuple[str, str]] = []
+
         async def also(conn: aiosqlite.Connection) -> None:
             await self._owned(session, conn)
             if marked != marks and self.saved is not None:
                 await self.saved.write(
                     conn, SHOWN, {str(addon.id): marked or REMOVE}, session.username
                 )
+            if renamed:
+                assert self.saved is not None
+                naming[:] = await sections.rename_writes(
+                    self.saved, conn, self.host.configured, self.host.locked,
+                    addon.name, new_name, session.username,
+                )  # fmt: skip
 
-        await self.services.sources.update(
-            addon.id,
-            base_url=new_url or None,
-            settings=settings,
-            reach=Reach(reach),
-            budget_seconds=None if keep_budget else budget,
-            clear_budget=not keep_budget and budget is None,
-            limits=Limits(**own),  # type: ignore[arg-type]  # (whole numbers where they are)
-            downloads=transfers["downloads"],
-            preparations=transfers["preparations"],
-            clear_downloads="downloads" in form and transfers["downloads"] is None,
-            clear_preparations="preparations" in form and transfers["preparations"] is None,
-            capacity_group=capacity_group,
-            also=also,
-        )
+        # (What the settings that name it say is read, written and applied with no other
+        # save of them under way.)
+        async with contextlib.AsyncExitStack() as held:
+            if renamed:
+                for section in sorted({section for section, _ in sections.NAMING}):
+                    await held.enter_async_context(self._section_saves.hold(section))
+            try:
+                await self.services.sources.update(
+                    addon.id,
+                    name=new_name if renamed else None,
+                    base_url=new_url or None,
+                    settings=settings,
+                    reach=Reach(reach),
+                    budget_seconds=None if keep_budget else budget,
+                    clear_budget=not keep_budget and budget is None,
+                    limits=Limits(**own),  # type: ignore[arg-type]  # (whole numbers where they are)
+                    downloads=transfers["downloads"],
+                    preparations=transfers["preparations"],
+                    clear_downloads="downloads" in form and transfers["downloads"] is None,
+                    clear_preparations=(
+                        "preparations" in form and transfers["preparations"] is None
+                    ),
+                    capacity_group=capacity_group,
+                    also=also,
+                )
+            except NameTaken:  # (added or renamed meanwhile)
+                taken = True
+            else:
+                taken = False
+                if renamed:  # (applied before another save of them may write)
+                    await self._renamed(addon, new_name, naming)
+        if taken:
+            problem("name", "Another add-on has this name. Choose another.", "is taken.")
+            return await self.addons_page(
+                request, session, form_for=addon.id, form=form, problems=problems, status_code=400
+            )
+        if renamed:
+            log.info(
+                "dashboard: %s renamed the add-on %s to %s",
+                printable(session.username),
+                printable(addon.name),
+                printable(new_name),
+            )
         if fresh is not None:  # read a moment ago at its address: not asked for again
             self.checks.learn(await self._addon(addon.id), fresh)
         log.info(
             "dashboard: %s saved the add-on %s's settings%s",
             printable(session.username),
-            printable(addon.name),
+            printable(new_name),
             f"; its address is on another host: {len(dropped)} setting(s) removed"
             if dropped
             else "",
         )
-        words = ""
+        words = f"{addon.name} renamed to {new_name}." if renamed else ""
         if dropped:
-            words = (
-                f"{addon.name}'s address is on another host now. {len(dropped)} setting(s)"
+            words += (" " if words else "") + (
+                f"{new_name}'s address is on another host now. {len(dropped)} setting(s)"
                 " that may be secret were removed, so they are not sent there. Enter them"
                 " again below if the new address needs them."
             )
@@ -3457,6 +3646,13 @@ def _rate_limit(reason: str | None) -> bool:
 
 def _row(problem: sections.Problem | None) -> str | None:
     return problem.row if problem else None
+
+
+def _placed(ids: list[int], ordered: list[int]) -> list[int]:
+    """``ids`` with the add-ons of ``ordered`` in its order, in the places they had among
+    them; the others stay where they are."""
+    chosen, moved = set(ordered), iter(ordered)
+    return [next(moved) if source_id in chosen else source_id for source_id in ids]
 
 
 def _setting(**values: Any) -> dict[str, Any]:

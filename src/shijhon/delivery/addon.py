@@ -61,6 +61,7 @@ SEARCHED = 100  # a search's tracks compared at most, in its order, when finding
 # reads them): a longer one is no track's, and never goes through the patterns.
 MAX_WORDS = 500
 SERVICE_TAG = 8  # characters of an item ID that say which service it is of
+PREPARING = "not ready yet (HTTP 503 with Retry-After)"
 _PLAIN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 _HEX = frozenset("0123456789ABCDEF")
 # An album title's mark of an edited (clean) version, besides the markers of track titles:
@@ -78,10 +79,12 @@ class AddonError(Exception):
     """kind: unavailable | rate_limited | expired | timeout | invalid (an answer about the
     item that Shijhon cannot use: an unexpected status, no URL) | broken (a malformed answer:
     not JSON, too large, unreadable) | denied | failed (an HTTP 5xx, no connection) |
-    cooling (not asked: the add-on said "too many requests" and its time has not passed).
-    ``retry_after``: the seconds a rate limit's ``Retry-After`` named (None: none, or not
-    valid). ``shared``: another request's answer, waited for (a manifest read once for
-    several first uses): its failure is counted where it was asked."""
+    preparing (an HTTP 503 with a valid ``Retry-After``: not ready yet, ask again then - no
+    error) | cooling (not asked: the add-on said "too many requests" and its time has not
+    passed). ``retry_after``: the seconds a rate limit's or a preparation's ``Retry-After``
+    named (None: none, or not valid). ``shared``: another request's answer, waited for (a
+    manifest read once for several first uses): its failure is counted where it was
+    asked."""
 
     def __init__(
         self, kind: str, reason: str, retry_after: float | None = None, *, shared: bool = False
@@ -118,14 +121,21 @@ def number(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def catalog_key(name: str) -> str:
-    """The key of the catalog the add-on named ``name`` is: what tells its items
-    from every other add-on's and catalog's (``sh.al.<key>.<id>``). Made from the name
-    alone - its letters and digits, and a digest of the name as it is written (96 bits: two
-    names do not share one) - and so known without asking the add-on: renamed, an add-on is
-    another catalog."""
+def addon_key(name: str, attempt: int = 1) -> str:
+    """The key an add-on is given when it is added under the name ``name``: what tells its
+    catalog's items from every other add-on's and catalog's (``sh.al.<key>.<id>``), what
+    its catalog is known by in references, and what the routing asks it for its own songs
+    by. Stored with the add-on (``sources.key``) and never changed: a rename changes only
+    the name people see. Made from the name - its letters and digits, and a digest of the
+    name as it is written (96 bits: two names do not share one) -, so an add-on removed and
+    added again under its name gets its catalog's items back. ``attempt``: the next try when
+    the key is taken (another add-on was added under this name and renamed since).
+
+    Also how the keys of add-ons stored before keys were (schema 32) are made: what this
+    returns for a name and the first attempt must never change."""
     slug = "".join(ch for ch in fold(name) if ch in _PLAIN)[:16]
-    digest = hashlib.sha256(name.encode("utf-8", "surrogatepass")).hexdigest()[:24]
+    written = name if attempt == 1 else f"{name}\0{attempt}"
+    digest = hashlib.sha256(written.encode("utf-8", "surrogatepass")).hexdigest()[:24]
     return f"addon{slug}{digest}"
 
 
@@ -173,9 +183,9 @@ def own_id(item: str) -> str | None:
 def service_tag(service: str) -> str:
     """The first characters of every item ID of an add-on's catalog: a digest of
     the service the add-on is - its manifest's ``id``. The catalog's key is the add-on's
-    name; the tag ties an item to what answered under that name, so an add-on pointed at
-    another service does not get the IDs of the one before (they are not found, and its
-    audio is looked up)."""
+    (``addon_key``); the tag ties an item to what answered under that key, so an add-on
+    pointed at another service does not get the IDs of the one before (they are not found,
+    and its audio is looked up)."""
     return hashlib.sha256(service.encode("utf-8", "surrogatepass")).hexdigest()[:SERVICE_TAG]
 
 
@@ -197,21 +207,21 @@ def untagged(service: str, item: str) -> str | None:
     return own_id(item[SERVICE_TAG:])
 
 
-def of_catalog(name: str, ref: str | None) -> bool:
-    """Whether ``ref`` (a catalog track, "<key>:<id>") is an item of the catalog the
-    add-on named ``name`` is."""
-    return (ref or "").partition(":")[0] == catalog_key(name)
+def of_catalog(key: str, ref: str | None) -> bool:
+    """Whether ``ref`` (a catalog track, "<key>:<id>") is an item of the catalog of the
+    add-on whose key is ``key`` (``addon_key``)."""
+    return bool(key) and (ref or "").partition(":")[0] == key
 
 
-def own_track(name: str, service: str, ref: str | None) -> str | None:
-    """The track ID the add-on named ``name`` itself has for a song: when the song
+def own_track(key: str, service: str, ref: str | None) -> str | None:
+    """The track ID the add-on whose key is ``key`` itself has for a song: when the song
     came from that add-on's catalog (``ref``: its catalog track, "<key>:<id>") while it
     was the service it is now (``service``: its manifest's ``id``), its ID there is the
     add-on's own, and the add-on can be asked for its audio without a lookup. None: a song
-    of another catalog, of another service under this name, or of none."""
-    key, _, item = (ref or "").partition(":")
+    of another catalog, of another service under this key, or of none."""
+    found, _, item = (ref or "").partition(":")
     # (A manifest without an ID says nothing about which service it is: looked up.)
-    return untagged(service, item) if service and key == catalog_key(name) else None
+    return untagged(service, item) if service and key and found == key else None
 
 
 def allows_downloads(value: Any) -> bool:
@@ -262,6 +272,13 @@ class Manifest:
     # download-first work and its requests to prepare a song go to other add-ons.
     downloads: bool = True
     full_catalog: FullCatalog | None = None
+
+    @property
+    def streams(self) -> bool:
+        """Whether the add-on delivers audio: its manifest declares ``stream``. One that does
+        not is a catalog only - never asked for audio (``Source.streams``), and listed apart
+        on the dashboard."""
+        return "stream" in self.resources
 
     @classmethod
     def parse(cls, data: Mapping[str, Any]) -> Manifest:
@@ -567,14 +584,19 @@ class Addon:
         pace: AddonPace | None = None,
         paces: Paces | None = None,
     ) -> None:
+        self.base_url = base_url  # as configured (its limits' entry in ``paces``)
         self.base = addon_base(base_url)
+        self._home = pacing.origin(str(self.base))
         # (A list or a table is not sent: the add-on's own default applies.)
         self.settings = {k: _setting_value(v) for k, v in (settings or {}).items() if sendable(v)}
         self.http = http
-        # Its origin's limits: every request below takes its turn there first - the
-        # wait is part of the caller's own time (its budget's scope cancels it). A request
-        # redirected to another origin takes its turn at that origin's (``paces``).
-        self.pace = pace
+        # Its limits: every request below takes its turn there first - the wait is part of
+        # the caller's own time (its budget's scope cancels it). ``pace``: its address's,
+        # until its manifest names the add-on (``paces.identify``: its own from then on). A
+        # request redirected to another origin takes its turn at that address's
+        # (``paces``).
+        self._address = pace
+        self._own: AddonPace | None = None
         self.paces = paces
         self._manifest: Manifest | None = None
         self.manifest_read_at = 0.0
@@ -593,14 +615,40 @@ class Addon:
             path += b"?" + str(query).encode()
         return self.base.copy_with(raw_path=path)
 
-    def _pace_at(self, url: httpx.URL) -> AddonPace | None:
-        """The limits of the origin ``url`` is at: the add-on's own, or - a redirect's hop
-        elsewhere - that origin's."""
-        pace = self.paces.of(str(url)) if self.paces is not None else None
-        return pace or self.pace
+    @property
+    def pace(self) -> AddonPace | None:
+        """The add-on's limits: its own once its manifest named it, before that its
+        address's."""
+        return self._own or self._address
 
-    async def _json(self, resource: str, params: Mapping[str, str] | None = None) -> Any:
-        asked: list[AddonPace] = []  # the limits of the origin each hop went to
+    def _named(self, manifest: Manifest, asked: list[AddonPace]) -> Manifest:
+        """The manifest just read (``asked``: where its request's hops took their turns):
+        its ``id`` names the add-on its limits are of - which count the hops that took
+        their turns at its address too."""
+        if self.paces is not None:
+            own = self._own = self.paces.identify(self.base_url, manifest.id)
+            if own is not None and own is not self._address:
+                for pace in asked:
+                    if pace is self._address:
+                        own.charge()
+        return manifest
+
+    def _pace_at(self, url: httpx.URL) -> AddonPace | None:
+        """The limits a request to ``url`` counts at: the add-on's own at its origin, the
+        address's elsewhere (a redirect's hop)."""
+        if self.paces is None or pacing.origin(str(url)) == self._home:
+            return self.pace
+        return self.paces.of(str(url)) or self.pace
+
+    async def _json(
+        self,
+        resource: str,
+        params: Mapping[str, str] | None = None,
+        *,
+        asked: list[AddonPace] | None = None,
+    ) -> Any:
+        """``asked``: where each hop of the request took its turn, noted there."""
+        asked = [] if asked is None else asked  # the limits each hop took its turn at
 
         async def turn(url: httpx.URL) -> None:
             guard = BULK_API_GUARD.get()
@@ -636,6 +684,10 @@ class Addon:
                     raise AddonError("expired", "gone (HTTP 410)")
                 if response.status_code in (401, 403):
                     raise AddonError("unavailable", f"refused (HTTP {response.status_code})")
+                if response.status_code == 503:
+                    ready_in = pacing.retry_after(response.headers.get("retry-after"))
+                    if ready_in is not None:  # (whatever its body says)
+                        raise AddonError("preparing", PREPARING, ready_in)
                 if response.status_code >= 500:
                     raise AddonError("failed", f"add-on error (HTTP {response.status_code})")
                 if response.status_code != 200:
@@ -707,15 +759,16 @@ class Addon:
             raise AddonError(error.kind, error.reason, error.retry_after, shared=True)
 
     async def _read_manifest(self) -> Manifest:
-        data = await self._json("manifest.json")
+        asked: list[AddonPace] = []
+        data = await self._json("manifest.json", asked=asked)
         if not isinstance(data, dict):
             raise AddonError("broken", "manifest is not an object")
         try:
             manifest = Manifest.parse(data)
             self.manifest_read_at = time.monotonic()
-            return manifest
         except Exception as exc:
             raise AddonError("broken", f"unreadable manifest ({type(exc).__name__})") from None
+        return self._named(manifest, asked)
 
     async def resolve_isrc(self, isrc: str) -> str | None:
         manifest = await self.manifest()
@@ -797,7 +850,10 @@ class Addon:
     async def find(self, wanted: Wanted, notes: list[str] | None = None) -> str | None:
         """The add-on's track ID for the wanted recording: by its ISRC lookup when it has
         one and the recording an ISRC; then by ``/resolve`` - or, at an add-on without
-        ``/resolve``, by its search. None: not found (or no way to look)."""
+        ``/resolve``, by its search. None: not found (or no way to look) - and, without
+        asking, at an add-on that does not stream (its audio is what the ID is for)."""
+        if "stream" not in (await self.manifest()).resources:
+            return None
         track_id = await self.resolve_isrc(wanted.isrc) if wanted.isrc else None
         if track_id is None:
             if "resolve" in (await self.manifest()).resources:
@@ -808,9 +864,9 @@ class Addon:
 
     async def availability(self, wanted: Wanted, *, prepare: bool = False) -> Availability | None:
         """The add-on's answer to "can you deliver this now?", or None if it has no such
-        check (the ``availability`` extension)."""
+        check (the ``availability`` extension) - or does not stream at all."""
         manifest = await self.manifest()
-        if "availability" not in manifest.resources:
+        if "availability" not in manifest.resources or "stream" not in manifest.resources:
             return None
         params = {
             "title": wanted.title,
@@ -834,8 +890,9 @@ class Addon:
         return Availability(available, text(data.get("id")), data.get("preparing") is True)
 
     async def cached(self, wanted: Wanted) -> CachedAvailability | None:
-        """A pure check for a cached recording; absent capability stays unknown."""
-        if "cached" not in (await self.manifest()).resources:
+        """A pure check for a cached recording; absent capability stays unknown (as for an
+        add-on that does not stream)."""
+        if not {"cached", "stream"} <= (await self.manifest()).resources:
             return None
         params = {
             "title": wanted.title,

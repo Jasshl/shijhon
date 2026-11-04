@@ -11,11 +11,18 @@ background work ask for together, one add-on gets at most
   reads it). The cap holds back everything but the song being played: a play's or a seek's
   audio is asked for at once, and counts.
 
-A redirect is a request too: every hop of an API request takes its turn at the limit of the
-origin it goes to (``get``).
+A redirect is a request too: every hop of an API request takes its turn - at the add-on's
+own limit while it stays at the add-on's origin, else at the limit of the address it goes
+to (``get``).
 
-The limits belong to the add-on's **origin** (scheme, host and port): two configured entries
-at one origin share them, and the stricter entry's settings apply.
+The limits belong to **one add-on**: its origin (scheme, host and port) and the ``id`` its
+manifest names (``Key``). Add-ons at one address - a server that serves several - count
+apart; one add-on configured twice shares one count, and the stricter entry's settings
+apply. Requests that cannot be told apart by add-on - a manifest read before the manifest
+is known, a redirect's hop to another origin, a cover at an add-on's address - count at
+their address (the key with no ``id``), under the strictest settings of the add-ons there;
+a manifest read is counted at its add-on too once that is known (``AddonPace.charge``), and
+an add-on named once is known by its ``id`` from then on (a changed configuration too).
 
 **The song being played goes first**. Requests waiting for a turn go by their urgency
 - the song being played, then a client's other requests (fetches ahead, probes, queued
@@ -26,12 +33,13 @@ the most urgent request for the same song (``Urgency.raise_to``): a play never w
 its own warm-ahead.
 
 **An add-on that says "too many requests" is left alone.** After an HTTP 429 no API
-request is sent to its origin until the time it named in ``Retry-After`` (seconds or an
-HTTP date; an hour at most), or for the cooldown when it named none: the block is looked
-at before every request, also those already waiting, and a later answer can only make it
-longer (``AddonPace.block``, ``Blocked``). A 429 on an audio request stops its audio
-requests too; one on an API request does not - the songs already playing from it go on
-(their audio is what a listener hears, and usually comes from another address).
+request is sent to that add-on (other add-ons at its address are asked as before) until
+the time it named in ``Retry-After`` (seconds or an HTTP date; an hour at most), or for
+the cooldown when it named none: the block is looked at before every request, also those
+already waiting, and a later answer can only make it longer (``AddonPace.block``,
+``Blocked``). A 429 on an audio request stops its audio requests too; one on an API
+request does not - the songs already playing from it go on (their audio is what a
+listener hears, and usually comes from another address).
 
 A wait here is part of the request's own time budget - whoever waits is canceled by the
 budget it already has (``Waits`` says that it was waiting here, or had waited here for more
@@ -77,6 +85,10 @@ _SECONDS = re.compile(r"[0-9]+(\.[0-9]+)?")
 _TWO_DIGIT_YEAR = re.compile(r"\d-[A-Za-z]{3}-(\d\d)\s")  # an RFC 850 date's
 
 Origin = tuple[str, str, int]
+# One add-on, as far as its limits go: its origin and the ``id`` its manifest names - ""
+# for the address's own count (a request before the manifest is known, one no add-on there
+# is told by).
+Key = tuple[Origin, str]
 
 
 def origin(url: str | None) -> Origin | None:
@@ -408,11 +420,11 @@ class Limits:
         )
 
 
-DEFAULTS = Limits(2.0, 4, 4)
+DEFAULTS = Limits(5.0, 10, 4)
 
 
 class AddonPace:
-    """One add-on origin's limits, shared by everything Shijhon sends it."""
+    """One add-on's limits (``Key``), shared by everything Shijhon sends it."""
 
     def __init__(
         self, limits: Limits = DEFAULTS, *, clock: Callable[[], float] = time.monotonic
@@ -538,6 +550,15 @@ class AddonPace:
             raise
         waits._ended(self.clock() - began)
 
+    def charge(self) -> None:
+        """A request the add-on was sent before its manifest named it, which took its turn
+        at its address: counted here too, as if it had taken its turn here (the next ones
+        wait for it)."""
+        self._refill()
+        if self.rate > 0:
+            self._tokens -= 1
+        self.sent += 1
+
     async def open(self) -> Callable[[], None]:
         """One audio request's opening: waits for one of the add-on's openings at once
         (never for the song being played), and returns what ends it - told once the
@@ -629,52 +650,99 @@ async def get(
 
 @dataclass
 class Paces:
-    """Every add-on origin's limits. ``defaults``: the installation's (settings), for an
-    origin no enabled add-on names limits of its own for."""
+    """Every add-on's limits (``Key``). ``defaults``: the installation's (settings), for an
+    add-on that names no limits of its own."""
 
     defaults: Limits = DEFAULTS
     clock: Callable[[], float] = time.monotonic
     # How long an add-on is left alone after a rate limit that names no time.
     cooldown: float = COOLDOWN
-    _paces: dict[Origin, AddonPace] = field(default_factory=dict)
-    _own: dict[Origin, Limits] = field(default_factory=dict)  # the enabled add-ons' limits
+    _paces: dict[Key, AddonPace] = field(default_factory=dict)
+    # The enabled add-ons, by their configured address: its origin and their own limits
+    # over the installation's ...
+    _own: dict[str, tuple[Origin, Limits]] = field(default_factory=dict)
+    # ... and the ``id`` its manifest names, once read (``identify``).
+    _ids: dict[str, str] = field(default_factory=dict)
 
-    def of(self, base_url: str) -> AddonPace | None:
-        """The limits of the origin ``base_url`` is at (None: not an address)."""
+    def of(self, base_url: str, addon_id: str = "") -> AddonPace | None:
+        """The limits of the add-on ``addon_id`` at the origin ``base_url`` is at - ""
+        (or an add-on whose manifest names no ``id``): the address's own count (None: not
+        an address)."""
         where = origin(base_url)
         if where is None:
             return None
-        pace = self._paces.get(where)
+        key = (where, addon_id)
+        pace = self._paces.get(key)
         if pace is None:
             if len(self._paces) >= 256:  # addresses once tried (the dashboard's): forgotten
-                for key in [k for k, p in self._paces.items() if k not in self._own and p.idle]:
-                    del self._paces[key]
-            pace = self._paces[where] = AddonPace(self._limits(where), clock=self.clock)
+                kept = self._kept()
+                for old in [k for k, p in self._paces.items() if k not in kept and p.idle]:
+                    del self._paces[old]
+            pace = self._paces[key] = AddonPace(self._limits(key), clock=self.clock)
         pace.cooldown = self.cooldown
         return pace
 
     def own(self, url: str) -> AddonPace | None:
-        """The limits of the origin ``url`` is at when an enabled add-on is there; None for
-        any other address (a catalog's cover on an image host takes no turn; one the
+        """The count of the address ``url`` is at when an enabled add-on is there; None
+        for any other address (a catalog's cover on an image host takes no turn; one an
         add-on serves itself does)."""
         where = origin(url)
-        return self.of(url) if where is not None and where in self._own else None
+        if where is None or all(at != where for at, _ in self._own.values()):
+            return None
+        return self.of(url)
 
-    def _limits(self, where: Origin) -> Limits:
-        return self._own.get(where, self.defaults)
+    def identify(self, base_url: str, addon_id: str) -> AddonPace | None:
+        """The add-on at ``base_url`` (as configured) read its manifest, which names it
+        ``addon_id``: its limits from now on (an enabled add-on's settings count there)."""
+        if base_url in self._own and self._ids.get(base_url) != addon_id:
+            self._ids[base_url] = addon_id
+            self._configure()
+        return self.of(base_url, addon_id)
+
+    def identity(self, base_url: str) -> str | None:
+        """The ``id`` the manifest of the enabled add-on at ``base_url`` named (None: not
+        read yet, or not enabled)."""
+        return self._ids.get(base_url)
+
+    def _kept(self) -> set[Key]:
+        kept = {(where, "") for where, _ in self._own.values()}
+        kept |= {(self._own[url][0], i) for url, i in self._ids.items() if url in self._own}
+        return kept
+
+    def _limits(self, key: Key) -> Limits:
+        """The stricter settings of the enabled add-ons the key is - of every one at the
+        address for its own count -, else the installation's."""
+        where, addon_id = key
+        found = [
+            limits
+            for url, (at, limits) in self._own.items()
+            if at == where and (not addon_id or self._ids.get(url, "") == addon_id)
+        ]
+        if not found:
+            return self.defaults
+        least = found[0]
+        for limits in found[1:]:
+            least = least.stricter(limits)
+        return least
 
     def apply(self, addons: list[tuple[str, Limits]]) -> None:
-        """The enabled add-ons (address, own limits): each origin gets its add-on's limits
-        over the installation's - of several add-ons at one origin, the stricter of each."""
-        own: dict[Origin, Limits] = {}
+        """The enabled add-ons (address as configured, own limits): each gets its own over
+        the installation's - an add-on configured twice the stricter of each."""
+        own: dict[str, tuple[Origin, Limits]] = {}
         for base_url, limits in addons:
             where = origin(base_url)
             if where is None:
                 continue
             complete = limits.over(self.defaults)
-            own[where] = own[where].stricter(complete) if where in own else complete
+            if base_url in own:
+                complete = own[base_url][1].stricter(complete)
+            own[base_url] = (where, complete)
         self._own = own
-        for where, pace in self._paces.items():
-            wanted = self._limits(where)
+        self._ids = {url: i for url, i in self._ids.items() if url in own}
+        self._configure()
+
+    def _configure(self) -> None:
+        for key, pace in self._paces.items():
+            wanted = self._limits(key)
             if pace.limits != wanted:
                 pace.configure(wanted)

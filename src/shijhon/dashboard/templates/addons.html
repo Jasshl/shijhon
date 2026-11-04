@@ -35,52 +35,32 @@
   <p>This list is set by the environment: <code>{{ env_list }}</code>. Change it there; Shijhon applies it when it starts.</p>
 </div>
 {% endif %}
-<section class="group" aria-labelledby="order-title">
-  <div class="group-head">
-    <h2 id="order-title">Your add-ons</h2>
-{% if items %}
-    <p class="group-meta"><span class="order-status" id="order-status" role="status"></span>{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on{% if errors %} · <span class="status-error">{{ errors }} with {{ "errors" if errors != 1 else "an error" }}</span>{% endif %}{% if cooling %} · {{ cooling }} cooling down{% endif %}</p>
-{% if not env_list %}
-    <p class="group-help">The order counts for the In order and Ready first routing modes.{% if items|length > 1 %} Drag an add-on by its number, or use the arrows.{% endif %}</p>
-{% if items|length > 1 %}
-    <div class="list-tools">
-      <form method="post" action="{{ prefix }}/addons/enabled">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button class="btn-small" name="enabled" value="true"{% if enabled == items|length %} disabled{% endif %}>All on</button>
-        <button class="btn-small" name="enabled" value="false"{% if enabled == 0 %} disabled{% endif %}>All off</button>
-      </form>
-    </div>
-{% endif %}
-{% endif %}
-{% endif %}
-  </div>
-{% if items and env_list %}
-  <ol class="chain chain-readonly">
-{% for item in items %}
+{% macro readonly_row(item) %}
     <li class="source{% if not item.addon.enabled %} source-off{% elif item.health.attention %} source-attention{% endif %}" id="addon-{{ item.addon.id }}">
-      <span class="source-order">{{ item.order }}</span>
+      <span class="source-order">{% if item.order %}{{ item.order }}{% endif %}</span>
       <span class="led{% if item.health.light %} led-{{ item.health.light }}{% endif %}" aria-hidden="true"></span>
       <div class="source-name">
         <h3>{{ item.addon.name }}</h3>
-        <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}</p>
+        <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.no_downloads and not item.catalog_only %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}</p>
       </div>
       <div class="source-health">
         <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}</p>
       </div>
     </li>
-{% endfor %}
-  </ol>
-{% elif items %}
-  <ol class="chain"{% if items|length > 1 %} data-reorder="{{ prefix }}/addons/order"{% endif %}>
-{% for item in items %}
+{% endmacro %}
+{% macro row(item) %}
 {% set addon = item.addon %}
 {% set health = item.health %}
 <li class="source{% if not addon.enabled %} source-off{% elif health.attention %} source-attention{% endif %}" id="addon-{{ addon.id }}">
+{% if item.catalog_only %}
+  <span class="source-order"></span>
+{% else %}
   <span class="source-order" data-addon="{{ addon.id }}">{{ item.order }}</span>
+{% endif %}
   <span class="led{% if health.light %} led-{{ health.light }}{% endif %}" aria-hidden="true"></span>
   <div class="source-name">
     <h3>{{ addon.name }}</h3>
-    <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if addon.budget is not none %}<span>Time to first audio {{ addon.budget|number }} s</span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}</p>
+    <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.catalog_only %}{% if addon.budget is not none %}<span>Time for catalog answers {{ addon.budget|number }} s</span>{% endif %}{% else %}{% if addon.budget is not none %}<span>Time to first audio {{ addon.budget|number }} s</span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}{% endif %}</p>
   </div>
   <p class="source-health{% if health.light == 'error' %} status-error{% endif %}">{{ health.words }}{% if health.code %} <code>{{ health.code }}</code>{% endif %}</p>
   <form class="source-switch" method="post" action="{{ prefix }}/addons/{{ addon.id }}/enabled">
@@ -90,11 +70,13 @@
     </button>
   </form>
   <div class="source-actions">
+{% if not item.catalog_only %}
   <form class="source-move joined" method="post" action="{{ prefix }}/addons/{{ addon.id }}/move">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="btn-icon btn-small" name="direction" value="up" aria-label="Move {{ addon.name }} up"{% if item.first %} disabled{% endif %}>{{ chevron("up") }}</button>
     <button class="btn-icon btn-small" name="direction" value="down" aria-label="Move {{ addon.name }} down"{% if item.last %} disabled{% endif %}>{{ chevron("down") }}</button>
   </form>
+{% endif %}
   </div>
   <details class="source-settings"{% if item.open %} open{% endif %}>
     <summary>Settings<span class="visually-hidden"> for {{ addon.name }}</span></summary>
@@ -134,7 +116,7 @@
       <details class="confirm source-remove">
         <summary class="btn btn-danger btn-small"><span class="if-closed">Remove add-on…</span><span class="if-open">Keep add-on</span></summary>
         <div class="confirm-body">
-          <p>Remove {{ addon.name }}? Its address and settings are deleted. Songs it served are tried on the other add-ons.{% if item.roles %} It is {{ item.roles|join(" and ") }}: choose another on <a href="{{ prefix }}/playback">Playback</a>.{% endif %}</p>
+          <p>Remove {{ addon.name }}? Its address and settings are deleted.{% if not item.catalog_only %} Songs it served are tried on the other add-ons.{% endif %}{% if item.roles %} It is {{ item.roles|join(" and ") }}: choose another on <a href="{{ prefix }}/playback">Playback</a>.{% endif %}</p>
           <form method="post" action="{{ prefix }}/addons/{{ addon.id }}/remove">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <button class="btn-danger-fill">Remove {{ addon.name }}</button>
@@ -144,8 +126,45 @@
     </div>
   </details>
 </li>
+{% endmacro %}
+<section class="group" aria-labelledby="order-title">
+  <div class="group-head">
+    <h2 id="order-title">Your add-ons</h2>
+{% if items %}
+    <p class="group-meta"><span class="order-status" id="order-status" role="status"></span>{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on{% if errors %} · <span class="status-error">{{ errors }} with {{ "errors" if errors != 1 else "an error" }}</span>{% endif %}{% if cooling %} · {{ cooling }} cooling down{% endif %}</p>
+{% if not env_list %}
+{% if audio %}
+    <p class="group-help">The order counts for the In order and Ready first routing modes.{% if audio|length > 1 %} Drag an add-on by its number, or use the arrows.{% endif %}</p>
+{% endif %}
+{% if items|length > 1 %}
+    <div class="list-tools">
+      <form method="post" action="{{ prefix }}/addons/enabled">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn-small" name="enabled" value="true"{% if enabled == items|length %} disabled{% endif %}>All on</button>
+        <button class="btn-small" name="enabled" value="false"{% if enabled == 0 %} disabled{% endif %}>All off</button>
+      </form>
+    </div>
+{% endif %}
+{% endif %}
+{% endif %}
+  </div>
+{% if audio and env_list %}
+  <ol class="chain chain-readonly">
+{% for item in audio %}
+{{ readonly_row(item) }}
 {% endfor %}
   </ol>
+{% elif audio %}
+  <ol class="chain"{% if audio|length > 1 %} data-reorder="{{ prefix }}/addons/order"{% endif %}>
+{% for item in audio %}
+{{ row(item) }}
+{% endfor %}
+  </ol>
+{% elif catalogs %}
+  <div class="empty">
+    <p class="empty-title">No add-ons for audio yet</p>
+    <p>The add-ons below provide a catalog only. Add one that supplies audio by its manifest URL below.</p>
+  </div>
 {% else %}
   <div class="empty">
     <p class="empty-title">No add-ons yet</p>
@@ -153,6 +172,24 @@
   </div>
 {% endif %}
 </section>
+
+{% if catalogs %}
+<section class="group" aria-labelledby="catalog-only-title">
+  <div class="group-head">
+    <h2 id="catalog-only-title">Catalog only</h2>
+    <p class="group-help">These add-ons provide a catalog and no audio, so Shijhon doesn't ask them for songs and they have no place in the order.</p>
+  </div>
+  <ol class="chain chain-unordered{% if env_list %} chain-readonly{% endif %}">
+{% for item in catalogs %}
+{% if env_list %}
+{{ readonly_row(item) }}
+{% else %}
+{{ row(item) }}
+{% endif %}
+{% endfor %}
+  </ol>
+</section>
+{% endif %}
 
 {% if not env_list %}
 <section class="group" aria-labelledby="add-title">
@@ -199,7 +236,7 @@
 </form>
 {% endif %}
 {% endif %}
-{% if items|length > 1 and not env_list %}
+{% if audio|length > 1 and not env_list %}
 <script src="{{ prefix }}/static/addons.js" defer></script>
 {% endif %}
 {% endblock %}

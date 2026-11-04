@@ -435,7 +435,10 @@ def test_a_rate_limited_segment_leaves_the_add_on_s_audio_alone(
     second = segment_names(dash_audio("d-429"), FLAC_ID)[1]
     song, _, _ = dash_song(world, "d-429", a, b, segment_faults={second: [429]})
     assert stream(world, song).status_code == 200 and b.requests("audio")
-    pace = world.services.sources.paces.of(a.base_url)
+    # (The add-on's own, its manifest read.)
+    pace = next(
+        s.pace for s in world.server.call(world.services.sources.enabled) if s.name == a.name
+    )
     assert pace is not None and pace.audio_blocked > 3
 
 
@@ -460,7 +463,10 @@ def test_a_join_fetches_a_few_segments_at_once_each_an_audio_opening(
     # Warm-ahead's join waits for the add-on's audio openings: one at a time at a limit of 1.
     from shijhon.delivery.pacing import Limits
 
-    pace = world.services.sources.paces.of(a.base_url)
+    # (The add-on's own, its manifest read.)
+    pace = next(
+        s.pace for s in world.server.call(world.services.sources.enabled) if s.name == a.name
+    )
     assert pace is not None
     pace.configure(Limits(0.0, 4, 1))
     try:

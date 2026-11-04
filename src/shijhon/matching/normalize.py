@@ -231,6 +231,16 @@ def featured_names(credit: str | None) -> list[str]:
     return [p for p in parts if p]
 
 
+_AND = re.compile(r"\s+and\s+|\s*[&+]\s*", re.I)
+
+
+def lead_credit(credit: str | None) -> str:
+    """A credit without its featured artists, "and" and "&" alike, its words folded: "A
+    and B feat. C" and "A & B" are both "a and b" ("M & M" stays apart from "MM")."""
+    lead = (featured_names(credit) or [credit or ""])[0]
+    return " ".join(w for w in (fold(w) for w in _AND.sub(" and ", lead).split()) if w)
+
+
 def same_artist(a: str | None, b: str | None) -> bool:
     """True if the two credits share at least one artist."""
     return bool(artist_names(a) & artist_names(b))

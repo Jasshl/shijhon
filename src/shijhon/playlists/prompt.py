@@ -28,7 +28,8 @@ from shijhon.playlists.model import (
     Track,
     is_text,
 )
-from shijhon.playlists.resolve import native_track, same_recording
+from shijhon.playlists.resolve import UNANSWERED, Explanation, native_track, same_recording
+from shijhon.views.ids import CatalogId
 
 if TYPE_CHECKING:
     from shijhon.playlists.service import Playlists
@@ -259,6 +260,222 @@ def chosen(options: dict[str, Track], answer: Ordered) -> list[Track]:
     return [options[s.id].model_copy(update={"reason": s.reason}) for s in answer.selections]
 
 
+class Unresolved(PlaylistError):
+    """Explicit tracks that leave nothing to publish, or (``require_all``) any track left
+    out: the run fails, with its report of every track."""
+
+    def __init__(self, message: str, tracks: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.tracks = tracks
+
+
+# Why an explicit track was left out (``Explanation.reason``, or a repeated recording).
+REASONS = {
+    "not_found": "Neither the library nor the catalog has this recording.",
+    "album_mismatch": (
+        "This recording was found only on other albums: send one of the candidates' "
+        "albums, or no album."
+    ),
+    "version_mismatch": (
+        "Only other versions of this title were found: send the wanted one's exact title "
+        "or version, as a candidate shows it."
+    ),
+    "artist_mismatch": "This title was found credited differently: send the credit shown.",
+    "title_mismatch": (
+        "A similar title by this artist was found: send the exact title a candidate shows "
+        "if it is the same song."
+    ),
+    "unconfirmed": "The catalog lists this recording, but its release could not be confirmed.",
+    "catalog_unavailable": "The catalog did not answer: add this track again later.",
+    "duplicate": "An earlier track of this playlist is the same recording.",
+    "not_checked": "Not looked up within the run's time: add this track again.",
+    # A library refusal, as a requester without the library permission sees it.
+    "not_added": "This recording could not be added to the playlist: choose another.",
+}
+
+
+# Tracks of one run looked up again after the catalog did not answer, and the pause first.
+RETRIES = 10
+RETRY_PAUSE = 3.0
+clock = time.monotonic  # (tests replace it)
+
+
+async def resolved(
+    service: Playlists,
+    connection: Connection,
+    wanted: dict[str, Any],
+    failures: list[str] | None = None,
+) -> Track | None:
+    """The wanted recording, as the existing album plan has it (``failures``: the
+    catalog's errors meanwhile)."""
+    found = (
+        await service.resolver.resolve(connection, wanted)
+        if failures is None
+        else await service.resolver.resolve(connection, wanted, failures=failures)
+    )
+    if found:
+        found = found.model_copy(
+            update={k: wanted[k] for k in ("required_title", "required_album")}
+        )
+        found = await service.matched_edition(found)
+    return found
+
+
+def accepted(suggestion: Suggestion, wanted: dict[str, Any], found: Track | None) -> bool:
+    return (
+        found is not None
+        and same_recording(wanted, found)
+        and not (suggestion.album and fold(suggestion.album) != fold(found.album))
+    )
+
+
+def private(tracks: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A report as a requester without the library permission sees it: songs resolved,
+    not whether from the library or the catalog."""
+    return [
+        t | {"outcome": "resolved"}
+        if t.get("outcome") in ("library", "catalog")
+        else t | {"reason": "not_added", "detail": REASONS["not_added"]}
+        if t.get("reason") == "library_refused"
+        else t
+        for t in tracks
+    ]
+
+
+def summary(tracks: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """How a report's tracks resolved (``resolved`` stands for library and catalog where
+    the requester may not read the library)."""
+    outcomes = Counter(t.get("outcome") for t in tracks)
+    shown = ("resolved",) if outcomes["resolved"] else ("library", "catalog")
+    return {
+        "requested": len(tracks),
+        **{outcome: outcomes[outcome] for outcome in shown},
+        "unresolved": outcomes["unresolved"],
+    }
+
+
+async def explicit_tracks(
+    service: Playlists,
+    connection: Connection,
+    definition: Definition,
+    check: Callable[[], Awaitable[None]],
+    *,
+    library: bool = True,
+    kept: dict[int, tuple[Track, dict[str, Any]]] | None = None,
+) -> Curated:
+    """The caller's tracks in their order: each the library's recording, else the
+    catalog's - the original when several versions match. What resolves is published and
+    every track is reported: what it became, or why it was left out; ``require_all``
+    publishes nothing unless every track resolves.
+
+    ``library``: whether the requester may read the library; else the report does not
+    say which songs the library has, nor shows its songs as candidates. ``kept``: tracks
+    already published at these positions (added tracks), with their report entries:
+    taken as they are, not looked up again."""
+    selected: list[Track] = []
+    positions: dict[str, int] = {}  # recording -> the position that has it
+    report: list[dict[str, Any]] = []
+    retries = RETRIES
+    # Leave time to save the report and publish within the run's own deadline.
+    deadline = clock() + service.settings.run_seconds / 2
+    for position, suggestion in enumerate(definition.tracks, 1):
+        await check()
+        entry: dict[str, Any] = {"position": position, "input": suggestion.model_dump()}
+        explanation: Explanation | None = None
+        found: Track | None
+        if kept and position in kept:
+            found, shown = kept[position]
+            outcome = shown["outcome"] if library else "resolved"
+            entry |= {"outcome": outcome, "song": shown["song"]}
+        elif clock() > deadline:
+            report.append(
+                entry
+                | {
+                    "outcome": "unresolved",
+                    "reason": "not_checked",
+                    "detail": REASONS["not_checked"],
+                }
+            )
+            continue
+        else:
+            wanted = {
+                **suggestion.wanted(),
+                "strict_album": True,
+                "prefer_original": True,
+                "lenient_credit": True,
+            }
+            failures: list[str] = []
+            found = await resolved(service, connection, wanted, failures)
+            await check()
+            if (
+                (found is None or not accepted(suggestion, wanted, found))
+                and retries
+                and any(kind in UNANSWERED for kind in failures)
+            ):
+                # The catalog did not answer: once more after a pause, a few times a run.
+                retries -= 1
+                await anyio.sleep(RETRY_PAUSE)
+                await check()
+                failures = []
+                found = await resolved(service, connection, wanted, failures)
+                await check()
+            if found is None or not accepted(suggestion, wanted, found):
+                explanation = await service.resolver.explain(
+                    connection,
+                    wanted,
+                    library=library,
+                    unanswered=any(kind != "not_found" for kind in failures),
+                )
+                await check()
+        if explanation is not None:
+            entry |= {
+                "outcome": "unresolved",
+                "reason": explanation.reason,
+                "detail": REASONS[explanation.reason],
+            }
+            if candidates := explanation.candidates():
+                entry["candidates"] = candidates
+        else:
+            assert found is not None
+            if found.key in positions:
+                entry = {
+                    "position": position,
+                    "input": entry["input"],
+                    "outcome": "unresolved",
+                    "reason": "duplicate",
+                    "detail": REASONS["duplicate"],
+                    "same_as": positions[found.key],
+                }
+            else:
+                positions[found.key] = position
+                selected.append(found)
+                if "outcome" not in entry:
+                    outcome = "catalog" if CatalogId.parse(found.id) else "library"
+                    entry |= {
+                        "outcome": outcome if library else "resolved",
+                        "song": {
+                            "artist": found.artist,
+                            "title": found.title,
+                            "album": found.album,
+                        },
+                    }
+        report.append(entry)
+    left_out = len(report) - len(selected)
+    if not selected:
+        raise Unresolved(
+            "None of the explicit tracks could be resolved. The request's tracks say why.",
+            report,
+        )
+    if left_out and definition.require_all:
+        raise Unresolved(
+            f"{left_out} of {len(report)} explicit tracks could not be resolved and "
+            "require_all is set, so nothing was published. The request's tracks say why.",
+            report,
+        )
+    validate(selected, definition)
+    return Curated(selected, left_out, definition.name, {"tracks": report})
+
+
 async def generate(
     service: Playlists,
     connection: Connection,
@@ -268,11 +485,12 @@ async def generate(
     own: str = "",
     edits: Edits | None = None,
     library: Callable[[], Awaitable[bool]] | None = None,
+    kept: dict[int, tuple[Track, dict[str, Any]]] | None = None,
 ) -> Curated:
     """``own``: the native playlist this definition publishes (refreshes); ``edits``: the
     owner's edits of it. ``library``: whether the requester may currently read the library
     beyond what it names (an agent's library grant); None: the owner's own request, which
-    always may."""
+    always may. ``kept``: explicit tracks already published (``explicit_tracks``)."""
     detected = False
 
     async def check() -> None:
@@ -284,6 +502,15 @@ async def generate(
             raise PlaylistError(LIBRARY_LOST)
 
     await check()
+    if definition.mode == "tracks":
+        return await explicit_tracks(
+            service,
+            connection,
+            definition,
+            check,
+            library=library is None or await library(),
+            kept=kept,
+        )
     influences = await context(
         service,
         connection,
@@ -295,34 +522,32 @@ async def generate(
     pool: dict[str, Track] = {}
     selected: list[Track] = []
     skipped = 0
-    explicit = definition.mode == "tracks"
     budget = min(300, service.settings.candidate_limit)
     facts = Facts(service, connection)
     refs = references.References()
     reference: dict[str, Any] = {}
     profile: dict[str, Any] = {}
-    if not explicit:
-        # Names in the instructions are looked up only while the requester may read the
-        # library, checked before each read; chosen references needed it to be accepted.
-        refs = await references.read(
-            service, connection, definition, own=own, allowed=library, check=check
-        )
-        detected = any(p.detected for p in refs.playlists)
+    # Names in the instructions are looked up only while the requester may read the
+    # library, checked before each read; chosen references needed it to be accepted.
+    refs = await references.read(
+        service, connection, definition, own=own, allowed=library, check=check
+    )
+    detected = any(p.detected for p in refs.playlists)
+    await check()
+    if refs.songs:
+        shown = refs.shown()
+        await facts.describe(shown)
         await check()
-        if refs.songs:
-            shown = refs.shown()
-            await facts.describe(shown)
-            await check()
-            profile = facts.profile(shown)
-            reference = {
-                "playlists": [{"name": p.name, "detected": p.detected} for p in refs.playlists],
-                "songs": [
-                    {"artist": s.artist, "title": s.title, "album": s.album, **facts.shown(s)}
-                    for s in shown
-                ],
-                "profile": profile,
-                "leave_out_reference_songs": definition.exclude_reference,
-            }
+        profile = facts.profile(shown)
+        reference = {
+            "playlists": [{"name": p.name, "detected": p.detected} for p in refs.playlists],
+            "songs": [
+                {"artist": s.artist, "title": s.title, "album": s.album, **facts.shown(s)}
+                for s in shown
+            ],
+            "profile": profile,
+            "leave_out_reference_songs": definition.exclude_reference,
+        }
     left_out = 0
     # A refresh: the owner's edits of its playlist; the songs removed are never candidates.
     user_edits = edits.shown() if edits is not None else {}
@@ -364,77 +589,52 @@ async def generate(
                 pools[kind] += 1
         await check()
 
-    for round_number in range(1 if explicit else 3):
+    for round_number in range(3):
         await check()
         remaining = budget - len(attempted)
-        if not explicit and remaining <= 0:
+        if remaining <= 0:
             break
         search: SoundSearch | None = None
-        if explicit:
-            proposals = definition.tracks
-        else:
-            limit = min(100, remaining, max(definition.count * 2, 10))
-            answer = await ask(
-                service,
-                connection,
-                {
-                    "instructions": definition.brief,
-                    "count": definition.count,
-                    "max_per_artist": definition.max_per_artist,
-                    "suggestion_limit": limit,
-                    "already_attempted": [s.model_dump() for s in attempted],
-                    **({"reference": reference} if reference else {}),
-                    **({"user_edits": user_edits} if user_edits else {}),
-                    **influences,
-                },
-                SoundProposals if pool_sound is not None else Proposals,
-                PROPOSE
-                + (REFERENCE + FACTS if reference else "")
-                + (EDITS if user_edits else "")
-                + (SOUND if pool_sound is not None else ""),
-            )
-            assert isinstance(answer, Proposals)
-            proposals = list(answer.tracks)
-            if len(proposals) > limit:
-                raise PlaylistError("AI returned too many suggestions for this request.")
-            if isinstance(answer, SoundProposals):
-                search = answer.sound_search
+        limit = min(100, remaining, max(definition.count * 2, 10))
+        answer = await ask(
+            service,
+            connection,
+            {
+                "instructions": definition.brief,
+                "count": definition.count,
+                "max_per_artist": definition.max_per_artist,
+                "suggestion_limit": limit,
+                "already_attempted": [s.model_dump() for s in attempted],
+                **({"reference": reference} if reference else {}),
+                **({"user_edits": user_edits} if user_edits else {}),
+                **influences,
+            },
+            SoundProposals if pool_sound is not None else Proposals,
+            PROPOSE
+            + (REFERENCE + FACTS if reference else "")
+            + (EDITS if user_edits else "")
+            + (SOUND if pool_sound is not None else ""),
+        )
+        assert isinstance(answer, Proposals)
+        proposals = list(answer.tracks)
+        if len(proposals) > limit:
+            raise PlaylistError("AI returned too many suggestions for this request.")
+        if isinstance(answer, SoundProposals):
+            search = answer.sound_search
         for suggestion in proposals:
             await check()
             if suggestion in attempted:
                 continue
             attempted.append(suggestion)
             wanted = {**suggestion.wanted(), "strict_album": True}
-            found = await service.resolver.resolve(connection, wanted)
-            if found:
-                found = found.model_copy(
-                    update={k: wanted[k] for k in ("required_title", "required_album")}
-                )
-                found = await service.matched_edition(found)
-            if (
-                not found
-                or not same_recording(wanted, found)
-                or (suggestion.album and fold(suggestion.album) != fold(found.album))
-            ):
+            found = await resolved(service, connection, wanted)
+            if not accepted(suggestion, wanted, found):
                 skipped += 1
-                if explicit:
-                    raise PlaylistError(
-                        "An explicit track is unavailable, ambiguous or a different album/version. "
-                        "No replacement was selected."
-                    )
                 continue
+            assert found is not None
             if found.key in pool:
-                if explicit:
-                    raise PlaylistError("Explicit tracks repeat the same recording.")
                 continue
-            if explicit:
-                pool[found.key] = found
-            else:
-                join(found)
-        if explicit:
-            selected = list(pool.values())
-            validate(selected, definition)
-            return Curated(selected, skipped, definition.name, {})
+            join(found)
         # Library songs the sound analyzer finds join the pool once each: like the
         # reference songs, and like the model's description of the wanted sound.
         sound = pool_sound

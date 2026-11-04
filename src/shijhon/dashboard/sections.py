@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+import aiosqlite
 import anyio
 from pydantic import BaseModel, SecretStr, ValidationError
 
@@ -37,6 +38,7 @@ from shijhon.dashboard.saved import (
     TOKEN_FOR,
     Locked,
     Saved,
+    SavedSettings,
     bound_token,
     catalog_locks,
     catalog_problem,
@@ -52,6 +54,7 @@ from shijhon.dashboard.saved import (
 )
 
 CLEAR = "-clear"  # suffix of a secret's "remove" checkbox
+NOT_LISTED = "not in the add-on list"  # a setting's add-on that is not among its choices
 # The Catalog page's hidden field: the kind whose adapter settings the form holds. Typed
 # values of an adapter's settings are taken only for that kind (a form made for one
 # catalog never fills another's settings).
@@ -222,6 +225,7 @@ def rows(
     saved: Mapping[str, Mapping[str, Saved]],
     *,
     addon_names: list[str],
+    addon_notes: Mapping[str, str] | None = None,
     form: Mapping[str, str] | None = None,
     problems: Mapping[str, Problem] | None = None,
     just_saved: list[str] | None = None,
@@ -232,7 +236,9 @@ def rows(
     """The page's groups of rows (template context: the ``setting`` macro's row). A setting
     the environment sets is shown as text (kind "locked"): the environment's value (a
     secret's only as set or not), its variable, and a saved value it hides. ``unmarked``:
-    the rows as ``problems`` make them, without saying the problems (a first step)."""
+    the rows as ``problems`` make them, without saying the problems (a first step).
+    ``addon_names``: the add-ons a setting naming one may choose; a value naming another
+    stays chosen, with its note (``addon_notes``, else "not in the add-on list")."""
     applying = getattr(effective(configured, saved, locked=locked)[0], section)
     kind = form_kind(section, applying, form, locked.get(section, {}))
     view = _view(section, configured, saved, locked, applying, kind)
@@ -312,7 +318,10 @@ def rows(
                     options = (
                         [("", "None")]
                         + [(name, name) for name in addon_names]
-                        + [(name, f"{name} (not in the add-on list)") for name in extra]
+                        + [
+                            (name, f"{name} ({(addon_notes or {}).get(name, NOT_LISTED)})")
+                            for name in extra
+                        ]
                     )
                 else:
                     options = f.options()
@@ -699,6 +708,80 @@ def _bound_writes(
     if marks and (record is None or record.value != marks):
         return {BOUND: marks}
     return {BOUND: REMOVE} if not marks and record is not None else {}
+
+
+# The settings that name an add-on: a rename changes them with it (the dashboard's, and the
+# configuration file's list taking its name back).
+NAMING = (("catalog", "addon"), ("delivery", "primary_source"), ("delivery", "reliable_source"))
+
+
+def naming(
+    configured: Settings, saved: Mapping[str, Mapping[str, Saved]], locked: Locked, name: str
+) -> list[tuple[str, str]]:
+    """The settings that name the add-on ``name``, as they apply with ``saved``
+    (``NAMING``; the catalog's while its kind is an add-on's catalog)."""
+    applying, _ = effective(configured, saved, locked=locked)
+    return [
+        (section, key)
+        for section, key in NAMING
+        if (section != "catalog" or applying.catalog.kind == "addon")
+        and getattr(getattr(applying, section), key, "") == name
+    ]
+
+
+def set_by_environment(
+    configured: Settings, locked: Locked, found: list[tuple[str, str]]
+) -> dict[tuple[str, str], str]:
+    """Those of ``found`` the environment sets, with the variable (never saved here)."""
+    variables = {}
+    for section, key in found:
+        env = (
+            catalog_locks(locked, configured.catalog, "addon")
+            if section == "catalog"
+            else locked.get(section, {})
+        )
+        if key in env:
+            variables[(section, key)] = env[key]
+    return variables
+
+
+async def rename_writes(
+    store: SavedSettings,
+    conn: aiosqlite.Connection,
+    configured: Settings,
+    locked: Locked,
+    old: str,
+    new: str,
+    by: str,
+) -> list[tuple[str, str]]:
+    """Save the settings that name the add-on ``old`` with its new name ``new``, in the
+    rename's transaction, by the precedence rule (the configuration file's value is not
+    saved again; one the environment sets is left alone); returns those saved."""
+    saved = await store.all(conn)
+    found = naming(configured, saved, locked, old)
+    fixed = set_by_environment(configured, locked, found)
+    changed = [item for item in found if item not in fixed]
+    for section, key in changed:
+        file = (
+            configured_for(configured.catalog, "addon")
+            if section == "catalog"
+            else getattr(configured, section)
+        )
+        same = file is not None and getattr(file, key, None) == new
+        writes: dict[str, Any] = {key: REMOVE if same else new}
+        if section == "catalog":  # (with the record of whose settings they are)
+            writes = catalog_writes("addon", saved.get(section, {}), writes)
+        await store.write(conn, section, writes, by)
+    return changed
+
+
+def catalog_writes(
+    kind: str, saved: Mapping[str, Saved], to_write: Mapping[str, Any]
+) -> dict[str, Any]:
+    """``to_write`` (values of the catalog ``kind``'s settings, ``saved``: the saved catalog
+    section) with what a save of them on the Catalog page writes besides
+    (``_adapter_writes``): for a change the dashboard makes elsewhere (an add-on renamed)."""
+    return {**to_write, **_adapter_writes(kind, saved, saved_for(saved, kind), to_write)}
 
 
 def _adapter_writes(

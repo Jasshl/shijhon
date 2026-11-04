@@ -26,7 +26,7 @@ from shijhon.catalog.base import CatalogError, client_artwork_template, scope
 from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import CatalogRef, ReleaseKind, artwork_url, item_artist
 from shijhon.delivery.addon import FullCatalog as Declaration
-from shijhon.delivery.addon import Manifest, catalog_key, service_tag
+from shijhon.delivery.addon import Manifest, addon_key, service_tag
 from shijhon.delivery.pacing import Limits
 from shijhon.delivery.playback import PlaybackSettings, Track, _own_id
 from tests.harness.full_catalog import DECLARATION, RESOURCES, FullCatalog
@@ -223,16 +223,16 @@ async def test_cold_song_isrc_album_and_artist_lookups(full: FullWorld) -> None:
 async def test_unconfirmed_and_import_catalogs_keep_name_keys(full: FullWorld) -> None:
     c = AddonCatalog(NAME, full.world.registry, full.catalog.http)  # type: ignore[arg-type]
     found = await c.search("Mara Venn")
-    assert c.key == catalog_key(NAME) and c.region == ""
+    assert c.key == addon_key(NAME) and c.region == ""
     assert found.songs[0].ref.id == service_tag(SERVICE) + "t101"
     assert found.songs[0].explicit and (await c.song(found.songs[0].ref.id)).album is not None
     assert (await c.songs_by_isrc("ZZSHA0000102"))[0].album is not None
-    imports = AddonCatalogs(full.world.registry, skip=NAME)  # type: ignore[arg-type]
+    imports = AddonCatalogs(full.world.registry, skip=addon_key(NAME))  # type: ignore[arg-type]
     assert await imports.catalogs() == []
-    assert await imports.by_key(catalog_key(NAME)) is None
+    assert await imports.by_key(addon_key(NAME)) is None
     imports.skip = None
     [(name, imported)] = await imports.catalogs()
-    assert name == NAME and imported.key == catalog_key(NAME) and imported.region == ""
+    assert name == NAME and imported.key == addon_key(NAME) and imported.region == ""
     await imports.aclose()
 
 
@@ -320,7 +320,7 @@ async def test_numbers_fall_back_as_a_whole_and_fields_require_declaration(full:
     assert not rich.numbered and [(t.disc, t.number) for t in rich.tracks] == [
         (1, i) for i in range(1, 5)
     ]
-    old = read_album(Space(catalog_key(NAME), SERVICE), "al1", data)
+    old = read_album(Space(addon_key(NAME), SERVICE), "al1", data)
     assert not old.numbered and not old.explicit and old.label is None and not old.genres
     assert old.tracks[0].duration_ms == 4125  # durationMs was already supported
     assert not old.tracks[0].explicit and not old.tracks[0].artists

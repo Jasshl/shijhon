@@ -20,6 +20,8 @@ import aiosqlite
 import anyio
 import anyio.to_thread
 
+from shijhon.delivery.addon import addon_key
+
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
 
@@ -55,6 +57,8 @@ def apply_migrations(
     numbers = [number for number, _, _ in items]
     if numbers != list(range(1, len(numbers) + 1)):
         raise RuntimeError(f"migrations must be numbered 1..n without gaps, got {numbers}")
+    # What migrations compute that SQL cannot: an add-on's key from its name (0032).
+    conn.create_function("shijhon_addon_key", 2, addon_key, deterministic=True)
     current = conn.execute("PRAGMA user_version").fetchone()[0]
     if current > len(items):
         raise RuntimeError(

@@ -26,6 +26,8 @@ nothing.
 
 - With `[[addons]]` in the file, the file owns the list: at each start the add-ons are
   added, updated and ordered to match it, and stored ones it no longer names are disabled.
+  A stored add-on renamed on the dashboard is found by the key it was given under the
+  file's name, and takes that name again.
 - Once you change the list on the dashboard, the stored list is kept and the file's is no
   longer applied at startup. The log says so, and a note at the end of the Add-ons page,
   whose "Use the file's list after a restart" hands it back.
@@ -83,10 +85,10 @@ saved dashboard settings and the environment keep the normal precedence.
 Add-on transfer overrides are `[[addons]] downloads` and `preparations`; omitted means
 inherit, a number means a custom limit, and 0 removes that cap. The dashboard displays
 the inherited default and effective shared limit. `capacity_group` is a local label
-(up to 100 characters) for add-ons sharing an account or worker. Same-origin add-ons
-already share transfer limits; a named group can connect different origins. The strictest
-nonzero limit across connected enabled members applies. API request limits still share
-only by origin. Standard manifests do not report backend independence or remaining
+(up to 100 characters) for add-ons sharing an account or worker. One add-on added twice
+already shares its transfer limits; add-ons served at one address count separately unless
+a named group connects them, at one address or several. The strictest nonzero limit
+across connected enabled members applies. API request limits are per add-on. Standard manifests do not report backend independence or remaining
 account quotas; configure the limits to suit the account.
 
 | Setting | What it sets |
@@ -109,7 +111,7 @@ account quotas; configure the limits to suit the account.
 | `bulk_downloads` (4), `addon_downloads` (2) | Songs fetched at once for all scheduled downloads and playlist preparation; songs fetched per add-on or shared group. Set on Playback under Downloads and playlist preparation. 0: unlimited |
 | `addon_preparations` (1) | New audio preparations at once per add-on or shared group, including sources whose cache readiness is unknown. 0: unlimited |
 | `user_routings` (4), `user_downloads` (4), `user_downloads_per_hour` (0), `user_download_burst` (4) | Limits per user ([the add-on protocol](add-on-protocol.md#limits)). 0: no cap or quota off; a burst of 0: the whole hour's downloads in a row. The burst only applies when the hourly quota is enabled |
-| `addon_requests_per_second` (2), `addon_request_burst` (4), `addon_audio_openings` (4) | The limits per add-on. 0 requests a second, or 0 openings: no limit. The burst is 1 or more |
+| `addon_requests_per_second` (5), `addon_request_burst` (10), `addon_audio_openings` (4) | The limits per add-on: its address and the `id` in its manifest, so add-ons served at one address count separately ([the add-on protocol](add-on-protocol.md#limits)). 0 requests a second, or 0 openings: no limit. The burst is 1 or more |
 | `dash` (on) | Play add-ons' DASH links ([add-ons.md](../add-ons.md#dash-links)). Needs ffmpeg on the `PATH`. Off: the next add-on is asked |
 | `dash_start` (`"at_once"`) | `"at_once"`: a DASH song plays from its first segments, served as one MP4 file of them. `"complete"`: it plays once all its segments are joined into a FLAC, M4A or MP3 file. Songs saved to the library are joined files either way |
 | `dash_segments_at_once` (4) | A DASH song's segments fetched at the same time |

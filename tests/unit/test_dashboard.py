@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field, SecretStr
 
 from shijhon.access import AccessDenied, AccessService, AccessUnavailable
 from shijhon.app import ShijhonApp
+from shijhon.catalog.addon import NOT_ENABLED, AddonCatalog
+from shijhon.catalog.base import CatalogError
 from shijhon.config import DeliverySettings, Settings, catalog_settings, load_settings
 from shijhon.dashboard import sections
 from shijhon.dashboard.addons import parse_manifest
@@ -529,6 +531,97 @@ async def test_the_addon_list_is_the_dashboards_once_changed_there(tmp_path: Pat
     await app.shutdown()
 
 
+@pytest.mark.anyio
+async def test_the_files_list_takes_a_renamed_addons_name_back_with_its_settings(
+    tmp_path: Path,
+) -> None:
+    """The file names Alpha, which the dashboard renamed Beta - and with it the catalog's
+    add-on, the primary add-on and the preferred fallback. Handed back to the file, the
+    next start gives the add-on its name back, and the settings that named it with it."""
+    addons = [{"name": "Alpha", "base_url": "https://alpha.example.invalid/cfg"}]
+    roles = {"primary_source": "Alpha", "reliable_source": "Alpha"}
+    settings = _settings(
+        tmp_path,
+        addons=addons,
+        delivery=roles,
+        catalog={"kind": "addon", "addon": "Alpha"},
+    )
+
+    def named(app: ShijhonApp) -> tuple[str, str, str]:
+        return (
+            str(getattr(app.settings.catalog, "addon", "")),
+            app.settings.delivery.primary_source,
+            app.settings.delivery.reliable_source,
+        )
+
+    app = ShijhonApp(settings)
+    await app.startup()
+    assert app.services is not None and app.dashboard.saved is not None
+    saved = app.dashboard.saved
+    (alpha,) = await app.services.sources.stored()
+
+    async def renamed(conn: Any) -> None:
+        await sections.rename_writes(
+            saved, conn, app.configured, app.locked, "Alpha", "Beta", "tester"
+        )
+
+    await app.services.sources.update(alpha.id, name="Beta", also=renamed)
+    await saved.take_addons("tester")
+    await app.shutdown()
+
+    app = ShijhonApp(settings)  # the dashboard's list: Beta, named by the three settings
+    await app.startup()
+    assert named(app) == ("Beta", "Beta", "Beta")
+    assert app.dashboard.saved is not None
+    await app.dashboard.saved.hand_back_addons("tester")
+    await app.shutdown()
+
+    app = ShijhonApp(settings)  # the file's list again: Alpha, and what names it
+    await app.startup()
+    try:
+        assert app.services is not None and app.dashboard.saved is not None
+        (stored,) = await app.services.sources.stored()
+        assert (stored.id, stored.name, stored.key) == (alpha.id, "Alpha", alpha.key)
+        assert named(app) == ("Alpha", "Alpha", "Alpha")
+        playing = app.services.deliverer.settings
+        assert (playing.primary_source, playing.reliable_source) == ("Alpha", "Alpha")
+        assert playing.catalog_addon == "Alpha"
+        # (The file's names: nothing of them stays saved.)
+        left = await app.dashboard.saved.all()
+        assert "addon" not in left.get("catalog", {})
+        assert not {"primary_source", "reliable_source"} & set(left.get("delivery", {}))
+    finally:
+        await app.shutdown()
+
+
+@pytest.mark.anyio
+async def test_a_catalog_named_for_an_absent_addon_is_no_other_addons(tmp_path: Path) -> None:
+    """Alpha was renamed Beta; a catalog still named for Alpha is unavailable, and never
+    Beta's - nor do imports skip Beta for it."""
+    app = ShijhonApp(_settings(tmp_path))
+    await app.startup()
+    assert app.services is not None
+    alpha = await app.services.sources.add("Alpha", "https://alpha.example.invalid/x")
+    await app.services.sources.update(alpha, name="Beta")
+    await app.shutdown()
+
+    app = ShijhonApp(_settings(tmp_path, catalog={"kind": "addon", "addon": "Alpha"}))
+    await app.startup()
+    try:
+        assert app.services is not None and app.services.playlists is not None
+        (beta,) = await app.services.sources.stored()
+        inner = getattr(app.services.catalog, "inner", app.services.catalog)
+        assert isinstance(inner, AddonCatalog)
+        assert inner.addon_key != beta.key and inner.key != beta.key
+        with pytest.raises(CatalogError) as failed:
+            await inner._source()
+        assert failed.value.kind == "unavailable" and failed.value.reason == NOT_ENABLED
+        imports = app.services.playlists.addons
+        assert imports is not None and imports.skip == inner.addon_key != beta.key
+    finally:
+        await app.shutdown()
+
+
 def _settings(tmp_path: Path, **overrides: Any) -> Settings:
     return load_settings(
         None,
@@ -870,7 +963,7 @@ async def test_a_manifest_check_takes_its_turn_at_the_addons_request_limit(
     monkeypatch.setattr(pace, "request", noted)
     seen: list[str] = []
 
-    async def pace_at(url: str) -> pacing.AddonPace:
+    async def pace_at(url: str, base_url: str) -> pacing.AddonPace:
         seen.append(url)
         return pace
 

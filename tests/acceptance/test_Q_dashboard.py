@@ -16,6 +16,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+import anyio
+import anyio.to_thread
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -283,7 +285,7 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.3.0"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.4.0"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 
@@ -1078,6 +1080,243 @@ def test_addons_are_pulled_into_place_and_switched_together(
         assert on() == ["Four", "One", "Two", "Three"]
         assert "Every add-on is on." in admin.get("addons").text
     finally:
+        world.clear_sources()
+
+
+def test_catalog_only_addons_are_listed_on_their_own(world: DeliveryWorld, admin: Browser) -> None:
+    """An add-on whose manifest declares no ``stream`` is a catalog only: listed in its
+    own section, without a place in the order or the settings that only matter for audio.
+    One whose manifest cannot be read stays among the others, with its problem."""
+    world.clear_sources()
+    first = world.add_source(world.addon("Audio One"))
+    shelf = world.add_source(world.addon("Shelf", resources=("search", "catalog")))
+    gone = world.addon("Unread", resources=("search", "catalog"))
+    unread = world.add_source(gone)
+    second = world.add_source(world.addon("Audio Two"))
+    sources = world.services.sources
+    scripted = {"accept": "application/json"}
+
+    def order() -> list[int]:
+        return [s.id for s in world.server.call(sources.stored)]
+
+    def section(page: str, title: str) -> str:
+        start = page.index(f">{title}</h2>")
+        return page[start : page.index("</section>", start)]
+
+    try:
+        gone.stop()
+        page = html.unescape(admin.get("addons").text)
+        audio, shelves = section(page, "Your add-ons"), section(page, "Catalog only")
+        assert "<h3>Shelf</h3>" in shelves and "<h3>Shelf</h3>" not in audio
+        assert "they have no place in the order" in shelves
+        for name in ("Audio One", "Unread", "Audio Two"):
+            assert f"<h3>{name}</h3>" in audio and f"<h3>{name}</h3>" not in shelves
+        assert "Manifest unreachable:" in audio
+        # Numbered among the add-ons asked for audio; the catalog only has no number, no
+        # arrows and no line joining it to the others.
+        assert [int(n) for n in re.findall(r'data-addon="\d+">(\d+)</span>', audio)] == [1, 2, 3]
+        assert 'data-addon="' not in shelves and "source-move" not in shelves
+        assert '<ol class="chain chain-unordered">' in shelves
+        assert f'<ol class="chain" data-reorder="{PATH}/addons/order">' in audio
+        # Its settings: a catalog's - its name, address and network, its request limits.
+        shown = folds(shelves)
+        assert {f"addon-{shelf}-{n}" for n in ("name", "reach", "manifest")} <= shown.outside
+        assert {f"addon-{shelf}-requests-per-second", f"addon-{shelf}-request-burst"} <= (
+            shown.inside
+        )
+        for audio_only in ("audio-openings", "downloads", "preparations", "capacity-group"):
+            assert f"addon-{shelf}-{audio_only}" not in shown.inside | shown.outside
+        assert "request timeout or Playback's limits per add-on" in html.unescape(shelves)
+        assert "Time to first audio" not in shelves and "one address" not in shelves
+        assert f"addon-{first}-budget" in folds(audio).inside
+        # Its own time stays, as a catalog's: playlist imports wait that long for it.
+        assert f"addon-{shelf}-budget" in shown.inside
+        timed = row_of(shelves, f"addon-{shelf}-budget")
+        assert ">Time for catalog answers<" in timed and "from Catalog" in timed
+        saved = admin.submit(
+            "addons", {"request_burst": "3", "budget_seconds": "40"}, f"addons/{shelf}/settings"
+        )
+        assert saved.status_code == 303
+        kept = stored_addon(world, shelf)
+        assert kept.limits.request_burst == 3 and kept.budget == 40
+        assert "Time for catalog answers 40 s" in html.unescape(admin.get("addons").text)
+        # The order is that of the add-ons asked for audio: the catalog only keeps its place.
+        assert order() == [first, shelf, unread, second]
+        places = {f"position-{first}": "3", f"position-{unread}": "1", f"position-{second}": "2"}
+        moved = admin.post("addons/order", {**places, "csrf": admin.csrf()}, headers=scripted)
+        assert moved.status_code == 200 and moved.json() == {"saved": True}
+        assert order() == [unread, shelf, second, first]
+        with_shelf = {**places, f"position-{shelf}": "4"}
+        refused = admin.post("addons/order", {**with_shelf, "csrf": admin.csrf()}, headers=scripted)
+        assert refused.status_code == 409
+        up = admin.post(f"addons/{second}/move", {"direction": "up", "csrf": admin.csrf()})
+        assert up.status_code == 303 and order() == [second, shelf, unread, first]
+        admin.post(f"addons/{shelf}/move", {"direction": "up", "csrf": admin.csrf()})
+        assert order() == [second, shelf, unread, first]  # (it has no place to move from)
+    finally:
+        world.clear_sources()
+
+
+def test_playback_offers_only_addons_that_supply_audio(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """The primary add-on and the preferred fallback are chosen among the add-ons asked for
+    audio. One already set to a catalog-only add-on stays chosen, marked and said, until
+    another is chosen; a catalog-only add-on is not chosen anew. The catalog still offers
+    it."""
+    world.clear_sources()
+    world.add_source(world.addon("Player"))
+    world.add_source(world.addon("Shelf", resources=("search", "catalog")))
+    saved = world.app.dashboard.saved
+    assert saved is not None
+    try:
+        page = html.unescape(admin.get("playback").text)
+        row = row_of(page, "delivery-primary-source")
+        assert '<option value="Player">Player</option>' in row and "Shelf" not in row
+        refused = admin.submit("playback", {"reliable_source": "Shelf"})
+        assert refused.status_code == 400 and "Choose one of the listed add-ons." in refused.text
+        # Set before it was known to be a catalog only (or by the file): kept, and said.
+        world.server.call(lambda: saved.put("delivery", {"primary_source": "Shelf"}, "tester"))
+        page = html.unescape(admin.get("playback").text)
+        row = row_of(page, "delivery-primary-source")
+        assert '<option value="Shelf" selected>Shelf (catalog only)</option>' in row
+        assert "The primary add-on “Shelf” provides a catalog only" in page
+        assert admin.submit("playback", {"max_attempts": "4"}).status_code == 303
+        assert saved_rows(world, "delivery")["primary_source"] == '"Shelf"'  # not replaced
+        catalog = row_of(
+            html.unescape(admin.submit("catalog", {"kind": "addon"}).text), "catalog-addon"
+        )
+        assert '<option value="Shelf">Shelf</option>' in catalog
+    finally:
+        # The default again (a required number cannot be left empty); a refused save
+        # would leave the value for the tests after this one.
+        reset = admin.submit("playback", {"primary_source": "", "max_attempts": "2"})
+        world.clear_sources()
+    assert reset.status_code == 303 and "max_attempts" not in saved_rows(world, "delivery")
+
+
+def test_a_playback_save_reads_the_chosen_addons_manifest(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """A Playback form open from before a restart - no page has read the manifests since -
+    cannot name a catalog-only add-on: the save reads the manifest of the add-on it names."""
+    world.clear_sources()
+    player = world.add_source(world.addon("Player"))
+    shelf_addon = world.addon("Shelf", resources=("search", "catalog"))
+    shelf = world.add_source(shelf_addon)
+    checks = world.app.dashboard.checks
+    try:
+        form = admin.form("playback")  # (the page, loaded before the restart)
+        for source_id in (player, shelf):
+            checks.forget(source_id)  # as after a restart: no manifest known
+        read = len(shelf_addon.requests("manifest"))
+        refused = admin.post("playback", {**form, "reliable_source": "Shelf"})
+        assert refused.status_code == 400 and "Choose one of the listed add-ons." in refused.text
+        assert len(shelf_addon.requests("manifest")) == read + 1
+        assert "reliable_source" not in saved_rows(world, "delivery")
+        for source_id in (player, shelf):
+            checks.forget(source_id)
+        chosen = admin.post("playback", {**form, "reliable_source": "Player"})
+        assert chosen.status_code == 303
+        assert saved_rows(world, "delivery")["reliable_source"] == '"Player"'
+    finally:
+        admin.submit("playback", {"reliable_source": ""})
+        world.clear_sources()
+
+
+def test_a_rename_and_a_playback_save_apply_in_the_order_they_save(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """A Playback save that names an add-on is applied before a rename of that add-on can
+    write: the rename's live value is never undone by the save that came before it."""
+    world.clear_sources()
+    alpha = world.add_source(world.addon("Alpha"))
+    world.add_source(world.addon("Other"))
+    saved = world.app.dashboard.saved
+    assert saved is not None
+    put = saved.put
+    persisted, resume = threading.Event(), threading.Event()
+
+    async def paused(section: str, changes: Any, by: str) -> None:
+        await put(section, changes, by)
+        if section == "delivery" and changes.get("primary_source") == "Alpha":
+            persisted.set()
+            await anyio.to_thread.run_sync(resume.wait)
+
+    second = Browser(world.server.base_url)
+    assert second.sign_in(ADMIN_USER, ADMIN_PASSWORD).status_code == 303
+    results: dict[str, int] = {}
+    saving = threading.Thread(
+        target=lambda: results.update(
+            save=admin.submit("playback", {"primary_source": "Alpha"}).status_code
+        )
+    )
+    renaming = threading.Thread(
+        target=lambda: results.update(
+            rename=second.submit("addons", {"name": "Beta"}, f"addons/{alpha}/settings").status_code
+        )
+    )
+    saved.put = paused  # type: ignore[method-assign]
+    try:
+        saving.start()
+        assert persisted.wait(10)
+        renaming.start()
+        renaming.join(0.5)
+        assert renaming.is_alive()  # (it waits for the save to be applied)
+        resume.set()
+        saving.join(10)
+        renaming.join(10)
+        assert results == {"save": 303, "rename": 303}
+        assert saved_rows(world, "delivery")["primary_source"] == '"Beta"'
+        assert world.services.deliverer.settings.primary_source == "Beta"
+    finally:
+        resume.set()
+        saved.put = put  # type: ignore[method-assign]
+        second.close()
+        admin.submit("playback", {"primary_source": ""})
+        world.clear_sources()
+
+
+def test_a_renamed_addon_keeps_its_key_and_the_settings_that_name_it(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """A rename changes the add-on's name alone: its key stays, the routing's settings that
+    name it follow at once, and names stay unique."""
+    world.clear_sources()
+    keeper = world.add_source(world.addon("Keeper"))
+    world.add_source(world.addon("Taken"))
+    action = f"addons/{keeper}/settings"
+    key = stored_addon(world, keeper).key
+    try:
+        saved = admin.submit("playback", {"primary_source": "Keeper", "reliable_source": "Keeper"})
+        assert saved.status_code == 303
+        for name, problem in (
+            ("Taken", "Another add-on has this name. Choose another."),
+            ("", "Enter a name."),
+            ("x" * 101, "Enter up to 100 characters, on one line."),
+            ("Two\nlines", "Enter up to 100 characters, on one line."),
+        ):
+            refused = admin.submit("addons", {"name": name}, action)
+            assert refused.status_code == 400 and problem in html.unescape(refused.text), name
+        assert stored_addon(world, keeper).name == "Keeper"
+        renamed = admin.submit("addons", {"name": "  Keeper Two "}, action)
+        assert renamed.status_code == 303
+        stored = stored_addon(world, keeper)
+        assert (stored.name, stored.key) == ("Keeper Two", key)
+        settings = world.services.deliverer.settings
+        assert (settings.primary_source, settings.reliable_source) == ("Keeper Two", "Keeper Two")
+        assert saved_rows(world, "delivery")["primary_source"] == '"Keeper Two"'
+        page = html.unescape(admin.get("addons").text)
+        assert "Keeper renamed to Keeper Two." in page and "Restart needed" not in page
+        assert "It is the primary add-on and the preferred fallback" in page
+        assert '<option value="Keeper Two" selected>' in admin.get("playback").text
+        # A form made before the rename is older than the add-on: not saved.
+        stale = admin.form("addons", action)
+        admin.submit("addons", {"name": "Keeper Three"}, action)
+        old = admin.post(action, {**stale, "name": "Keeper Four"})
+        assert old.status_code == 409 and stored_addon(world, keeper).name == "Keeper Three"
+    finally:
+        admin.submit("playback", {"primary_source": "", "reliable_source": ""})
         world.clear_sources()
 
 

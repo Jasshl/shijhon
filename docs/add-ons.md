@@ -20,6 +20,20 @@ its own is also searched by [playlist imports](playlist-imports.md#add-on-catalo
 To change the order, drag an add-on by its number or use its arrows. **All on** and
 **All off** switch the whole list.
 
+To rename an add-on, change its **Name** under **Settings** and save. Only the name you
+see changes: the add-on keeps its catalog, its songs and its place, and the settings that
+name it (the catalog's add-on, the primary add-on, the preferred fallback) change with it.
+Names are unique. When an environment variable sets one of those settings to the add-on's
+name, the rename is refused: change the variable first.
+
+Add-ons whose manifest declares no `stream` resource provide a catalog only. They are
+listed apart, under **Catalog only**: they have no place in the order, and their
+**Settings** leave out what only matters for audio. They keep the name, the add-on's own
+settings, the network, the address, the request limits, and **Time for catalog answers**:
+how long playlist imports wait for a slow add-on's catalog (`budget_seconds` in the
+file). An add-on whose manifest can't be read stays in the main list and shows the
+problem.
+
 Or in the configuration file, in your order:
 
 ```toml
@@ -58,16 +72,20 @@ settings = {}           # the add-on's own settings, if it has any: single value
   `reliable_source`.
 
 `primary_source` and `reliable_source` take an add-on's `name`, exactly as you gave it.
+Renaming the add-on on the dashboard changes them too. The Playback page offers only
+add-ons that supply audio; one that names a catalog-only add-on is shown as such until
+you choose another.
 
 ## Limits
 
-An add-on gets at most 2 API requests a second and 4 audio requests being opened at once,
-from all users and Shijhon's background work together. Each user can look up 4 songs and
-fetch 4 whole songs at a time. The optional hourly download quota is off by default.
-Over a limit, a request waits its turn; the song being played goes first.
-An add-on you run yourself can have higher API limits of its own
-(`requests_per_second`, `request_burst`, `audio_openings`). Add-ons at one address share
-their limits ([every limit](reference/add-on-protocol.md#limits)).
+An add-on gets at most 5 API requests a second, after 10 at once, and 4 audio requests
+being opened at once, from all users and Shijhon's background work together. Each user
+can look up 4 songs and fetch 4 whole songs at a time. The optional hourly download quota
+is off by default. Over a limit, a request waits its turn; the song being played goes
+first. An add-on you run yourself can have higher API limits of its own
+(`requests_per_second`, `request_burst`, `audio_openings`). Several add-ons served at one
+address count separately, by the `id` in each one's manifest; the same add-on added twice
+shares its limits ([every limit](reference/add-on-protocol.md#limits)).
 
 ### Downloads and playlist preparation
 
@@ -92,8 +110,9 @@ Playlist preparation also works with slow add-ons. Its songs wait for a free slo
 the download timeout (`download_timeout_seconds`, 180 seconds) counts only from the
 moment a song gets its slot. When every add-on that could provide a song is paused
 (rate limited with HTTP 429 and `Retry-After`, or cooling down after errors), the song
-waits for the pause to end instead of failing. Nothing is sent to a paused add-on, or to
-add-ons that share its limits, until then. A song fails when no enabled add-on permits
+waits for the pause to end instead of failing. Nothing is sent to a paused add-on until
+then; a 429 pauses only that add-on, not the others in its shared group, which still share
+its transfer slots. A song fails when no enabled add-on permits
 downloads or has it, or after waiting an hour in all for paused add-ons. A waiting song
 holds none of the user's download turns. When it gets a slot while the user's turns are
 busy, or while an app is fetching the same song, it gives the slot back and tries again
@@ -114,11 +133,12 @@ answer or quality label does not prove that a file is cached.
 
 On **Add-ons → Settings → Advanced settings**, blank **Songs fetched at once** and **New
 preparations at once** inherit the displayed defaults. A number sets an override; 0
-removes that add-on's cap. Add-ons at one address always share transfer limits. Give
-add-ons the same **Shared account or worker group** label when they use one account or
-worker, even at different addresses. A group's strictest nonzero limit applies; 0 does
-not cancel another member's cap. Different hostnames do not establish independent
-backends. API request pacing still shares by address, independently of these groups.
+removes that add-on's cap. The same add-on added twice always shares transfer limits;
+add-ons served at one address do not, unless you group them. Give add-ons the same
+**Shared account or worker group** label when they use one account or worker, at one
+address or at different ones. A group's strictest nonzero limit applies; 0 does not
+cancel another member's cap. Different hostnames do not establish independent backends.
+API request pacing stays per add-on, independently of these groups.
 
 An account's remaining credits or quota are not part of the standard add-on protocol.
 Configure appropriate limits yourself; Shijhon also honors HTTP 429 and `Retry-After`.
@@ -146,7 +166,13 @@ add-ons. Plays, and preparing the next songs in the queue, still use it.
 
 - **It does not have the song** (HTTP 404): the next add-on is asked.
 - **"Too many requests"** (HTTP 429): nothing new is asked of it until its `Retry-After`,
-  an hour at most, or 30 seconds when it names none. Songs already playing keep playing.
+  an hour at most, or 30 seconds when it names none. Songs already playing keep playing,
+  and other add-ons at its address are asked as before.
+- **"Not ready yet"** (HTTP 503 with `Retry-After`, while it prepares the song): Shijhon
+  asks for the song's link again after that time, within the add-on's time for the song.
+  This is not an error. When the song is not ready in time, the next add-on is asked, and
+  a retry of the song asks this add-on again. Give an add-on that prepares whole files a
+  `budget_seconds` that covers a usual preparation.
 - **Three errors in a row** (HTTP 5xx, no connection, a broken answer), no more than ten
   minutes apart: it is passed over for 30 seconds, and again after each further error
   until it delivers audio.
@@ -154,5 +180,6 @@ add-ons. Plays, and preparing the next songs in the queue, still use it.
 ## For add-on authors
 
 An add-on needs `/stream/{id}` and one way to find a song: by ISRC (`/resolve-isrc`), by
-title, artist and length (`/resolve`), or a search (`/search?q=`).
+title, artist and length (`/resolve`), or a search (`/search?q=`). An add-on whose
+manifest lists no `stream` serves only its catalog: Shijhon asks it for no audio.
 [The add-on protocol](reference/add-on-protocol.md) has the rest.

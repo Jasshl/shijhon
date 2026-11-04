@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
+import aiosqlite
 import anyio
 import anyio.abc
 import anyio.to_thread
@@ -17,7 +18,7 @@ import anyio.to_thread
 from shijhon.access import AccessService, Principal
 from shijhon.agents.app import Agents
 from shijhon.audiomuse import AudioMuse, AudioMuseClient
-from shijhon.catalog.addon import AddonCatalogs
+from shijhon.catalog.addon import AddonCatalog, AddonCatalogs
 from shijhon.catalog.artwork import ArtworkCache, ArtworkIndex
 from shijhon.catalog.base import Catalog
 from shijhon.catalog.base import scope as catalog_scope
@@ -42,6 +43,7 @@ from shijhon.dashboard.app import PATH as DASHBOARD_PATH
 from shijhon.dashboard.app import Dashboard, printable
 from shijhon.dashboard.live import addon_limits, ahead_wait
 from shijhon.dashboard.saved import (
+    CONFIGURATION,
     Locked,
     SavedSettings,
     effective,
@@ -51,7 +53,7 @@ from shijhon.dashboard.saved import (
     token_withheld,
     withheld,
 )
-from shijhon.dashboard.sections import fields_of
+from shijhon.dashboard.sections import NAMING, fields_of, rename_writes
 from shijhon.delivery.ahead import AheadGate
 from shijhon.delivery.bulk import BulkAcquisition
 from shijhon.delivery.dash import Dash, ffmpeg_path
@@ -314,8 +316,27 @@ class ShijhonApp:
             # The environment's list always applies; the file's until the dashboard
             # changed the list.
             if "addons" in settings.from_environment or await saved.addons_owner() is None:
-                await sources.sync(settings.addons)
+                # An add-on renamed in the dashboard takes the file's name back, and the
+                # settings that named it with it, in the same transaction.
+                async def renamed(conn: aiosqlite.Connection, old: str, new: str) -> None:
+                    await rename_writes(
+                        saved, conn, self.configured, self.locked, old, new, CONFIGURATION
+                    )
+
+                renames = await sources.sync(settings.addons, renamed=renamed)
                 log.info("add-ons from the configuration: %d", len(settings.addons))
+                for old, new in renames:
+                    log.info(
+                        "add-ons: %s takes the configuration's name %s again",
+                        printable(old),
+                        printable(new),
+                    )
+                if renames:  # (the sections that name add-ons apply as saved now)
+                    values = await saved.all()
+                    fresh, _ = effective(self.configured, values, locked=self.locked, startup=True)
+                    for section in {section for section, _ in NAMING}:
+                        setattr(settings, section, getattr(fresh, section))
+                    delivery = settings.delivery
             elif differs := await sources.differs(settings.addons):
                 # The owner may have edited the file since: say so where it is seen.
                 log.warning(
@@ -443,7 +464,8 @@ class ShijhonApp:
         self.spawn(expiry.run)
         # Delivered audio from before whose length Navidrome reads as zero: in one piece.
         self.spawn(OnePiece(store, download_first).run)
-        # (The add-ons too: a catalog may be one of theirs.)
+        # (The add-ons too: a catalog may be one of theirs, known by its add-on's key.)
+        await sources.stored()
         inner = self._catalog or build_catalog(
             settings.catalog, resolver=self.resolver, addons=sources
         )
@@ -731,9 +753,8 @@ class ShijhonApp:
         # Imports also ask the catalogs of the add-ons, as the Add-ons page has them now.
         addon_catalogs = AddonCatalogs(
             sources,
-            skip=str(getattr(settings.catalog, "addon", ""))
-            if settings.catalog.kind == "addon"
-            else None,
+            # (The add-on the configured catalog is, by its key: none other.)
+            skip=inner.addon_key if isinstance(inner, AddonCatalog) else None,
             timeout=settings.catalog.timeout_seconds,
             ttl=settings.catalog.cache_seconds,
             resolver=self.resolver,

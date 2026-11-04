@@ -15,6 +15,7 @@ from pydantic import Field, field_validator, model_validator
 from shijhon.matching.normalize import fold
 from shijhon.playlists.edits import forget
 from shijhon.playlists.model import (
+    EDITED,
     LIBRARY_LOST,
     REFERENCE_PLAYLISTS,
     REFERENCE_SONGS,
@@ -25,7 +26,9 @@ from shijhon.playlists.model import (
     PlaylistError,
     Suggestion,
     distinct,
+    fingerprint,
 )
+from shijhon.playlists.prompt import private, summary
 
 if TYPE_CHECKING:
     from shijhon.playlists.service import Playlists
@@ -35,6 +38,18 @@ class RequestError(PlaylistError):
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
         self.status = status
+
+
+class Busy(RequestError):
+    """Another playlist change (usually a publication) held the changes for too long.
+    Nothing was changed, so the same call can be sent again."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Shijhon is busy publishing a playlist and nothing was changed. Send the same call "
+            "again in a minute, with the same idempotency key if it has one.",
+            503,
+        )
 
 
 class SetupRequired(RequestError):
@@ -71,6 +86,14 @@ class PlaylistRequest(Model):
         strict=True,
         description="Leave the reference songs out of the new playlist.",
     )
+    require_all: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "Explicit tracks: publish only if every track resolves. By default the tracks "
+            "that resolve are published and the others are reported."
+        ),
+    )
 
     @field_validator("reference_playlists", "reference_songs")
     @classmethod
@@ -81,6 +104,8 @@ class PlaylistRequest(Model):
     def rules(self) -> PlaylistRequest:
         if not self.prompt.strip() and not self.tracks:
             raise ValueError("describe the playlist or supply explicit tracks")
+        if self.require_all and not self.tracks:
+            raise ValueError("require_all is for explicit tracks")
         if self.tracks and (self.reference_playlists or self.reference_songs):
             raise ValueError("references work with a description, not explicit tracks")
         if self.tracks and (
@@ -122,6 +147,7 @@ class PlaylistRequest(Model):
             reference_playlists=self.reference_playlists,
             reference_songs=self.reference_songs,
             exclude_reference=self.exclude_reference,
+            require_all=self.require_all,
         )
 
     def canonical(self) -> str:
@@ -144,7 +170,35 @@ ADDED_DEFAULTS: dict[str, object] = {
     "reference_playlists": [],
     "reference_songs": [],
     "exclude_reference": True,
+    "require_all": False,
 }
+
+
+class TrackChange(Suggestion):
+    """A track added to an explicit playlist: in the place of the left-out track at
+    position ``replaces`` (as the request's tracks number them), else at the end."""
+
+    replaces: int | None = Field(default=None, ge=1, le=100, strict=True)
+
+
+class TrackAddition(Model):
+    tracks: list[TrackChange] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def distinct_places(self) -> TrackAddition:
+        places = [t.replaces for t in self.tracks if t.replaces is not None]
+        if len(set(places)) != len(places):
+            raise ValueError("two tracks replace the same position")
+        return self
+
+    def canonical(self) -> str:
+        """Fields at their defaults are left out: one added later keeps earlier hashes."""
+        data = self.model_dump(mode="json", exclude_defaults=True)
+        return json.dumps(data, sort_keys=True, ensure_ascii=False)
+
+
+# Additions one explicit playlist takes; more changes are a new playlist.
+ADDITIONS = 10
 
 
 class ContextRequest(Model):
@@ -327,15 +381,7 @@ class Requests:
                 connection.require_history()
             except PlaylistError as exc:
                 raise SetupRequired("listening_history", str(exc)) from None
-        active = await self.store.fetchone(
-            "SELECT count(*) AS n FROM playlist_runs r JOIN playlist_mixes m ON m.id=r.mix"
-            " WHERE m.owner=? AND r.state IN ('queued','generating','publishing')",
-            [owner],
-        )
-        if active and active["n"] >= 10:
-            raise RequestError(
-                "Too many playlist requests are still running. Try again later.", 429
-            )
+        await self.room(owner)
         ident, run = secrets.token_hex(12), secrets.token_hex(12)
         async with self.store.transaction() as db:
             await db.execute(
@@ -374,6 +420,18 @@ class Requests:
             )
         self.service.notify()
         return ident, True
+
+    async def room(self, owner: str) -> None:
+        """At most ten of the owner's runs at work at once."""
+        active = await self.store.fetchone(
+            "SELECT count(*) AS n FROM playlist_runs r JOIN playlist_mixes m ON m.id=r.mix"
+            " WHERE m.owner=? AND r.state IN ('queued','generating','publishing')",
+            [owner],
+        )
+        if active and active["n"] >= 10:
+            raise RequestError(
+                "Too many playlist requests are still running. Try again later.", 429
+            )
 
     async def owned(self, owner: str, ident: str, creator: str | None) -> dict[str, Any]:
         row = await self.store.fetchone(
@@ -417,6 +475,8 @@ class Requests:
             ],
             # A refresh: what it learned from the owner's edits of the playlist.
             "edits": run["data"].get("edits", {}),
+            # Explicit tracks: each one's outcome, or why it was left out.
+            **(await self.report(ident, curation.get("tracks", []))),
             **{
                 key: curation.get(key, default)
                 for key, default in (
@@ -430,6 +490,105 @@ class Requests:
                 )
             },
         }
+
+    async def add_tracks(
+        self,
+        owner: str,
+        ident: str,
+        key: str,
+        addition: TrackAddition,
+        *,
+        creator: str | None = None,
+    ) -> bool:
+        """Add tracks to explicit playlist ``ident`` - in the places of left-out tracks, or
+        at its end - as a new run of the same request; its other tracks are resolved
+        again. False: this key already added the same tracks. The caller holds changes."""
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
+            raise RequestError("Send an Idempotency-Key of 8 to 128 plain characters.")
+        await self.owned(owner, ident, creator)
+        mix = await self.service.repo.mix(ident, owner)
+        definition = Definition.model_validate_json(mix["definition"])
+        if definition.mode != "tracks":
+            raise RequestError("Only a playlist of explicit tracks takes added tracks.")
+        await self.guard(mix)
+        runs = await self.service.repo.runs(ident)
+        done = [r for r in runs if r["data"].get("addition")]
+        for run in done:
+            if run["data"]["addition"]["key"] == key:
+                if run["data"]["addition"]["hash"] != digest(addition.canonical()):
+                    raise RequestError("This request key was already used with other tracks.", 409)
+                return False
+        latest = runs[0]
+        # A run that published, or one that left the playlist as it was: a failed
+        # selection, or a preview discarded.
+        if not (
+            latest["state"] in ("published", "discarded")
+            or (latest["state"] == "failed" and not latest["data"].get("selected"))
+        ):
+            raise RequestError(
+                "Add tracks once the request is published, or after its selection failed.",
+                409,
+            )
+        if len(done) >= ADDITIONS:
+            raise RequestError(
+                "This playlist has taken all the additions it can. Create a new playlist.", 409
+            )
+        # The latest report: a later run may have failed or been discarded before one.
+        reported = next((r for r in runs if r["data"].get("curation", {}).get("tracks")), None)
+        report = {
+            t["position"]: t for t in (reported["data"]["curation"]["tracks"] if reported else [])
+        }
+        tracks = list(definition.tracks)
+        for change in addition.tracks:
+            track = Suggestion.model_validate(change.model_dump(exclude={"replaces"}))
+            if change.replaces is None:
+                tracks.append(track)
+            elif report.get(change.replaces, {}).get("outcome") == "unresolved":
+                tracks[change.replaces - 1] = track
+            else:
+                raise RequestError(
+                    f"Position {change.replaces} is not a left-out track of this playlist."
+                )
+        if len(tracks) > 100:
+            raise RequestError("A playlist of explicit tracks has at most 100 tracks.")
+        if max(Counter(fold(t.artist) for t in tracks).values()) > definition.max_per_artist:
+            raise RequestError("The tracks would exceed max_per_artist.")
+        connection = await self.service.connection(owner)
+        await self.room(owner)
+        if mix["playlist_id"] and mix["published"]:
+            current = await self.service.client.playlist(connection, mix["playlist_id"])
+            if fingerprint(current) != mix["published"]:
+                raise RequestError(EDITED, 409)
+        changed = definition.model_copy(update={"tracks": tracks, "count": len(tracks)})
+        Definition.model_validate(changed.model_dump())
+        queued = secrets.token_hex(12)
+        data = {
+            "publish_after_generation": not definition.review_before_publishing,
+            "enable_after": False,
+            "addition": {"key": key, "hash": digest(addition.canonical())},
+        }
+        async with self.store.transaction() as db:
+            await db.execute(
+                "UPDATE playlist_mixes SET definition=? WHERE id=?",
+                [changed.model_dump_json(), ident],
+            )
+            await db.execute(
+                "INSERT INTO playlist_runs(id,mix,created,state,data) VALUES (?,?,?,'queued',?)",
+                [queued, ident, max(time.time(), latest["created"] + 1e-6), json.dumps(data)],
+            )
+        self.service.notify()
+        return True
+
+    async def report(self, ident: str, tracks: list[dict[str, Any]]) -> dict[str, Any]:
+        """An explicit-track report as the request may now see it: without the library
+        permission (lost since, too), no song is told apart as the library's."""
+        if not tracks:
+            return {}
+        if not await self.reads_library(ident):
+            tracks = private(tracks)
+        elif any(t.get("outcome") == "resolved" for t in tracks):
+            tracks = [t | {"outcome": "resolved"} if t.get("song") else t for t in tracks]
+        return {"resolution": summary(tracks), "tracks": tracks}
 
     async def forget_edits(self, owner: str, ident: str, *, creator: str | None = None) -> int:
         """Forget what this request's refreshes learned from the owner's edits of its
@@ -451,6 +610,8 @@ class Requests:
         # background work nor carry pending permission to enable refreshes.
         if run["automatic"]:
             run["data"]["enable_after"] = False
+        if state == "queued":
+            run["data"].pop("curation", None)  # a new selection reports anew
         await self.store.execute(
             "UPDATE playlist_runs SET state=?,automatic=0,data=?,error='' WHERE id=?",
             [state, json.dumps(run["data"]), run["id"]],

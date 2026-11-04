@@ -32,8 +32,9 @@ def test_an_origin_is_scheme_host_and_port() -> None:
 
 
 def test_own_limits_go_over_the_installations_and_the_stricter_of_two_apply() -> None:
-    assert Limits().over(pacing.DEFAULTS) == Limits(2.0, 4, 4)
-    assert Limits(10.0, None, 0).over(pacing.DEFAULTS) == Limits(10.0, 4, 0)
+    # The defaults: 5 a second after 10 at once, 4 audio openings.
+    assert Limits().over(pacing.DEFAULTS) == Limits(5.0, 10, 4)
+    assert Limits(10.0, None, 0).over(pacing.DEFAULTS) == Limits(10.0, 10, 0)
     assert Limits(10.0, 8, 0).stricter(Limits(2.0, 4, 4)) == Limits(2.0, 4, 4)
     assert Limits(0, 8, 6).stricter(Limits(0, 20, 0)) == Limits(0, 8, 6)  # 0: no limit
 
@@ -266,30 +267,50 @@ async def test_changed_limits_reach_the_requests_already_waiting() -> None:
 
 
 @pytest.mark.anyio
-async def test_add_ons_at_one_origin_share_their_limits_and_the_stricter_apply() -> None:
+async def test_each_add_on_has_its_own_limits_and_one_added_twice_shares_them() -> None:
+    """The count is per add-on - its address and its manifest's ``id``
+    -, so several add-ons served at one address count apart; one added twice still shares
+    one count, under the stricter of its entries."""
     paces = Paces(Limits(2.0, 4, 4))
+    bridge = "http://127.0.0.1:4759"
     paces.apply(
         [
-            ("https://addon.example.invalid/one/manifest.json", Limits(10.0, 8, None)),
-            ("https://addon.example.invalid/two?key=x", Limits()),
+            (f"{bridge}/one/manifest.json", Limits(10.0, 8, None)),
+            (f"{bridge}/one?quality=high", Limits(3.0, None, None)),  # the same add-on again
+            (f"{bridge}/two", Limits()),
             ("https://own.example.invalid/x", Limits(50.0, 20, 0)),
         ]
     )
-    one = paces.of("https://addon.example.invalid/one")
-    two = paces.of("https://addon.example.invalid:443/two")
-    own = paces.of("https://own.example.invalid/x")
-    other = paces.of("https://elsewhere.example.invalid/")  # no add-on of the list: the default
-    assert one is two and one is not own and one is not None and own is not None
-    assert other is not None and paces.of("not an address") is None
-    assert one.limits == Limits(2.0, 4, 4)  # the stricter of the two entries
-    assert own.limits == Limits(50.0, 20, 0)
-    assert other.limits == Limits(2.0, 4, 4)
+    # Before their manifests are read: the address's own count, the strictest there.
+    address = paces.of(f"{bridge}/one/manifest.json")
+    assert address is not None and address is paces.of(f"{bridge}/two")
+    assert address.limits == Limits(2.0, 4, 4)
+    one = paces.identify(f"{bridge}/one/manifest.json", "demo.one")
+    again = paces.identify(f"{bridge}/one?quality=high", "demo.one")
+    two = paces.identify(f"{bridge}/two", "demo.two")
+    own = paces.identify("https://own.example.invalid/x", "demo.own")
+    assert one is not None and two is not None and own is not None
+    assert one is again and one is not two and one is not address and two is not address
+    assert one.limits == Limits(3.0, 4, 4)  # the stricter of its two entries
+    assert two.limits == Limits(2.0, 4, 4) and own.limits == Limits(50.0, 20, 0)
+    assert paces.identity(f"{bridge}/two") == "demo.two"
+    assert paces.of("https://elsewhere.example.invalid/") is not None  # not listed: defaults
+    assert paces.of("not an address") is None
+    # Counted apart: the first add-on's burst used up leaves the second's whole.
+    for _ in range(4):
+        await one.request()
+    with anyio.fail_after(0.05):
+        for _ in range(4):
+            await two.request()
+    # A rate limit leaves that add-on alone, not the others at its address.
+    one.limited(30.0)
+    assert one.blocked > 0 and two.blocked == 0 and address.blocked == 0
     # The installation's limits changed (the dashboard): at once, for those without their own.
     paces.defaults = Limits(5.0, 6, 2)
-    paces.apply([("https://own.example.invalid/x", Limits(50.0, 20, 0))])
-    assert own.limits == Limits(50.0, 20, 0)
-    assert one.limits == Limits(5.0, 6, 2) and other.limits == Limits(5.0, 6, 2)
-    assert paces.of("https://addon.example.invalid/three") is one  # kept: its count goes on
+    paces.apply([(f"{bridge}/two", Limits()), ("https://own.example.invalid/x", Limits(9.0))])
+    assert two.limits == Limits(5.0, 6, 2) and own.limits == Limits(9.0, 6, 2)
+    assert paces.of(bridge, "demo.two") is two  # kept: its count goes on
+    assert paces.identity(f"{bridge}/one/manifest.json") is None  # no longer listed
 
 
 def test_retry_after_is_seconds_or_an_http_date_within_bounds() -> None:

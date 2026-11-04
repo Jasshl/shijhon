@@ -130,7 +130,7 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
     ("delivery", "user_downloads_per_hour"): (
         Target("download_first.limits.per_hour", _same("user_downloads_per_hour"), optional=True),
     ),
-    # Each add-on origin's limits: from the next request on, those waiting too.
+    # Each add-on's limits: from the next request on, those waiting too.
     **{
         ("delivery", key): (Target("sources.paces.defaults", addon_limits),)
         for key in ("addon_requests_per_second", "addon_request_burst", "addon_audio_openings")

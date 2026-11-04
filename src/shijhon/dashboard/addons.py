@@ -28,7 +28,7 @@ import httpx
 
 from shijhon.dashboard.fields import Invalid, parse_number
 from shijhon.delivery import pacing
-from shijhon.delivery.addon import addon_base, allows_downloads, sendable
+from shijhon.delivery.addon import Manifest, addon_base, allows_downloads, sendable
 from shijhon.delivery.netpolicy import Reach, Resolver, denied, policy_client, system_resolver
 from shijhon.delivery.pacing import AddonPace
 from shijhon.delivery.sources import MAX_LIMIT, StoredSource
@@ -55,7 +55,9 @@ def transfer_limit(text: str) -> int | None:
 # already has a manifest of it to show (a page is not held up for a newer one).
 KNOWN_WAIT = 0.5
 # An address's limits: where a request to it takes its turn (None: none).
-PaceAt = Callable[[str], Awaitable[AddonPace | None]]
+# The limits a request (or a redirect's hop) to an address counts at, for the add-on
+# configured at the base address given.
+PaceAt = Callable[[str, str], Awaitable[AddonPace | None]]
 REACHES = {
     "public": "Internet",
     "private": "Local network",
@@ -99,6 +101,8 @@ class ManifestInfo:
     version: str
     declared: tuple[Declared, ...]
     downloads: bool = True  # False: it asks not to be used for downloads (``allowDownloads``)
+    # False: it declares no ``stream`` resource - a catalog only, never asked for audio.
+    streams: bool = True
 
 
 @dataclass(frozen=True)
@@ -271,6 +275,7 @@ def parse_manifest(data: Any) -> ManifestInfo:
         _text(data.get("version")) or "",
         tuple(declared),
         allows_downloads(data.get("allowDownloads")),
+        Manifest.parse(data).streams,
     )
 
 
@@ -297,7 +302,7 @@ async def fetch_manifest(
     asked: list[AddonPace] = []  # the limits of the origin each hop went to
 
     async def turn(hop: httpx.URL) -> None:
-        limits = await pace(str(hop)) if pace is not None else None
+        limits = await pace(str(hop), base_url) if pace is not None else None
         if limits is None:
             return
         try:

@@ -68,6 +68,9 @@ RECORDS: Final = (ADAPTER, BOUND, TOKEN_FOR)  # what a section holds besides set
 # Per add-on (its ID): the settings saved through a visible field of its settings form,
 # each with a mark of the value saved - only those are ever shown again.
 SHOWN: Final = "addon-shown"
+# Who saved a value Shijhon wrote itself: the configuration file's add-on list, taking a
+# renamed add-on's name back (with the settings that named it).
+CONFIGURATION: Final = "(configuration file)"
 ACCENTS: Final = ("green", "teal", "slate", "graphite", "purple")
 DEFAULT_ACCENT: Final = "green"
 

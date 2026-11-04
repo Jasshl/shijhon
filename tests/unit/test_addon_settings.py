@@ -195,7 +195,7 @@ async def test_the_files_own_limits_of_an_addon_are_synchronized(tmp_path: Path)
     settings = load_settings(config)
     assert settings.addons is not None
     delivery = settings.delivery
-    assert (delivery.addon_requests_per_second, delivery.addon_request_burst) == (3.0, 4)
+    assert (delivery.addon_requests_per_second, delivery.addon_request_burst) == (3.0, 10)
     assert delivery.addon_audio_openings == 4  # the built-in default
     store = await Store.open(tmp_path / "state.sqlite3")
     sources = SourceRegistry(store, limits=Limits(3.0, 4, 4))

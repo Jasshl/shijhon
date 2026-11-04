@@ -184,7 +184,9 @@ async def curation(
                 return {"song": song(values["id"])}
             raise AssertionError(method)
 
-        async def resolve(connection: Connection, wanted: dict[str, Any]) -> Track | None:
+        async def resolve(
+            connection: Connection, wanted: dict[str, Any], **kw: Any
+        ) -> Track | None:
             if wanted["title"] == CATALOG.title:
                 return CATALOG.model_copy(update={"reason": wanted["reason"]})
             ident = next((i for i, s in SONGS.items() if s["title"] == wanted["title"]), None)
@@ -1005,7 +1007,7 @@ def test_explicit_tracks_read_no_references_or_hints(tmp_path: Path) -> None:
             )
             curated = await generate(service, await service.connection("owner"), spec.definition())
             assert [s.id for s in curated.selected] == ["own-bright"]
-            assert curated.curation == {} and calls == []
+            assert list(curated.curation) == ["tracks"] and calls == []
             assert sound.calls == [] and lastfm.requests == []
 
     anyio.run(run)

@@ -64,7 +64,8 @@ def validate_create(value: object) -> dict:
     # Optional: sent only when supplied, so earlier input files send the same body.
     references = {"reference_playlists": 3, "reference_songs": 50}
     if not isinstance(value, dict) or value.keys() - defaults.keys() - references.keys() - {
-        "exclude_reference"
+        "exclude_reference",
+        "require_all",
     }:
         raise ClientError("Invalid creation fields; see references/api.md.")
     for field, limit in references.items():
@@ -78,7 +79,10 @@ def validate_create(value: object) -> dict:
             )
         ):
             raise ClientError("References are distinct Navidrome IDs; see references/api.md.")
-    if type(value.get("exclude_reference", True)) is not bool:
+    if (
+        type(value.get("exclude_reference", True)) is not bool
+        or type(value.get("require_all", False)) is not bool
+    ):
         raise ClientError("Invalid creation values; see references/api.md.")
     body = defaults | value
     if (
@@ -109,6 +113,8 @@ def validate_create(value: object) -> dict:
             raise ClientError("Invalid track; only artist, title, album and version are accepted.")
         checked.append({"album": "", "version": ""} | track)
     body["tracks"] = checked
+    if body.get("require_all") and not tracks:
+        raise ClientError("require_all is for explicit tracks.")
     if tracks:
         if body.get("reference_playlists") or body.get("reference_songs"):
             raise ClientError("References work with a prompt, not with explicit tracks.")
@@ -131,6 +137,37 @@ def validate_create(value: object) -> dict:
     ):
         raise ClientError("Recurrence requires a prompt and save_instructions=true.")
     return body
+
+
+def validate_addition(value: object) -> dict:
+    """Tracks added to an explicit playlist: each with an optional ``replaces`` position."""
+    tracks = value.get("tracks") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or value.keys() - {"tracks"}
+        or not isinstance(tracks, list)
+        or not 1 <= len(tracks) <= 100
+    ):
+        raise ClientError('Send {"tracks": [...]} with 1..100 tracks; see references/api.md.')
+    checked = []
+    for track in tracks:
+        if (
+            not isinstance(track, dict)
+            or track.keys() - {"artist", "title", "album", "version", "replaces"}
+            or not _text(track.get("artist"), 300, required=True)
+            or not _text(track.get("title"), 300, required=True)
+            or not _text(track.get("album", ""), 300)
+            or not _text(track.get("version", ""), 100)
+            or ("replaces" in track and not _integer(track["replaces"], 1, 100))
+        ):
+            raise ClientError(
+                "Invalid track; only artist, title, album, version and replaces are accepted."
+            )
+        checked.append(track)
+    places = [t["replaces"] for t in checked if "replaces" in t]
+    if len(set(places)) != len(places):
+        raise ClientError("Two tracks replace the same position.")
+    return {"tracks": checked}
 
 
 def validate_context(
@@ -214,13 +251,14 @@ def _decode(raw: bytes) -> object:
     )
 
 
-def load_input(path: Path) -> dict:
+def load_input(path: Path, validate=None) -> dict:
+    """A saved JSON input, checked as a creation (``validate``: otherwise)."""
     try:
         with path.open("rb") as source:
             raw = source.read(MAX_INPUT_BYTES + 1)
         if len(raw) > MAX_INPUT_BYTES:
             raise ValueError
-        return validate_create(_decode(raw))
+        return (validate or validate_create)(_decode(raw))
     except (OSError, ValueError, RecursionError):
         raise ClientError(
             "Input must be a UTF-8 JSON object within 256 KiB, without duplicate "
@@ -360,6 +398,13 @@ class Client:
     def retry(self, ident: str) -> dict:
         return self._request("POST", self._request_path(ident) + "/retry", {})
 
+    def add(self, ident: str, value: object, *, key: str) -> dict:
+        if not isinstance(key, str) or not KEY_PATTERN.fullmatch(key) or self._token in key:
+            raise ClientError("Idempotency-Key must be 8..128 letters, digits or _.:-.")
+        return self._request(
+            "POST", self._request_path(ident) + "/tracks", validate_addition(value), key=key
+        )
+
 
 class SafeParser(argparse.ArgumentParser):
     def error(self, message):
@@ -384,6 +429,12 @@ def main(argv: list[str] | None = None) -> int:
     context.add_argument("--limit", type=int, default=30)
     retry = commands.add_parser("retry", help="Retry the same saved request, never create another")
     retry.add_argument("id")
+    add = commands.add_parser(
+        "add", help="Add tracks to an explicit playlist, in left-out places or at its end"
+    )
+    add.add_argument("id")
+    add.add_argument("input", type=Path)
+    add.add_argument("--idempotency-key", required=True)
     args = parser.parse_args(argv)
     try:
         client = Client.from_environment()
@@ -394,6 +445,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "context":
             result = client.context(
                 use_history=args.history, use_library=args.library, limit=args.limit
+            )
+        elif args.command == "add":
+            result = client.add(
+                args.id, load_input(args.input, validate_addition), key=args.idempotency_key
             )
         else:
             result = client.retry(args.id)

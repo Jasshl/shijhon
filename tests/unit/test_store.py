@@ -7,6 +7,7 @@ from pathlib import Path
 import anyio
 import pytest
 
+from shijhon.delivery.addon import addon_key
 from shijhon.store.db import Store, apply_migrations, load_migrations
 
 
@@ -204,3 +205,40 @@ def test_received_cleanup_upgrade_keeps_receipts_and_reservations_until_deleted(
     assert all(r[-1] == ("batch-job/" + r[4] if r[8] == "joined" else r[13]) for r in after)
     assert conn.execute("SELECT config_id FROM music_import_jobs").fetchone()[0] == "old-binding"
     assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_addon_key_upgrade_gives_each_addon_the_key_its_name_made() -> None:
+    """Schema 32: an add-on's key is stored. Each existing add-on gets the key its name
+    made until now - so the IDs of its catalog's items, and references to that catalog,
+    keep resolving - and of several with one name the one that answered for it keeps it."""
+    migrations = load_migrations(
+        Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    )
+    conn = _conn()
+    assert apply_migrations(conn, migrations[:31]) == 31
+    for name, enabled, position in (
+        ("Glass Garden", 1, 1),
+        ("音楽", 1, 2),
+        ("Twin", 0, 3),  # off: the enabled one of its name answered for it
+        ("Twin", 1, 4),
+        ("Twin", 1, 5),
+    ):
+        conn.execute(
+            "INSERT INTO sources (name, base_url, enabled, position, created_at)"
+            " VALUES (?, 'https://addon.example.invalid', ?, ?, 1)",
+            (name, enabled, position),
+        )
+    before = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
+    assert apply_migrations(conn) == migrations[-1][0]
+    rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
+    assert [row[:-1] for row in rows] == before  # nothing else changed
+    keys = [row[-1] for row in rows]
+    assert keys[:2] == [addon_key("Glass Garden"), addon_key("音楽")]
+    assert keys[3] == addon_key("Twin") and len(set(keys)) == len(keys)
+    assert keys[2].startswith("addontwin") and keys[4].startswith("addontwin")
+    with pytest.raises(sqlite3.IntegrityError):  # one key, one add-on
+        conn.execute(
+            "INSERT INTO sources (name, key, base_url, position, created_at)"
+            " VALUES ('Other', ?, 'https://other.example.invalid', 6, 1)",
+            (keys[0],),
+        )

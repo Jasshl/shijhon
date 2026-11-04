@@ -37,7 +37,7 @@ from shijhon.config import load_settings
 from shijhon.delivery import pacing
 from shijhon.delivery.addon import (
     Addon,
-    catalog_key,
+    addon_key,
     item_id,
     of_catalog,
     own_id,
@@ -107,6 +107,10 @@ class Listed:
     addon: Addon
     pace: AddonPace | None = None
     budget: float | None = None
+    key: str = ""  # (empty: the one it got when added under its name)
+
+    def __post_init__(self) -> None:
+        self.key = self.key or addon_key(self.name)
 
 
 @dataclass
@@ -119,6 +123,9 @@ class Registry:
 
     async def enabled(self) -> list[Listed]:
         return self.sources
+
+    def key_of(self, name: str) -> str:
+        return next((s.key for s in self.sources if s.name == name), addon_key(name))
 
     def cooling(self, source_id: int) -> bool:
         return source_id in self.cooled
@@ -208,33 +215,38 @@ def test_an_item_s_id_is_the_add_on_s_own_and_reads_back() -> None:
         assert own_id(other) is None, other
 
 
-def test_the_key_tells_add_ons_apart_and_is_the_name_s_alone() -> None:
-    assert catalog_key("Fake") == catalog_key("Fake")
+def test_the_key_tells_add_ons_apart_and_is_made_from_the_name() -> None:
+    assert addon_key("Fake") == addon_key("Fake")
     names = ("Fake", "fake", "Fa-ke", "Fa ke", "Other", "音楽", "abcdefghijklmnop88056",
              "abcdefghijklmnop94100")  # fmt: skip
-    keys = {catalog_key(name) for name in names}
-    assert len(keys) == len(names)  # (a long digest: the last two shared a short one)
+    keys = {addon_key(name) for name in names}
+    # (A later attempt, for a name whose key another add-on has: another key.)
+    keys |= {addon_key("Fake", 2), addon_key("Fake", 3)}
+    assert len(keys) == len(names) + 2  # (a long digest: the last two shared a short one)
     for key in keys:
         assert key != plugin.NONE and CATALOG_KEY.fullmatch(key)
         assert key.startswith("addon") and key != "demo"
+    # The key of add-ons stored before keys were: never another for a name (schema 32).
+    assert addon_key("Fake") == "addonfake84561dc79ffa757046295d9b"
 
 
 def test_a_song_of_an_add_on_s_catalog_names_that_add_on_s_own_track() -> None:
-    """Its catalog reference says whose it is - the add-on's name - and of which service
+    """Its catalog reference says whose it is - the add-on's key - and of which service
     (the add-on's manifest ID): only that add-on, while it is that service, has its ID."""
     item = tagged("svc.one", "lib:t101")
     assert item == service_tag("svc.one") + "lib.3At101" and untagged("svc.one", item) == "lib:t101"
-    song = f"{catalog_key('Fake')}:{item}"
-    assert own_track("Fake", "svc.one", song) == "lib:t101" and of_catalog("Fake", song)
-    assert own_track("Other", "svc.one", song) is None  # another add-on's catalog
-    assert not of_catalog("Other", song)
-    # The add-on was pointed at another service under its name: not that one's ID.
-    assert own_track("Fake", "svc.two", song) is None and of_catalog("Fake", song)
-    assert own_track("Fake", "svc.one", "demo:900000001") is None
-    assert own_track("Fake", "svc.one", None) is None
-    assert own_track("Fake", "svc.one", f"{catalog_key('Fake')}:") is None
-    other_spelling = f"{catalog_key('Fake')}:{service_tag('svc.one')}lib.3At.3101"
-    assert own_track("Fake", "svc.one", other_spelling) is None
+    fake, other = addon_key("Fake"), addon_key("Other")
+    song = f"{fake}:{item}"
+    assert own_track(fake, "svc.one", song) == "lib:t101" and of_catalog(fake, song)
+    assert own_track(other, "svc.one", song) is None  # another add-on's catalog
+    assert not of_catalog(other, song) and not of_catalog("", song)
+    # The add-on was pointed at another service: not that one's ID.
+    assert own_track(fake, "svc.two", song) is None and of_catalog(fake, song)
+    assert own_track(fake, "svc.one", "demo:900000001") is None
+    assert own_track(fake, "svc.one", None) is None
+    assert own_track(fake, "svc.one", f"{fake}:") is None
+    other_spelling = f"{fake}:{service_tag('svc.one')}lib.3At.3101"
+    assert own_track(fake, "svc.one", other_spelling) is None
     assert tagged("svc.one", "x" * 185) is None and tagged("svc.one", None) is None
 
 
@@ -405,7 +417,8 @@ async def test_an_add_on_pointed_at_another_service_does_not_get_the_first_one_s
         await w.catalog.song(song.ref.id)  # (what the first service showed is forgotten)
     # ... and a song of the first service is not asked for there by its old ID.
     reference = str(song.ref)
-    assert own_track(NAME, "test.fake", reference) and not own_track(NAME, "test.other", reference)
+    key = addon_key(NAME)
+    assert own_track(key, "test.fake", reference) and not own_track(key, "test.other", reference)
 
 
 @pytest.mark.anyio
@@ -446,8 +459,10 @@ async def test_an_add_on_without_an_id_cannot_be_the_catalog() -> None:
             await ask()
         assert failed.value.kind == "invalid" and failed.value.reason == NO_IDENTITY
     assert w.server.count("search") == 0
-    song = f"{catalog_key(NAME)}:{tagged('', 'lib:t1')}"
-    assert own_track(NAME, "", song) is None  # ... and is never asked by an ID of its own
+    song = f"{addon_key(NAME)}:{tagged('', 'lib:t1')}"
+    assert (
+        own_track(addon_key(NAME), "", song) is None
+    )  # ... and is never asked by an ID of its own
 
 
 @pytest.mark.anyio
@@ -717,7 +732,7 @@ async def test_only_an_address_the_add_on_named_is_fetched() -> None:
         assert failed.value.kind == "invalid" and "://" not in str(failed.value)
     assert len(w.images.asked) == 1
     # Another catalog's mark (another add-on's name) is not this one's.
-    assert unmarked(catalog_key("Other"), template) is None
+    assert unmarked(addon_key("Other"), template) is None
     assert unmarked(w.catalog.key, template) == f"{IMAGES}/al1/640x640.jpg"
 
 
@@ -860,14 +875,20 @@ async def test_an_add_on_without_a_catalog_is_refused_with_the_reason() -> None:
 @pytest.mark.anyio
 async def test_the_add_on_named_must_be_enabled() -> None:
     w = world()
+    # Renamed on the dashboard: the same add-on (its key), so the same catalog.
     w.registry.sources[0].name = "Renamed"
+    assert (await w.catalog.search("venn", 5)).songs and w.catalog.name == "Renamed"
+    assert w.catalog.key == addon_key(NAME)
+    # Another add-on under its name is not it.
+    w.registry.sources[0].name, w.registry.sources[0].key = NAME, addon_key(NAME, 2)
+    asked = len(w.server.asked)
     with pytest.raises(CatalogError) as failed:
-        await w.catalog.search("venn", 5)
+        await w.catalog.album(T + "al1")
     assert failed.value.kind == "unavailable" and failed.value.reason == NOT_ENABLED
     nowhere = AddonCatalog(NAME, None, httpx.AsyncClient())
     with pytest.raises(CatalogError) as failed:
         await nowhere.search("venn", 5)
-    assert failed.value.kind == "unavailable" and w.server.asked == []
+    assert failed.value.kind == "unavailable" and len(w.server.asked) == asked
     await nowhere.aclose()
 
 
@@ -1009,7 +1030,7 @@ async def test_the_kind_is_built_in_and_needs_the_add_on_s_name() -> None:
     settings = load_settings(None, catalog={"kind": KIND, "addon": "Fake"})
     built = build_catalog(settings.catalog, addons=None)
     assert isinstance(built, AddonCatalog)
-    assert built.key == catalog_key("Fake") and built.region == "" and built.name == "Fake"
+    assert built.key == addon_key("Fake") and built.region == "" and built.name == "Fake"
     await built.aclose()
     for name in ("", "   "):
         unnamed = load_settings(None, catalog={"kind": KIND, "addon": name})

@@ -1,5 +1,10 @@
-"""The user's audio add-ons: order, enablement, network reach, limits, cooldowns,
-diagnostics."""
+"""The user's add-ons: order, enablement, network reach, limits, cooldowns, diagnostics.
+
+Each add-on has a name, which people see and may change, and a key (``addon_key``), given
+when it is added and never changed: its catalog's items are tagged with the key, and
+references to its catalog name it. Settings that name an add-on (the catalog's add-on, the
+primary add-on, the preferred fallback) name it by its name: a rename on the dashboard
+changes them with it."""
 
 from __future__ import annotations
 
@@ -7,8 +12,9 @@ import json
 import logging
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 import aiosqlite
@@ -16,9 +22,9 @@ import anyio
 import httpx
 
 from shijhon.config import AddonSettings
-from shijhon.delivery.addon import Addon
+from shijhon.delivery.addon import Addon, addon_key
 from shijhon.delivery.netpolicy import Reach, Resolver, policy_client, system_resolver
-from shijhon.delivery.pacing import AddonPace, Limits, Paces
+from shijhon.delivery.pacing import AddonPace, Limits, Paces, origin
 from shijhon.store import Store
 
 log = logging.getLogger(__name__)
@@ -28,6 +34,10 @@ MEASURED_SECONDS = 7 * 86400.0  # ... within this age
 SAVE_SECONDS = 60.0  # attempts are written to the database this often (and at a stop)
 MAX_UNSAVED = 5000  # attempts kept for the next write while the database refuses them
 MAX_LIMIT = 1000  # the most an add-on's limit can be set to (requests a second, at once)
+
+
+class NameTaken(ValueError):
+    """Another add-on has this name."""
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,9 @@ class StoredSource:
     downloads: int | None = None
     preparations: int | None = None
     capacity_group: str = ""
+    # The ``id`` its manifest named when the enabled add-on read it (None: not yet).
+    identity: str | None = None
+    key: str = ""  # fixed when it was added (``addon_key``): its catalog's identity
 
 
 @dataclass
@@ -92,12 +105,25 @@ class Source:
     # Own byte-zero budget, e.g. for a worker that prepares complete files; None:
     # the global budget applies.
     budget: float | None = None
-    # Its origin's limits on what Shijhon sends it: requests a second, audio openings
-    # at once - shared with every add-on at the same origin. None: none (tests).
-    pace: AddonPace | None = None
     downloads: int | None = None
     preparations: int | None = None
     capacity_group: str = ""
+    key: str = ""  # fixed when it was added (``addon_key``): its catalog's identity
+
+    @property
+    def pace(self) -> AddonPace | None:
+        """Its limits on what Shijhon sends it: requests a second, audio openings at once -
+        the add-on's own (``Addon.pace``: its address's until its manifest is read). None:
+        none (tests)."""
+        return self.addon.pace
+
+    @property
+    def streams(self) -> bool:
+        """Whether it may deliver audio: not when its manifest, read, declares no
+        ``stream`` (an add-on for its catalog only). One whose manifest is not known (not
+        read yet, or unreadable) may: its attempt reads it."""
+        known = self.addon.known
+        return known is None or known.streams
 
 
 class SourceRegistry:
@@ -117,8 +143,9 @@ class SourceRegistry:
         self.clock = clock
         self.request_timeout = request_timeout
         # What one add-on is sent in all: ``limits`` are the installation's, for an
-        # add-on without its own. They belong to the add-on's origin, and outlive a changed
-        # configuration (a new list does not start with a full allowance).
+        # add-on without its own. They belong to the add-on (its origin and manifest
+        # ``id``), and outlive a changed configuration (a new list does not start with a
+        # full allowance).
         self.paces = Paces() if limits is None else Paces(limits)
         if cooldown_seconds is not None:  # after a rate limit that names no time
             self.cool(cooldown_seconds)
@@ -133,7 +160,9 @@ class SourceRegistry:
         # seconds). The fallbacks' order is kept across restarts.
         self._unsaved: list[tuple[int, float, str, int, float]] = []
         self._limited: list[tuple[str, Limits]] = []  # the enabled add-ons' own limits
-        self._pace_of: dict[int, AddonPace] = {}  # the enabled add-ons' origins' limits
+        self._listed: dict[int, Source] = {}  # the enabled add-ons last listed
+        self._keys: dict[str, str] = {}  # the stored add-ons' keys by name, as last read
+        self._held: set[str] = set()  # ... and every key held
 
     async def add(
         self,
@@ -163,13 +192,15 @@ class SourceRegistry:
             cursor = await conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM sources")
             row = await cursor.fetchone()
             position = int(row["p"]) if row else 1
+            key = await _free_key(conn, name)
             cursor = await conn.execute(
-                "INSERT INTO sources (name, base_url, settings, enabled, position, reach,"
+                "INSERT INTO sources (name, key, base_url, settings, enabled, position, reach,"
                 " budget_seconds, requests_per_second, request_burst, audio_openings, created_at,"
                 " downloads, preparations, capacity_group)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     name,
+                    key,
                     base_url,
                     json.dumps(settings or {}),
                     int(enabled),
@@ -195,6 +226,8 @@ class SourceRegistry:
         self,
         source_id: int,
         *,
+        name: str | None = None,
+        unique_name: bool = True,
         base_url: str | None = None,
         settings: dict[str, object] | None = None,
         reach: Reach | None = None,
@@ -208,10 +241,14 @@ class SourceRegistry:
         clear_preparations: bool = False,
         also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> None:
-        """Change a source's configuration (the dashboard's edit). ``limits``: its own
-        limits, all three (one left out goes back to the installation's). ``also`` writes
-        what must be saved with it or not at all, in the same transaction (the dashboard's
-        marks of which settings may be shown: a secret is never stored without its mark)."""
+        """Change a source's configuration (the dashboard's edit). ``name``: another name -
+        only the name changes, its key (its catalog, and every reference to it) stays;
+        refused (``NameTaken``) when another add-on has it (``unique_name``: the file's list
+        taking a name back, which a duplicate from before keys may still have). ``limits``:
+        its own limits, all three (one left out goes back to the installation's). ``also``
+        writes what must be saved with it or not at all, in the same transaction (the
+        dashboard's marks of which settings may be shown: a secret is never stored without
+        its mark; the settings that name a renamed add-on)."""
         if budget_seconds is not None and not 0 < budget_seconds <= 600:
             raise ValueError("budget_seconds must be between 0 and 600")
         changes: dict[str, object] = {}
@@ -235,9 +272,17 @@ class SourceRegistry:
             changes["reach"] = reach.value
         if budget_seconds is not None or clear_budget:
             changes["budget_seconds"] = budget_seconds
+        if name is not None:
+            changes["name"] = name
         if changes or also is not None:
             assignments = ", ".join(f"{column} = ?" for column in changes)
             async with self.store.transaction() as conn:
+                if name is not None and unique_name:
+                    cursor = await conn.execute(
+                        "SELECT 1 FROM sources WHERE name = ? AND id != ?", [name, source_id]
+                    )
+                    if await cursor.fetchone():
+                        raise NameTaken("An add-on with this name is already in the list.")
                 if changes:
                     await conn.execute(
                         f"UPDATE sources SET {assignments} WHERE id = ?",  # noqa: S608 - fixed columns
@@ -313,18 +358,48 @@ class SourceRegistry:
         self._stats.pop(source_id, None)
         await self.invalidate()
 
-    async def sync(self, addons: Sequence[AddonSettings]) -> None:
+    async def sync(
+        self,
+        addons: Sequence[AddonSettings],
+        *,
+        renamed: Callable[[aiosqlite.Connection, str, str], Awaitable[None]] | None = None,
+    ) -> list[tuple[str, str]]:
         """Make the stored add-ons match the configuration: added, updated and enabled in
-        its order. Stored add-ons it does not name are disabled and placed after them."""
-        rows = await self.store.fetchall("SELECT id, name FROM sources ORDER BY position, id")
-        existing: dict[str, int] = {}
-        for row in rows:  # names are not unique in storage: the first one is the add-on
-            existing.setdefault(row["name"], int(row["id"]))
+        its order. Stored add-ons it does not name are disabled and placed after them. The
+        add-on a name is: the one holding its identity (``_holders``); one renamed in the
+        dashboard since is found by the key the file's name gave it, and takes that name
+        again - ``renamed(conn, old, new)`` writing, in that rename's transaction, what
+        must follow it (the settings that named it). Returns those renames."""
+        rows = await self.stored()
+        existing = _holders(rows)
+        keyed = {row.key: row for row in rows}
+        named = {addon.name for addon in addons}
         order = []
+        renames: list[tuple[str, str]] = []
         for addon in addons:
             reach = Reach(addon.reach)
             base_url = addon.base_url.get_secret_value()
-            source_id = existing.get(addon.name)
+            # The add-on holding the key the file's name made is the one it names - also when
+            # it was renamed in the dashboard since (unless the file names it by its new name
+            # too); else the one holding that name (``_holders``).
+            found = keyed.get(addon_key(addon.name))
+            source_id: int | None = None
+            if (
+                found is not None
+                and found.id not in order
+                and (found.name == addon.name or found.name not in named)
+            ):
+                source_id = found.id
+                if found.name != addon.name:
+                    also = (
+                        None if renamed is None else partial(_also, renamed, found.name, addon.name)
+                    )
+                    # (A duplicate left with the name - storage names were not unique - is
+                    # not the add-on: it is disabled below.)
+                    await self.update(source_id, name=addon.name, unique_name=False, also=also)
+                    renames.append((found.name, addon.name))
+            elif (holder := existing.get(addon.name)) is not None and holder not in order:
+                source_id = holder
             if source_id is None:
                 source_id = await self.add(
                     addon.name,
@@ -354,10 +429,12 @@ class SourceRegistry:
                 )
                 await self.set_enabled(source_id, True)
             order.append(source_id)
-        others = [int(row["id"]) for row in rows if int(row["id"]) not in order]
+        others = [row.id for row in rows if row.id not in order]
         for source_id in others:
             await self.set_enabled(source_id, False)
         await self.reorder(order + others)
+        await self.stored()  # (the keys by name, as the list is now)
+        return renames
 
     async def differs(self, addons: Sequence[AddonSettings]) -> list[str]:
         """What ``sync`` would change: "the list" (other add-ons on, or another order) and
@@ -367,9 +444,8 @@ class SourceRegistry:
         found: list[str] = []
         if [s.name for s in stored if s.enabled] != [a.name for a in addons]:
             found.append("the list")
-        first: dict[str, StoredSource] = {}
-        for source in stored:
-            first.setdefault(source.name, source)
+        holders = _holders(stored)
+        first = {source.name: source for source in stored if holders[source.name] == source.id}
         for addon in addons:
             kept = first.get(addon.name)
             if kept is not None and (
@@ -409,12 +485,12 @@ class SourceRegistry:
         async with self._rebuild:
             if self._sources is None:
                 rows = await self.store.fetchall(
-                    "SELECT id, name, base_url, settings, position, reach, budget_seconds,"
+                    "SELECT id, name, key, base_url, settings, position, reach, budget_seconds,"
                     " requests_per_second, request_burst, audio_openings, downloads,"
                     " preparations, capacity_group"
                     " FROM sources WHERE enabled = 1 ORDER BY position, id"
                 )
-                # Each origin's limits: its add-on's own over the installation's.
+                # Each add-on's limits: its own over the installation's.
                 self._limited = [(row["base_url"], _limits(row)) for row in rows]
                 self.paces.apply(self._limited)
                 sources = {}
@@ -426,28 +502,39 @@ class SourceRegistry:
                     http = policy_client(
                         reach, timeout=httpx.Timeout(timeout), resolver=self.resolver
                     )
-                    pace = self.paces.of(row["base_url"])
+                    # (Its address's limits until its manifest names the add-on - unless
+                    # it was named before.)
+                    pace = self.paces.of(
+                        row["base_url"], self.paces.identity(row["base_url"]) or ""
+                    )
                     addon = Addon(
                         row["base_url"], json.loads(row["settings"]), http, pace, self.paces
                     )
                     stats = self._stats.setdefault(row["id"], SourceStats())
                     sources[row["id"]] = Source(
                         row["id"], row["name"], row["position"], reach, addon, http, stats,
-                        budget, pace, row["downloads"], row["preparations"], row["capacity_group"],
+                        budget, row["downloads"], row["preparations"], row["capacity_group"],
+                        row["key"],
                     )  # fmt: skip
-                self._sources = sources
-                self._pace_of = {s.id: s.pace for s in sources.values() if s.pace is not None}
+                self._sources = self._listed = sources
             return sorted(self._sources.values(), key=lambda s: (s.position, s.id))
+
+    async def streaming(self) -> list[Source]:
+        """The enabled sources that may deliver audio (``Source.streams``), in the user's
+        order: those a play, a download or a preparation asks - not an add-on whose
+        manifest declares no ``stream`` (its catalog is used all the same)."""
+        return [source for source in await self.enabled() if source.streams]
 
     def cooling(self, source_id: int) -> bool:
         """Whether the routing passes the source over now: it cools down (errors in a row,
-        a slow primary), or its origin is left alone after a rate limit."""
+        a slow primary), or it is left alone after a rate limit."""
         return self._cooling_for(source_id) > 0
 
     def _cooling_for(self, source_id: int) -> float:
         until = self._cooldown.get(source_id)
         left = 0.0 if until is None else max(0.0, until - self.clock())
-        pace = self._pace_of.get(source_id)
+        source = self._listed.get(source_id)
+        pace = None if source is None else source.pace
         return left if pace is None else max(left, pace.blocked)
 
     def cooling_until(self, source_id: int) -> float | None:
@@ -464,7 +551,7 @@ class SourceRegistry:
         """Every stored add-on, disabled ones too, in the user's order (``conn``: read in
         the caller's transaction)."""
         sql = (
-            "SELECT id, name, base_url, settings, enabled, position, reach, budget_seconds,"
+            "SELECT id, name, key, base_url, settings, enabled, position, reach, budget_seconds,"
             " requests_per_second, request_burst, audio_openings, downloads,"
             " preparations, capacity_group"
             " FROM sources ORDER BY position, id"
@@ -494,14 +581,41 @@ class SourceRegistry:
                     row["downloads"],
                     row["preparations"],
                     row["capacity_group"],
+                    self.paces.identity(row["base_url"]) if row["enabled"] else None,
+                    row["key"],
                 )
             )
+        holders = _holders(found)
+        self._keys = {
+            source.name: source.key for source in found if holders[source.name] == source.id
+        }
+        self._held = {source.key for source in found}
         return found
 
-    async def pace_at(self, url: str) -> AddonPace | None:
-        """The limits of the origin ``url`` is at - with the enabled add-ons' own limits
-        applied (they are read with the list: before the first play, after an edit)."""
+    def key_of(self, name: str) -> str | None:
+        """The key of the add-on named ``name`` as the list was last read (``stored``), for a
+        catalog built before its first request; None: no add-on has that name."""
+        return self._keys.get(name)
+
+    def vacant_key(self, name: str) -> str:
+        """The key an add-on added under ``name`` now would get: one no add-on holds (as
+        the list was last read), so never another add-on's - for a catalog named for an
+        add-on that is not in the list (unavailable until one is added under that name)."""
+        attempt = 1
+        while (key := addon_key(name, attempt)) in self._held:
+            attempt += 1
+        return key
+
+    async def pace_at(self, url: str, base_url: str | None = None) -> AddonPace | None:
+        """The limits a request to ``url`` - a manifest request of the add-on configured at
+        ``base_url`` (the dashboard's checks), or a hop of its redirect - counts at: at the
+        add-on's origin, those of that enabled add-on once its manifest named it; else the
+        address's - with the enabled add-ons' own limits applied (they are read with the
+        list: before the first play, after an edit)."""
         await self.enabled()
+        base = base_url or url
+        if origin(url) is not None and origin(url) == origin(base):
+            return self.paces.of(url, self.paces.identity(base) or "")
         return self.paces.of(url)
 
     def cool(self, seconds: float) -> None:
@@ -524,11 +638,12 @@ class SourceRegistry:
         self._cooldown[source_id] = max(until, self._cooldown.get(source_id, until))
 
     def limited(self, source: Source, seconds: float, *, audio: bool = False) -> float:
-        """The source answered "too many requests": no API request is sent to its origin -
-        by any add-on configured there - for ``seconds`` (``AddonPace.block``: at least a
+        """The source answered "too many requests": no API request is sent to the add-on -
+        by any entry configured for it (other add-ons at its address are asked) - for
+        ``seconds`` (``AddonPace.block``: at least a
         moment, an hour at most, never shorter than a block under way); ``audio``: its
         audio said so - no audio request either. Returns the seconds it is left alone for
-        now. (A source without limits of its origin - tests: its cooldown.)"""
+        now. (A source without limits - tests: its cooldown.)"""
         if source.pace is None:
             self.cool_down(source.id, seconds)
             return self._cooling_for(source.id)
@@ -622,6 +737,41 @@ class SourceRegistry:
             log.warning("add-on measurements not saved: %s", type(exc).__name__)
         await self.invalidate()
         await self._close_retired(everything=True)
+
+
+def _holders(sources: Iterable[StoredSource]) -> dict[str, int]:
+    """Each name's add-on (names were not unique in storage): of several with one name,
+    the one holding the key that name made (migration 0032 gave it to the first enabled),
+    else the first enabled, else the first, in the list's order - as the migration chose,
+    so startup and a catalog's references agree on the add-on that owns them."""
+    found: dict[str, int] = {}
+    ranked = sorted(
+        sources, key=lambda s: (s.key != addon_key(s.name), not s.enabled, s.position, s.id)
+    )
+    for source in ranked:
+        found.setdefault(source.name, source.id)
+    return found
+
+
+async def _also(
+    renamed: Callable[[aiosqlite.Connection, str, str], Awaitable[None]],
+    old: str,
+    new: str,
+    conn: aiosqlite.Connection,
+) -> None:
+    await renamed(conn, old, new)
+
+
+async def _free_key(conn: aiosqlite.Connection, name: str) -> str:
+    """The key for an add-on added under ``name`` now: the one the name makes, unless
+    another add-on has it (one added under this name and renamed since)."""
+    attempt = 1
+    while True:
+        key = addon_key(name, attempt)
+        cursor = await conn.execute("SELECT 1 FROM sources WHERE key = ?", [key])
+        if await cursor.fetchone() is None:
+            return key
+        attempt += 1
 
 
 def _limits(row: Any) -> Limits:

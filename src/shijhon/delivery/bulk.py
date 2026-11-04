@@ -70,10 +70,16 @@ class ProgressError(Exception):
         super().__init__(type(error).__name__)
 
 
-def _origin(source: CapacitySource) -> pacing.Origin | None:
-    return pacing.origin(
-        source.base_url if isinstance(source, StoredSource) else str(source.addon.base)
-    )
+def _addon(source: CapacitySource) -> pacing.Key | None:
+    """The add-on an entry is, as its limits count it (``pacing.Key``): its origin and the
+    ``id`` its manifest named - not read yet, its address alone (shared with the others
+    there not read yet either)."""
+    if isinstance(source, StoredSource):
+        where, named = pacing.origin(source.base_url), source.identity
+    else:
+        known = source.addon.known
+        where, named = pacing.origin(str(source.addon.base)), known.id if known else None
+    return None if where is None else (where, named or "")
 
 
 def _components(sources: Sequence[CapacitySource]) -> list[list[CapacitySource]]:
@@ -88,8 +94,8 @@ def _components(sources: Sequence[CapacitySource]) -> list[list[CapacitySource]]
     seen: dict[object, int] = {}
     for index, source in enumerate(sources):
         keys: list[object] = [("id", source.id)]
-        if (origin := _origin(source)) is not None:
-            keys.append(("origin", origin))
+        if (addon := _addon(source)) is not None:
+            keys.append(("addon", addon))
         if source.capacity_group:
             keys.append(("group", source.capacity_group))
         for key in keys:
@@ -112,8 +118,9 @@ def effective_capacity(
 ) -> dict[int, tuple[int, int]]:
     """Effective shared caps, for the dashboard too. 0 means no cap; None inherits.
 
-    A common origin always shares capacity, even when configured entries give it
-    different group labels. Groups join those origins transitively.
+    One add-on (its origin and manifest ``id``, ``pacing.Key``) always shares capacity,
+    even when its configured entries give it different group labels; add-ons at one
+    address count apart. Groups join those add-ons transitively.
     """
     enabled = [s for s in sources if not isinstance(s, StoredSource) or s.enabled]
     result: dict[int, tuple[int, int]] = {}
@@ -342,7 +349,9 @@ class BulkAcquisition:
         self._number = 0
         self._woken = anyio.Event()
         self._pins: dict[str, tuple[Pin, Lease]] = {}
-        self._paused: list[tuple[Source, float]] = []
+        # New cold starts paused after an uncertain preparation: (the add-on, until when,
+        # whether its whole backend group - else that add-on alone, after its 429).
+        self._paused: list[tuple[Source, float, bool]] = []
         self._stopped = False
         deliverer.bulk = self
 
@@ -368,12 +377,12 @@ class BulkAcquisition:
         return _PlaybackLease(self.observe_playback(source))
 
     def _group(self, source: Source) -> list[CapacitySource]:
-        self._paused = [(s, until) for s, until in self._paused if until > time.monotonic()]
+        self._paused = [p for p in self._paused if p[1] > time.monotonic()]
         all_sources: list[CapacitySource] = [
             *self._sources,
             *(lease.source for lease in self._active),
             *self._playing,
-            *(s for s, until in self._paused if until > time.monotonic()),
+            *(s for s, until, _ in self._paused if until > time.monotonic()),
             source,
         ]
         return next(group for group in _components(all_sources) if source in group)
@@ -391,13 +400,11 @@ class BulkAcquisition:
             return False
         group = self._group(source)
         ids = {s.id for s in group}
-        if any(isinstance(s, Source) and s.pace and s.pace.blocked for s in group):
-            return False
+        if source.pace is not None and source.pace.blocked:
+            return False  # (left alone after its 429: only it, not the others in its group)
         if urgent:
             return True  # a reported play never waits behind queued bulk work
-        if not choice.ready and any(
-            s.id in ids and until > time.monotonic() for s, until in self._paused
-        ):
+        if not choice.ready and self._cold_paused(source, ids):
             return False
         transfer, cold = effective_capacity(group, self.source_downloads, self.preparations)[
             source.id
@@ -412,11 +419,11 @@ class BulkAcquisition:
         )
 
     def _held_back(self, source: Source) -> bool:
-        """Whether the add-on is paused now: it cools down, or its origin - or that of an
-        add-on sharing its capacity - is left alone after "too many requests"."""
-        return self.deliverer.registry.cooling(source.id) or any(
-            isinstance(s, Source) and s.pace is not None and s.pace.blocked > 0
-            for s in self._group(source)
+        """Whether the add-on is paused now: it cools down, or it is left alone after "too
+        many requests" (a 429 pauses that add-on alone - not the others sharing its
+        transfer capacity)."""
+        return self.deliverer.registry.cooling(source.id) or (
+            source.pace is not None and source.pace.blocked > 0
         )
 
     def _blocked(self, choice: _Choice) -> bool:
@@ -427,8 +434,23 @@ class BulkAcquisition:
             return True
         if choice.ready:
             return False
-        ids = {s.id for s in self._group(choice.source)}
-        return any(s.id in ids and until > time.monotonic() for s, until in self._paused)
+        return self._cold_paused(choice.source, {s.id for s in self._group(choice.source)})
+
+    def _cold_paused(self, source: Source, ids: set[int]) -> bool:
+        """Whether the add-on's new cold starts are paused: after an uncertain preparation
+        at an add-on of its backend group (``ids``), or - after its 429 - at itself (the
+        same add-on configured twice too), not at the others of its group."""
+        now, mine = time.monotonic(), _addon(source)
+        return any(
+            until > now and (s.id in ids if wide else s.id == source.id or _addon(s) == mine)
+            for s, until, wide in self._paused
+        )
+
+    def _pause(self, source: Source, *, wide: bool = True) -> None:
+        """New cold starts at the add-on's backend group (``wide``; else at the add-on
+        alone) wait for the preparation cooldown."""
+        until = time.monotonic() + self.deliverer.settings.cooldown_seconds
+        self._paused.append((source, until, wide))
 
     def _recovered(self, choices: list[_Choice], ruled_out: set[int]) -> bool:
         """Whether an enabled add-on that is neither a choice nor ruled out - paused when
@@ -440,10 +462,8 @@ class BulkAcquisition:
         )
 
     def _guard(self, source: Source) -> None:
-        blocked = max(
-            (s.pace.blocked for s in self._group(source) if isinstance(s, Source) and s.pace),
-            default=0.0,
-        )
+        """Nothing is sent to the add-on while it is left alone after a 429."""
+        blocked = source.pace.blocked if source.pace is not None else 0.0
         if blocked:
             raise pacing.Blocked(blocked)
 
@@ -499,7 +519,7 @@ class BulkAcquisition:
             while True:
                 if self._stopped:
                     raise NoSource(["bulk acquisition is stopping"])
-                self._sources = await self.deliverer.registry.enabled()
+                self._sources = await self.deliverer.registry.streaming()
                 enabled = {s.id: s for s in self._sources}
                 waiting.choices = [c for c in waiting.choices if c.source.id in enabled]
                 for choice in waiting.choices:
@@ -548,7 +568,7 @@ class BulkAcquisition:
         ones found here are added. Its add-ons paused now are neither asked nor ruled out:
         the song waits for them (``_wait_paused``). ``known``: its choices checked already
         (kept, not asked again)."""
-        self._sources = await self.deliverer.registry.enabled()
+        self._sources = await self.deliverer.registry.streaming()
         enabled = {s.id for s in self._sources}
         kept = [c for c in known or () if c.source.id in enabled]
         excluded = []
@@ -573,7 +593,11 @@ class BulkAcquisition:
             try:
                 with pacing.watched() as waits, anyio.move_on_after(timeout) as scope:
                     self._guard(choice.source)
-                    if not (await choice.source.addon.manifest()).downloads:
+                    manifest = await choice.source.addon.manifest()
+                    if "stream" not in manifest.resources:
+                        choice.exclusion = "the add-on does not stream"
+                        return
+                    if not manifest.downloads:
                         choice.exclusion = "the add-on asks this"
                         return
                     choice.permitted = True
@@ -590,7 +614,7 @@ class BulkAcquisition:
             except AddonError as exc:
                 self.deliverer._source_error(choice.source, exc)
                 choice.paused = _limited(exc)
-                if not choice.permitted and exc.kind in ("timeout", "failed"):
+                if not choice.permitted and exc.kind in ("timeout", "failed", "preparing"):
                     if exc.kind == "timeout" and not exc.shared and waits.held() is None:
                         self.deliverer._errored(choice.source, exc.reason)
                     choice.paused = True
@@ -796,7 +820,7 @@ class BulkAcquisition:
             deadline = asked + budget
             with self.deliverer._urgent(track, "ahead", False):
                 pin, opened = await self._open_selected(
-                    choice, lease, track, pin, budget, deadline, fresh=plan.fresh,
+                    choice, lease, track, pin, deadline, fresh=plan.fresh,
                     requested=requested, head=head, expect=plan.expect,
                 )  # fmt: skip
                 if accept is not None and (why := accept(opened.kind, opened.kbps)):
@@ -829,10 +853,9 @@ class BulkAcquisition:
                 # The protocol has no cancellation handle for remote preparation.
                 # Leave this backend's new cold starts alone for a bounded pause;
                 # cached ready-only work can still proceed. This is not a claim that
-                # remote work stopped when our HTTP request ended.
-                self._paused.append(
-                    (source, time.monotonic() + self.deliverer.settings.cooldown_seconds)
-                )
+                # remote work stopped when our HTTP request ended. After its 429 only
+                # this add-on is paused: a rate limit is the add-on's, not its group's.
+                self._pause(source, wide=not _limited(exc))
             reason = str(exc) if isinstance(exc, _Paced) else type(exc).__name__
             plan.failures.append(f"{source.name}: {reason}")
             plan.choices = [c for c in plan.choices or () if c is not choice]
@@ -840,9 +863,7 @@ class BulkAcquisition:
                 plan.ruled_out.add(source.id)  # (rate limited: asked again after its time)
         except BaseException:
             if lease.started and lease.cold:
-                self._paused.append(
-                    (source, time.monotonic() + self.deliverer.settings.cooldown_seconds)
-                )
+                self._pause(source)
             raise
         finally:
             BULK_API_GUARD.reset(guard)
@@ -873,7 +894,7 @@ class BulkAcquisition:
         while True:
             if self._stopped:
                 raise NoSource(["bulk acquisition is stopping"])
-            self._sources = await self.deliverer.registry.enabled()
+            self._sources = await self.deliverer.registry.streaming()
             left = [s for s in self._sources if s.id not in ruled_out]
             if not left:
                 return False
@@ -891,7 +912,6 @@ class BulkAcquisition:
         lease: Lease,
         track: Track,
         pin: Pin | None,
-        budget: float,
         deadline: float,
         *,
         fresh: bool = False,
@@ -924,7 +944,14 @@ class BulkAcquisition:
                 if choice.ready and choice.cached is not None and choice.cached.selector:
                     if self.deliverer._known_wrong(source, track):
                         raise _Missing("another recording (remembered)")
-                    info = await source.addon.cached_stream(choice.cached.selector)
+                    # (Within what is left of the attempt's time after any wait for the
+                    # song's routing; nothing sent when nothing is.)
+                    with pacing.watched() as waits:
+                        try:
+                            with anyio.fail_after(self._left(deadline)):
+                                info = await source.addon.cached_stream(choice.cached.selector)
+                        except TimeoutError:
+                            raise self.deliverer._timed_out("timeout", waits) from None
                     if info.transport == "hls":
                         raise _Failed("HLS streams are not supported")
                     if info.transport == "dash" and self.deliverer.dash is None:
@@ -940,7 +967,9 @@ class BulkAcquisition:
                     pin.seconds = track.duration_ms / 1000
                 else:
                     hint = choice.availability.track_id if choice.availability else None
-                    pin = await self.deliverer._resolve_at(source, track, budget, hint)
+                    pin = await self.deliverer._resolve_at(
+                        source, track, self._left(deadline), hint
+                    )
             if expect is None:
                 self._pins[track.key] = pin, lease
             while len(self._pins) > 4096:
@@ -954,13 +983,22 @@ class BulkAcquisition:
                     raise _Reacquire(
                         "a replacement link needs its own upstream admission", resolve=True
                     ) from None
-                pin = await self.deliverer._resolve_at(source, track, budget)
+                pin = await self.deliverer._resolve_at(source, track, self._left(deadline))
                 if expect is None:
                     self._pins[track.key] = pin, lease
                 opened = await self.deliverer._request(pin, requested, head, deadline, expect)
             opened = await self.deliverer._verify(pin, opened, track, requested, deadline)
             self._pins[track.key] = pin, lease
             return pin, opened
+
+    def _left(self, deadline: float) -> float:
+        """What is left of an attempt's time when its link (or its cached link) is asked
+        for - after any wait for the song's routing (``deadline``: when it began, plus its
+        budget). Nothing left: no request (``_Paced``: the add-on never had the time)."""
+        left = deadline - self.deliverer.clock()
+        if left <= 0:
+            raise _Paced("no time left after waiting for the song's routing")
+        return left
 
     async def aclose(self) -> None:
         self._stopped = True

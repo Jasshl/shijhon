@@ -10,11 +10,21 @@ from pathlib import Path
 
 import anyio
 import pytest
+from pydantic import SecretStr
 
+from shijhon.config import AddonSettings
+from shijhon.delivery.addon import addon_key
 from shijhon.delivery.netpolicy import Reach
 from shijhon.delivery.pacing import Limits
-from shijhon.delivery.sources import RECENT_ATTEMPTS, Attempt, SourceRegistry, StoredSource
+from shijhon.delivery.sources import (
+    RECENT_ATTEMPTS,
+    Attempt,
+    NameTaken,
+    SourceRegistry,
+    StoredSource,
+)
 from shijhon.store import Store
+from shijhon.store.db import apply_migrations, load_migrations
 
 
 @pytest.mark.anyio
@@ -74,7 +84,17 @@ async def test_stored_lists_every_addon_in_order(tmp_path: Path) -> None:
         await sources.reorder([two, one])
         listed = await sources.stored()
         assert listed == [
-            StoredSource(two, "Two", "http://127.0.0.1:9/y", {}, True, 1, Reach.LOOPBACK, 40),
+            StoredSource(
+                two,
+                "Two",
+                "http://127.0.0.1:9/y",
+                {},
+                True,
+                1,
+                Reach.LOOPBACK,
+                40,
+                key=addon_key("Two"),
+            ),
             StoredSource(
                 one,
                 "One",
@@ -84,6 +104,7 @@ async def test_stored_lists_every_addon_in_order(tmp_path: Path) -> None:
                 2,
                 Reach.PUBLIC,
                 None,
+                key=addon_key("One"),
             ),
         ]
         assert [s.name for s in await sources.enabled()] == ["Two"]
@@ -429,6 +450,192 @@ async def test_an_addons_own_limits_apply_before_anything_was_played(tmp_path: P
         again = await sources.pace_at("https://one.example.invalid/elsewhere")
         assert again is pace and pace.limits == Limits(0.05, 4, 4)
         assert await sources.pace_at("not an address") is None
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_a_rename_keeps_the_addons_key(tmp_path: Path) -> None:
+    """An add-on's key is given when it is added - the one its name makes - and a rename
+    changes only its name. Names stay unique. An add-on added later under the first name
+    is another add-on: another key, so it never gets the renamed one's catalog."""
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+    try:
+        one = await sources.add("One", "https://one.example.invalid/x")
+        two = await sources.add("Two", "https://two.example.invalid/x")
+        assert [s.key for s in await sources.stored()] == [addon_key("One"), addon_key("Two")]
+        written: list[str] = []
+
+        async def also(conn: object) -> None:
+            written.append("with the rename")
+
+        await sources.update(one, name="Uno", also=also)  # type: ignore[arg-type]
+        assert written == ["with the rename"]
+        [uno] = [s for s in await sources.enabled() if s.id == one]
+        assert (uno.name, uno.key) == ("Uno", addon_key("One"))
+        await sources.stored()  # (the list read, as at startup: the keys by name)
+        assert sources.key_of("Uno") == addon_key("One")
+        with pytest.raises(NameTaken):
+            await sources.update(one, name="Two")
+        with pytest.raises(NameTaken):  # (nothing else of that save is written)
+            await sources.update(one, name="Two", budget_seconds=9)
+        assert [(s.name, s.budget) for s in await sources.stored()] == [
+            ("Uno", None),
+            ("Two", None),
+        ]
+        await sources.update(one, name="Uno")  # its own name: not another's
+        again = await sources.add("One", "https://new.example.invalid/x")
+        keys = {s.id: s.key for s in await sources.stored()}
+        assert keys[again] == addon_key("One", 2) and keys[one] == addon_key("One")
+        assert sources.key_of("One") == addon_key("One", 2)
+        # Removed and added again under its name, an add-on gets its key back.
+        await sources.remove(two)
+        back = await sources.add("Two", "https://two.example.invalid/x")
+        assert {s.id: s.key for s in await sources.stored()}[back] == addon_key("Two")
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_the_files_list_finds_an_addon_renamed_in_the_dashboard(tmp_path: Path) -> None:
+    """Handed back to the configuration file, the list finds an add-on renamed in the
+    dashboard by its key, and gives it the file's name again - the same add-on, so the same
+    catalog."""
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+
+    def listed(*names: str) -> list[AddonSettings]:
+        return [
+            AddonSettings(name=name, base_url=SecretStr(f"https://{n}.example.invalid/x"))
+            for n, name in enumerate(names)
+        ]
+
+    try:
+        await sources.sync(listed("Alpha", "Beta"))
+        alpha = next(s for s in await sources.stored() if s.name == "Alpha")
+        await sources.update(alpha.id, name="Renamed")
+        await sources.sync(listed("Alpha", "Beta"))
+        stored = await sources.stored()
+        first = stored[0]
+        assert (first.id, first.name, first.key, first.enabled) == (
+            alpha.id,
+            "Alpha",
+            addon_key("Alpha"),
+            True,
+        )
+        assert len(stored) == 2
+        # Named by the file too, the renamed one is not taken for the file's other add-on.
+        await sources.update(alpha.id, name="Gamma")
+        await sources.sync(listed("Gamma", "Alpha"))
+        stored = await sources.stored()
+        assert [(s.name, s.enabled) for s in stored] == [
+            ("Gamma", True),
+            ("Alpha", True),
+            ("Beta", False),
+        ]
+        assert stored[0].id == alpha.id and stored[1].key == addon_key("Alpha", 2)
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_startup_keeps_the_twin_that_owns_the_catalogs_ids(tmp_path: Path) -> None:
+    """Of two stored add-ons with one name - the first off, the second on - migration 0032
+    gives the name's key to the enabled one, and the file's list keeps that one too: the
+    add-on whose catalog the stored IDs are stays on."""
+    path = tmp_path / "state.sqlite3"
+    folder = Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    setup = sqlite3.connect(path, isolation_level=None)
+    apply_migrations(setup, load_migrations(folder)[:31])
+    for enabled, position in ((0, 1), (1, 2)):
+        setup.execute(
+            "INSERT INTO sources (name, base_url, enabled, position, created_at)"
+            " VALUES ('Twin', 'https://twin.example.invalid/x', ?, ?, 1)",
+            (enabled, position),
+        )
+    setup.close()
+    store = await Store.open(path)  # (migrated to the latest schema)
+    sources = SourceRegistry(store)
+    try:
+        before = {s.id: s.key for s in await sources.stored()}
+        assert before[2] == addon_key("Twin") and before[1] != addon_key("Twin")
+        listed = [AddonSettings(name="Twin", base_url=SecretStr("https://twin.example.invalid/x"))]
+        await sources.sync(listed)
+        assert [(s.id, s.enabled) for s in await sources.stored()] == [(2, True), (1, False)]
+        assert [s.key for s in await sources.enabled()] == [addon_key("Twin")]
+        assert sources.key_of("Twin") == addon_key("Twin")
+        assert await sources.differs(listed) == []
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_a_name_no_addon_has_is_no_addons_key(tmp_path: Path) -> None:
+    """A name no stored add-on has resolves to nothing; the key an add-on added under it
+    would get is one nobody holds - never that of the add-on renamed away from it."""
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+    try:
+        alpha = await sources.add("Alpha", "https://alpha.example.invalid/x")
+        await sources.update(alpha, name="Beta")
+        await sources.stored()
+        assert sources.key_of("Beta") == addon_key("Alpha")
+        assert sources.key_of("Alpha") is None
+        vacant = sources.vacant_key("Alpha")
+        assert vacant == addon_key("Alpha", 2) != sources.key_of("Beta")
+        again = await sources.add("Alpha", "https://new.example.invalid/x")
+        assert {s.id: s.key for s in await sources.stored()}[again] == vacant
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_the_files_list_finds_a_renamed_holder_past_a_duplicate(tmp_path: Path) -> None:
+    """Two stored Alphas: the enabled one holds the name's key (migration 0032), the other
+    has its own. The holder is renamed Beta; the file's list, naming Alpha, takes the holder
+    back - by its key, not the duplicate by its name - and renames what named Beta with it."""
+    path = tmp_path / "state.sqlite3"
+    folder = Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    setup = sqlite3.connect(path, isolation_level=None)
+    apply_migrations(setup, load_migrations(folder)[:31])
+    for enabled, position in ((1, 1), (0, 2)):
+        setup.execute(
+            "INSERT INTO sources (name, base_url, enabled, position, created_at)"
+            " VALUES ('Alpha', 'https://alpha.example.invalid/x', ?, ?, 1)",
+            (enabled, position),
+        )
+    setup.close()
+    store = await Store.open(path)
+    sources = SourceRegistry(store)
+    renames: list[tuple[str, str]] = []
+
+    async def renamed(conn: object, old: str, new: str) -> None:
+        renames.append((old, new))
+
+    try:
+        keys = {s.id: s.key for s in await sources.stored()}
+        assert keys[1] == addon_key("Alpha") and keys[2] != addon_key("Alpha")
+        await sources.update(1, name="Beta")
+        listed = [
+            AddonSettings(name="Alpha", base_url=SecretStr("https://alpha.example.invalid/x"))
+        ]
+        assert await sources.sync(listed, renamed=renamed) == [("Beta", "Alpha")]  # type: ignore[arg-type]
+        assert renames == [("Beta", "Alpha")]
+        stored = await sources.stored()
+        assert [(s.id, s.name, s.enabled) for s in stored] == [
+            (1, "Alpha", True),
+            (2, "Alpha", False),
+        ]
+        assert [s.key for s in await sources.enabled()] == [addon_key("Alpha")]
+        assert sources.key_of("Alpha") == addon_key("Alpha")
+        assert await sources.sync(listed, renamed=renamed) == []  # (and again: no change)
+        assert [(s.id, s.enabled) for s in await sources.stored()] == [(1, True), (2, False)]
     finally:
         await sources.aclose()
         await store.close()

@@ -664,3 +664,44 @@ def test_uncertain_create_only_replays_when_explicitly_called_with_same_input(
     original, replay = transport.calls
     assert original.data == replay.data
     assert original.get_header("Idempotency-key") == replay.get_header("Idempotency-key") == KEY
+
+
+def test_added_tracks_go_to_the_same_request_under_their_own_key(
+    skill: ModuleType, transport
+) -> None:
+    client = skill.Client.from_environment()
+    value = {"tracks": [{"artist": "Glass Orchard", "title": "Night Light", "replaces": 3}]}
+    transport.responses = [Response({"id": "request-1", "state": "queued"}, status=202)]
+    assert client.add("request-1", value, key="add-key-0001")["state"] == "queued"
+    request = transport.calls[-1]
+    assert request.full_url.endswith("/requests/request-1/tracks")
+    assert (
+        request.get_method() == "POST" and request.get_header("Idempotency-key") == "add-key-0001"
+    )
+    assert json.loads(request.data) == value
+    for bad in (
+        {},
+        {"tracks": []},
+        {"tracks": [{"artist": "A", "title": "B", "replaces": 0}]},
+        {"tracks": [{"artist": "A", "title": "B", "replaces": True}]},
+        {"tracks": [{"artist": "A", "title": "B", "id": "native"}]},
+        {"tracks": [{"artist": "A", "title": "B", "replaces": 2}] * 2},
+        {"tracks": [{"artist": "A", "title": "B"}], "name": "other"},
+    ):
+        with pytest.raises(skill.ClientError):
+            skill.validate_addition(bad)
+    with pytest.raises(skill.ClientError):
+        client.add("request-1", value, key="short")
+
+
+def test_require_all_is_accepted_only_as_a_boolean_for_explicit_tracks(skill: ModuleType) -> None:
+    tracks = [{"artist": "A", "title": "B"}]
+    body = skill.validate_create({"name": "N", "count": 1, "tracks": tracks, "require_all": True})
+    assert body["require_all"] is True
+    assert "require_all" not in skill.validate_create({"name": "N", "count": 1, "tracks": tracks})
+    for bad in (
+        {"name": "N", "count": 1, "tracks": tracks, "require_all": "yes"},
+        {"prompt": "quiet", "require_all": True},
+    ):
+        with pytest.raises(skill.ClientError):
+            skill.validate_create(bad)

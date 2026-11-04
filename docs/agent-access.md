@@ -80,6 +80,14 @@ call a model to test the connection. Configured AI can still fail at runtime.
   ordered artist/title list curated by the external agent without server AI.
   Track versions and all user constraints are preserved. Native/catalog IDs and
   arbitrary URLs are not accepted as explicit selections.
+  Each explicit track becomes the library's recording, else the catalog's (the original
+  release when several versions match). The tracks that resolve are published in order;
+  the request's status reports every track's outcome and, for each one left out, why
+  (not found, only on other albums, only other versions, credited differently, the
+  catalog did not answer, a repeat) with the nearest songs found. `require_all` publishes
+  nothing unless every track resolves. `add_playlist_tracks` puts tracks in the places
+  of left-out ones, or at the end, and republishes the same playlist, unless it was
+  edited in Navidrome since publication.
   When a request builds on playlists or songs the user already has, the agent finds
   them with `get_native_playlists` or `search_library` and passes them as
   `reference_playlists` or `reference_songs` instead of pasting names. Choosing

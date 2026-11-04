@@ -7,8 +7,8 @@ import json
 import logging
 import secrets
 import time
-from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -31,6 +31,7 @@ from shijhon.playlists.facts import Tags
 from shijhon.playlists.history import History
 from shijhon.playlists.imports import Imports
 from shijhon.playlists.model import (
+    EDITED,
     AIModels,
     AIPreferences,
     Connection,
@@ -40,15 +41,18 @@ from shijhon.playlists.model import (
     fingerprint,
     music_key,
 )
+from shijhon.playlists.prompt import Unresolved
 from shijhon.playlists.prompt import generate as generate_prompt
 from shijhon.playlists.repository import AI_FIELDS, Repository
-from shijhon.playlists.requests import Requests, SetupRequired
+from shijhon.playlists.requests import Busy, Requests, SetupRequired
 from shijhon.playlists.resolve import Resolver, listed, native_track, same_recording
 from shijhon.store import Store
 from shijhon.views.commits import CommitError, Commits
 from shijhon.views.ids import CatalogId, song_id
 
 log = logging.getLogger(__name__)
+# How long an agent's change waits for a publication before it is told to send it again.
+BUSY_SECONDS = 10.0
 if TYPE_CHECKING:
     from shijhon.agents.oauth import OAuth
     from shijhon.catalog.addon import AddonCatalogs
@@ -81,6 +85,47 @@ _PREPARATION_ERRORS = {
     ),
     "selection_changed": "A selected release changed after it was saved. Generate again.",
 }
+
+
+# What the library refuses an explicit track for, leaving the track out (``check_tracks``).
+LEFT_OUT = frozenset(
+    {
+        "owned_decision",
+        "owned_ambiguous",
+        "owned_incompatible",
+        "owned_plan",
+        "owned_complete",
+        "owned_retry",
+        "album_collision",
+    }
+)
+COLLISION = (
+    "A selected release conflicts with an existing library album. Check that album in "
+    "Library. For No match, choose Match again, then retry this selection."
+)
+
+
+def without_refused(
+    data: dict[str, Any], selected: list[Track], refused: dict[str, str]
+) -> list[Track]:
+    """The selection without ``refused`` (catalog IDs, with why), in ``data`` and in its
+    report: each such track becomes unresolved there with reason ``library_refused``."""
+    kept = [s for s in selected if s.id not in refused]
+    resolved = iter(selected)
+    for entry in data.get("curation", {}).get("tracks", []):
+        if entry.get("outcome") == "unresolved":
+            continue
+        song = next(resolved)
+        if song.id in refused:
+            category = refused[song.id]
+            entry.pop("song", None)
+            entry |= {
+                "outcome": "unresolved",
+                "reason": "library_refused",
+                "detail": _PREPARATION_ERRORS.get(category, COLLISION),
+            }
+    data["selected"] = [s.model_dump() for s in kept]
+    return kept
 
 
 def _with_track(message: str, track: Track) -> str:
@@ -139,6 +184,20 @@ class Playlists:
         self.changes = anyio.Lock()
         self.worker = anyio.Lock()
         self.wake = anyio.Event()
+
+    @asynccontextmanager
+    async def changing(self, seconds: float | None = None) -> AsyncIterator[None]:
+        """Hold the changes for a caller with a deadline. A publication can hold them for
+        minutes; waiting longer than ``seconds`` raises :class:`Busy` before anything
+        changed, instead of the caller's deadline striking at an unknown point."""
+        with anyio.move_on_after(BUSY_SECONDS if seconds is None else seconds) as waited:
+            await self.changes.acquire()
+        if waited.cancelled_caught:
+            raise Busy
+        try:
+            yield
+        finally:
+            self.changes.release()
 
     async def aclose(self) -> None:
         await self.history.aclose()
@@ -256,8 +315,11 @@ class Playlists:
             self.curator.require_connection(connection)
         await self.repo.save_ai_preferences(owner, preferences)
 
-    async def ai_connection(self, connection: Connection) -> Connection:
-        """Recheck credentials, role, service and model before every inference request."""
+    async def ai_connection(self, connection: Connection, *, wait: bool = True) -> Connection:
+        """Recheck credentials, role, service and model before every inference request.
+        A report of the setup (``wait=False``) reads it without waiting for the changes."""
+        if not wait:
+            return await self._ai_connection(connection)
         async with self.changes:
             return await self._ai_connection(connection)
 
@@ -407,6 +469,8 @@ class Playlists:
                         publish = current["data"].get("publish_after_generation") is True
                         data["publish_after_generation"] = publish
                         data["enable_after"] = current["data"].get("enable_after", False)
+                        if "addition" in current["data"]:  # added tracks: its key stays known
+                            data["addition"] = current["data"]["addition"]
                         if run["automatic"] and "publish_after_generation" not in current["data"]:
                             await self.repo.store.execute(
                                 "UPDATE playlist_mixes SET enabled=0 WHERE id=?", [mix["id"]]
@@ -455,6 +519,9 @@ class Playlists:
                 if current["state"] not in ("generating", "publishing", "queued"):
                     return
                 data = current["data"]
+                if isinstance(exc, Unresolved):
+                    # Each explicit track's outcome, for the caller to replace the others.
+                    data = {**data, "curation": {"tracks": exc.tracks}}
                 uncertain = bool(data.get("intent"))
                 error = (
                     str(exc)
@@ -477,6 +544,9 @@ class Playlists:
             baseline = fingerprint(playlist)
             original_name = playlist["name"]
             learned: tuple[list[Track], list[Track]] = ([], [])
+            if definition.mode == "tracks" and mix["published"] and baseline != mix["published"]:
+                # Added tracks republish the whole list; never over the owner's edits.
+                raise PlaylistError(EDITED)
             if mix["published"] and baseline != mix["published"]:
                 learned = await learn_edits(self, connection, mix, playlist)
             edits = await remembered_edits(self.repo.store, mix["id"])
@@ -503,6 +573,9 @@ class Playlists:
                 own=mix["playlist_id"] or "",
                 edits=edits,
                 library=library,
+                kept=await self.published_tracks(mix["id"], definition)
+                if definition.mode == "tracks"
+                else None,
             )
             if definition.auto_name:
                 definition = definition.model_copy(
@@ -581,6 +654,38 @@ class Playlists:
         if edits is not None:
             data["edits"] = edits.summary()
         return data
+
+    async def published_tracks(
+        self, mix: str, definition: Definition
+    ) -> dict[int, tuple[Track, dict[str, Any]]]:
+        """The explicit tracks the latest publication has at positions whose input is
+        unchanged: as the library has them now (their native songs), with their report
+        entries. Added tracks leave what is published as it is."""
+        row = await self.repo.store.fetchone(
+            "SELECT data FROM playlist_runs WHERE mix=? AND state='published'"
+            " ORDER BY created DESC LIMIT 1",
+            [mix],
+        )
+        if row is None:
+            return {}
+        data = json.loads(row["data"])
+        before = Definition.model_validate(data["definition"]).tracks
+        published = iter(zip(data.get("selected", []), data.get("native_ids", []), strict=True))
+        kept = {}
+        for entry in data.get("curation", {}).get("tracks", []):
+            if entry.get("outcome") == "unresolved":
+                continue
+            song, native_id = next(published)
+            position = entry["position"]
+            same = position <= min(len(definition.tracks), len(before)) and (
+                definition.tracks[position - 1] == before[position - 1]
+            )
+            if same:
+                track = Track.model_validate(song).model_copy(
+                    update={"id": native_id, "release": ""}
+                )
+                kept[position] = (track, entry)
+        return kept
 
     async def freeze(
         self,
@@ -690,9 +795,12 @@ class Playlists:
         library_bound: bool = False,
         authorize: Callable[[], Awaitable[None]] | None = None,
         addons: bool = False,
+        leave_out: dict[str, str] | None = None,
     ) -> list[str]:
         """``addons`` (imports): recordings of the add-ons' catalogs too, added from
-        those catalogs."""
+        those catalogs. ``leave_out`` (explicit tracks): a recording the library refuses
+        for its album (``LEFT_OUT``) is left out instead of failing the selection; its
+        ID goes in with the reason, and the IDs returned are those of the others."""
         mapping: dict[str, str] = {}
         catalog_ids: set[str] = set()
         others: dict[str, Catalog] = {}  # the add-ons' catalogs, by key
@@ -756,7 +864,25 @@ class Playlists:
             )
             with self.commits.engine.guard_materializations(check), authorization:
                 try:
-                    mapping = await self.commits.natives(catalog_ids, catalogs=others)
+                    while True:
+                        try:
+                            mapping = await self.commits.natives(catalog_ids, catalogs=others)
+                            break
+                        except CommitError as refused:
+                            if (
+                                leave_out is None
+                                or refused.category not in LEFT_OUT
+                                or refused.item not in catalog_ids
+                                or len(selected) - len(leave_out) <= 1  # none would stay
+                            ):
+                                raise
+                            # One track the library refuses; the others are asked again.
+                            log.warning("playlist track left out: category=%s", refused.category)
+                            leave_out[refused.item] = refused.category
+                            catalog_ids.discard(refused.item)
+                            if not catalog_ids:
+                                mapping = {}
+                                break
                 except CommitError as exc:
                     if exc.category in _PREPARATION_ERRORS:
                         category = exc.category
@@ -794,6 +920,8 @@ class Playlists:
                     if affected is not None:
                         error = _with_track(error, affected)
                     raise PlaylistError(error) from None
+        if leave_out:
+            selected = [s for s in selected if s.id not in leave_out]
         ids = [mapping.get(s.id, s.id) for s in selected]
         for song, native_id in zip(selected, ids, strict=True):
             native = await self.native_track(connection, native_id, library_bound=library_bound)
@@ -892,13 +1020,19 @@ class Playlists:
                     )
                 await self.requests.guard(mix, data)
 
+            partial = definition.mode == "tracks" and not definition.require_all
+            refused: dict[str, str] = {}
             ids = await self.check_tracks(
                 connection,
                 selected,
                 approved,
                 library_bound=definition.mode != "discovery",
                 authorize=authorize,
+                leave_out=refused if partial else None,
             )
+            if refused:
+                # Before any intent: the selection published is the one recovery keeps.
+                selected = without_refused(data, selected, refused)
             data["native_ids"] = ids
             await self.repo.update(ident, "publishing", data)
         else:

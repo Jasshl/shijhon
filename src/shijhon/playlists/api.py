@@ -13,7 +13,13 @@ from starlette.routing import Route
 
 from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 from shijhon.playlists.prompt import context
-from shijhon.playlists.requests import ContextRequest, PlaylistRequest, RequestError
+from shijhon.playlists.requests import (
+    Busy,
+    ContextRequest,
+    PlaylistRequest,
+    RequestError,
+    TrackAddition,
+)
 from shijhon.playlists.service import Playlists
 
 
@@ -27,6 +33,7 @@ class API:
             Route("/api/playlists/requests", self.handle, methods=["POST"]),
             Route("/api/playlists/requests/{ident}", self.handle, methods=["GET"]),
             Route("/api/playlists/requests/{ident}/retry", self.handle, methods=["POST"]),
+            Route("/api/playlists/requests/{ident}/tracks", self.handle, methods=["POST"]),
         ]
 
     async def body(self, request: Request) -> object:
@@ -53,7 +60,7 @@ class API:
             raise RequestError("Send a valid JSON object.") from None
 
     async def handle(self, request: Request) -> JSONResponse:
-        code = 200
+        code, retry = 200, {}
         try:
             headers = request.headers.getlist("authorization")
             if len(headers) != 1:
@@ -98,12 +105,24 @@ class API:
                         limit=spec.limit,
                         authorize=authorize,
                     )
+            elif request.method == "GET":  # a read: it does not wait for a publication
+                connection, grant = await service.requests.grant(creator, scope)
+                result = await service.requests.status(connection.user_id, ident, creator=creator)
             else:
-                async with service.changes:
+                async with service.changing():
                     connection, grant = await service.requests.grant(creator, scope)
                     owner = connection.user_id
-                    if request.method == "GET":
+                    if ident and request.url.path.endswith("/tracks"):
+                        addition = TrackAddition.model_validate(await self.body(request))
+                        added = await service.requests.add_tracks(
+                            owner,
+                            ident,
+                            request.headers.get("idempotency-key", ""),
+                            addition,
+                            creator=creator,
+                        )
                         result = await service.requests.status(owner, ident, creator=creator)
+                        code = 202 if added else 200
                     elif ident:
                         if await self.body(request) != {}:
                             raise RequestError("Retry takes an empty JSON object.")
@@ -132,6 +151,9 @@ class API:
                         )
                         result = await service.requests.status(owner, ident, creator=creator)
                         code = 202 if created else 200
+        except Busy as exc:
+            code, result = exc.status, {"error": str(exc)}
+            retry = {"retry-after": "30"}
         except RequestError as exc:
             code, result = exc.status, {"error": str(exc)}
         except ValidationError:
@@ -152,5 +174,6 @@ class API:
                 "cache-control": "no-store",
                 "x-content-type-options": "nosniff",
                 "referrer-policy": "no-referrer",
+                **retry,
             },
         )

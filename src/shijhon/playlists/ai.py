@@ -44,7 +44,11 @@ def validate(selected: list[Track], definition: Definition) -> None:
         if len(selected) != definition.count:
             raise PlaylistError("The import selection differs from the reviewed entry count.")
         return  # Ordered imports intentionally retain repeated recordings and artists.
-    if len(selected) != definition.count or len({s.key for s in selected}) != len(selected):
+    # Explicit tracks publish what resolves (all of them with ``require_all``).
+    short = definition.mode == "tracks" and not definition.require_all
+    if not (
+        0 < len(selected) <= definition.count if short else len(selected) == definition.count
+    ) or len({s.key for s in selected}) != len(selected):
         raise PlaylistError("The selection has the wrong length or repeats a recording.")
     if sum(s.unfamiliar for s in selected) < definition.unfamiliar:
         raise PlaylistError("The selection does not meet the requested unfamiliar share.")

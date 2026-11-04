@@ -255,7 +255,7 @@ def test_explicit_tracks_bypass_model_and_keep_order(tmp_path: Path) -> None:
             service.curator.api = AsyncMock(side_effect=AssertionError("no model"))
             service.history.sync = AsyncMock(side_effect=AssertionError("no history"))
 
-            async def resolve(connection: Connection, wanted: Any) -> Track:
+            async def resolve(connection: Connection, wanted: Any, **kw: Any) -> Track:
                 return Track(
                     id=wanted["title"],
                     artist=wanted["artist"],

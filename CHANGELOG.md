@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0
+
+- Rename add-ons under their **Settings** on the **Add-ons** page. Only the name changes:
+  the add-on keeps its catalog and songs, and the settings that name it follow.
+- List add-ons that provide only a catalog in their own **Catalog only** section, without
+  the settings that only matter for audio. Playback's primary add-on and preferred
+  fallback offer only add-ons that supply audio.
+- Ask add-ons for audio only when their manifest lists `stream`.
+- Treat a `503` with `Retry-After` at `/stream` as "still preparing": Shijhon asks again
+  within the add-on's time instead of counting an error.
+- Count request limits per add-on rather than per address, by default 5 a second after
+  10 at once; a 429 pauses only the add-on that sent it.
+- Agent-curated playlists publish the tracks that resolve instead of failing on one
+  that does not, and the request's status reports every track: what it became, or why
+  it was left out, with the nearest songs found. `require_all` keeps all-or-nothing.
+- When several versions of a requested track match, an agent-curated playlist takes the
+  original release instead of failing.
+- Add tracks to a published agent-curated playlist, in the places of left-out tracks or
+  at its end, with `add_playlist_tracks` (or `POST /requests/{id}/tracks`).
+- A playlist change sent while another playlist is being published answers at once
+  that nothing was changed and to send it again, instead of timing out without saying
+  so. Status and capabilities answer during a publication.
+- Upgrading migrates the database to schema 32: take a backup first
+  ([upgrades](docs/deployment.md#upgrades)).
+
 ## 0.3.0
 
 - Use an add-on as your catalog with complete album details (disc and track numbers,

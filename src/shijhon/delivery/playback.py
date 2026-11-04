@@ -155,6 +155,21 @@ class _Joining(_TimedOut):
         self.again = again
 
 
+class _Preparing(_TimedOut):
+    """The add-on was still preparing the song (an HTTP 503 with a ``Retry-After``): not
+    ready in time. Its time without audio goes into the measured order; no error, and no
+    failure for the song that a client's retry - or a routing that continues this one -
+    would pass the add-on over for: by then the song may be ready. ``waited_out``: the
+    attempt waited for it until its time ran out (or until less was left than the next
+    wait) - a timeout for the routing (an attempt used, a primary's timeout); else its first
+    answer named a longer time than was left, and the routing moved on at once (no attempt
+    used, nothing toward the primary's timeouts)."""
+
+    def __init__(self, reason: str, *, waited_out: bool) -> None:
+        super().__init__(reason)
+        self.waited_out = waited_out
+
+
 class _Cooling(_Failed):
     """The source was not asked: it answered "too many requests" a while ago, and the time it
     named has not passed. Nothing it failed at now: no failure of its own, no attempt
@@ -224,6 +239,9 @@ class Leftover:
     # Of ``done``, those given up on while they may still have been preparing the song (a
     # primary switched away from): no failure for a client's retry.
     slow: set[int] = field(default_factory=set)
+    # Those that said they were preparing the song when their time ran out: not done with -
+    # a routing that continues this one asks them again (after the one cut short).
+    preparing: set[int] = field(default_factory=set)
 
 
 @dataclass
@@ -349,14 +367,19 @@ def _stop(why: str) -> None:
         trace.stop(why)
 
 
-def _done(source: Source, *, cut: bool = False, slow: bool = False) -> None:
+def _done(
+    source: Source, *, cut: bool = False, slow: bool = False, preparing: bool = False
+) -> None:
     """The routing is done with ``source`` (it failed or lacked the song); ``cut``: the
     client's wait cap ended its attempt while it was still preparing the song; ``slow``:
-    given up on for another source while it may still have been preparing it."""
+    given up on for another source while it may still have been preparing it;
+    ``preparing``: it said it was preparing the song (``_Preparing``) - not done with."""
     trace = _TRACE.get()
     if trace is not None:
         if cut:
             trace.left.cut = source.id
+        elif preparing:
+            trace.left.preparing.add(source.id)
         else:
             trace.left.done.add(source.id)
             if slow:
@@ -603,6 +626,10 @@ MAX_PINS = 4096  # songs' links kept (past it: the expired, then the oldest go)
 MAX_TWINS = 4096  # songs committed while they were played, known under both their names
 RESUME_SECONDS = 60.0  # a routing that ended without audio can be continued this long
 CUT_SECONDS = 1.0  # a source the wait cap took more than this from was cut short
+# An add-on preparing the song is asked for its link again after its Retry-After, at least
+# this long (seconds); one not ready within the attempt's time is "not ready in time".
+MIN_PREPARING_WAIT = 0.5
+NOT_READY = "not ready within its budget"
 WRONG_SECONDS = 7 * 86400.0  # a source that delivered another recording is not asked for it
 # A client's short range at byte zero (a probe of two bytes, warm-ahead's one) is asked from
 # the source as this many first bytes - as many as reading a length may need (a large ID3
@@ -1024,7 +1051,7 @@ class Deliverer:
         known either; their attempt would need it): not read yet while they cool down, or
         not readable within the availability checks' timeout. Each manifest is read once
         (``Addon.manifest``), all at the same time."""
-        sources = await self.registry.enabled()
+        sources = await self.registry.streaming()
         why: dict[int, str] = {}
         unknown = "its manifest could not be read"
 
@@ -1172,7 +1199,7 @@ class Deliverer:
         tried |= set(recent)
         skipped = [
             f"{s.name} {recent[s.id]:.0f}s ago"
-            for s in await self.registry.enabled()
+            for s in await self.registry.streaming()
             if s.id in recent
         ]
         if skipped:
@@ -1197,17 +1224,21 @@ class Deliverer:
     async def _primary_done(self, left: Leftover) -> bool:
         """The routing ``left`` came from is done with the primary (it failed or lacked the
         song; not cut short)."""
-        for source in await self.registry.enabled():
+        for source in await self.registry.streaming():
             if source.name == self.settings.primary_source:
                 return source.id in left.done
         return False
 
     async def _left_plan(self, left: Leftover) -> tuple[list[Source], dict[int, str]]:
         """A continued routing's order: the source the wait cap cut short while it was
-        preparing the song, then those the routing did not try (in its order); never again
+        preparing the song, then those that said they were preparing it - a primary first
+        (primary-first routing keeps only the fallbacks' order), then the others in the
+        routing's order -, then those the routing did not try (in its order); never again
         those it is done with (they failed or lacked the song a moment ago)."""
-        enabled = {s.id: s for s in await self.registry.enabled()}
-        order = ([left.cut] if left.cut is not None else []) + left.order
+        enabled = {s.id: s for s in await self.registry.streaming()}
+        unordered = sorted(i for i in left.preparing if i not in left.order)
+        preparing = unordered + [i for i in left.order if i in left.preparing]
+        order = ([left.cut] if left.cut is not None else []) + preparing + left.order
         plan: list[Source] = []
         for source_id in order:
             source = enabled.get(source_id)
@@ -1700,7 +1731,7 @@ class Deliverer:
             return None
         sources = [
             s
-            for s in await self.registry.enabled()
+            for s in await self.registry.streaming()
             if not self.registry.cooling(s.id) and s.id not in tried
         ]
         primary = [s for s in sources if s.name == self.settings.primary_source]
@@ -1716,7 +1747,7 @@ class Deliverer:
         """A continuing play's order: the source it started from (with its track ID), then
         the others; each must deliver the same representation. Without a size or an ETag to
         recognize it by, only the source it started from."""
-        enabled = await self.registry.enabled()
+        enabled = await self.registry.streaming()
         order = [s for s in enabled if s.id == known.source_id]
         if known.size is not None or known.etag is not None:
             order += [s for s in enabled if s.id != known.source_id]
@@ -1726,7 +1757,7 @@ class Deliverer:
         """Sources that could still be tried after ``source_id``."""
         return sum(
             1
-            for s in await self.registry.enabled()
+            for s in await self.registry.streaming()
             if s.id != source_id and s.id not in tried and not self.registry.cooling(s.id)
         )
 
@@ -1788,7 +1819,7 @@ class Deliverer:
         ``max_attempts``: it takes no time, and the budget still bounds the routing."""
         used = 0
         declined = set(declined or ())
-        enabled = [s for s in await self.registry.enabled() if s.id not in tried]
+        enabled = [s for s in await self.registry.streaming() if s.id not in tried]
         # A continuing play's own source (``own``) is asked while it cools down too:
         # only it has the play's file.
         candidates = [s for s in enabled if s.id == own or not self.registry.cooling(s.id)]
@@ -1904,12 +1935,14 @@ class Deliverer:
                     self._primary_missed(track)  # a hint for the release's other songs
                 continue
             except _Failed as exc:
-                used += 0 if isinstance(exc, (_Error, _Cooling)) else 1
+                at_once = isinstance(exc, _Preparing) and not exc.waited_out
+                used += 0 if isinstance(exc, (_Error, _Cooling)) or at_once else 1
                 failed += 1
                 if not _spared(exc):
                     took = before + self.clock() - started - exc.waited
                     self._record(source, answer, False, took)
-                _done(source, cut=capped and isinstance(exc, _TimedOut), slow=_spared(exc))
+                _done(source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc),
+                      preparing=isinstance(exc, _Preparing))  # fmt: skip
                 tried.add(source.id)  # not asked again by a later pass
                 reasons.append(f"{source.name}: {exc}")
                 _failed_step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
@@ -1986,20 +2019,25 @@ class Deliverer:
         started = self.clock()
         notes: list[str] = []
         looked_up = started
+        lacks = False  # an add-on for its catalog only: no audio to look up
+        preparing: list[float] = []  # the waits for the add-on preparing the song
         try:
             with anyio.fail_after(limit):
                 try:
+                    lacks = "stream" not in (await source.addon.manifest()).resources
                     # A song of this add-on's own catalog carries the add-on's track
                     # ID: asked for by it, without a lookup.
-                    own = None if hint else await _own_id(source, track, self.settings)
-                    known = hint or own
-                    track_id = known or await source.addon.find(track.wanted, notes)
+                    own = None if hint or lacks else await _own_id(source, track, self.settings)
+                    known = None if lacks else hint or own
+                    track_id = (
+                        None if lacks else known or await source.addon.find(track.wanted, notes)
+                    )
                 finally:
                     if looked is not None:
                         looked.set()
                 looked_up = self.clock()
                 try:
-                    info = None if track_id is None else await source.addon.stream(track_id)
+                    info = None if track_id is None else await _link(source, track_id, preparing)
                 except AddonError as exc:
                     # (Its catalog's ID may be refused in other words than "not found".)
                     gone = ("unavailable", "expired", "invalid") if own else _GONE
@@ -2010,7 +2048,7 @@ class Deliverer:
                     track_id = await source.addon.find(track.wanted, notes)
                     if own and track_id == own:
                         raise  # (its catalog's ID again: asked for once, not twice)
-                    info = None if track_id is None else await source.addon.stream(track_id)
+                    info = None if track_id is None else await _link(source, track_id, preparing)
         except AddonError as exc:
             self._source_error(source, exc)
             if exc.kind == "unavailable":  # a refusal, or a resource it lacks: not "absent"
@@ -2019,12 +2057,23 @@ class Deliverer:
                 raise _Cooling(exc.reason) from None
             if exc.kind == "rate_limited":
                 raise _Limited(exc.reason) from None
+            if exc.kind == "preparing":  # not ready yet, and not within the time left
+                # Waited for it (asked again): its time is used up but for less than the next
+                # wait. Never waited (the first answer named more than was left): on at once.
+                waited_out = bool(preparing)
+                if waited_out:
+                    self.registry.failed(source, NOT_READY)
+                why = _not_ready(preparing, exc.retry_after)
+                raise _Preparing(why, waited_out=waited_out) from None
             raise (_Error if exc.kind in _ERRORS else _Failed)(exc.reason) from None
         except TimeoutError:
             # Its time ran out in the queue, or what the queue left of it: not the add-on's
             # doing (it never had the time).
             if (held := waits.held(CUT_SECONDS)) is not None:
                 raise _Paced(held) from None
+            if preparing:  # ... asked again while it prepares the song, until the end
+                self.registry.failed(source, NOT_READY)
+                raise _Preparing(_not_ready(preparing), waited_out=True) from None
             self.registry.failed(source, "timeout")
             raise _TimedOut("timeout") from None
         except Exception as exc:  # a broken add-on must not break playback
@@ -2032,6 +2081,8 @@ class Deliverer:
             log.warning("source %s failed: %s", source.name, reason)
             self._failure(source, _Error(reason))
             raise _Error(reason) from None
+        if lacks:
+            raise _Missing("add-on does not stream")
         if track_id is None or info is None:
             # Absent only when its lookup said so (a source that cannot look it up - no
             # ISRC lookup for a track without one, no /resolve, no search - lacks nothing).
@@ -2168,7 +2219,7 @@ class Deliverer:
         it ready: checks still running do not hold it up (they take 1-2 s, and a play whose
         first audio comes after about 4 s is often given up); they order the fallbacks after
         it once they are in."""
-        enabled = await self.registry.enabled()
+        enabled = await self.registry.streaming()
         configured = next((s for s in enabled if s.name == self.settings.primary_source), None)
         # Not those that failed for this song a moment ago (``tried``).
         sources = [s for s in enabled if not self.registry.cooling(s.id) and s.id not in tried]
@@ -2292,6 +2343,8 @@ class Deliverer:
                 # The start of its attempt, bounded like one (this phase ends it when another
                 # source goes first): a lookup cut short would be repeated by its attempt.
                 with pacing.watched() as waits, anyio.fail_after(bound):
+                    if "stream" not in (await source.addon.manifest()).resources:
+                        return  # (no audio: its attempt ends at once, without a lookup)
                     # A song of its own catalog: its ID is known without asking. It
                     # is no hint for later: its attempt works it out again, from the add-on
                     # as it is then (the same name may be another service by then).
@@ -2493,7 +2546,8 @@ class Deliverer:
                 self._primary_missed(track)
             return None
         except _Failed as exc:  # recorded by _resolve_at (as far as it is a failure)
-            _done(primary, cut=capped and isinstance(exc, _TimedOut), slow=_spared(exc))
+            _done(primary, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc),
+                  preparing=isinstance(exc, _Preparing))  # fmt: skip
             if not _spared(exc):
                 self._record(primary, "-", False, self.clock() - started - exc.waited)
             self._primary_failed(primary, exc, failures)
@@ -2583,9 +2637,11 @@ class Deliverer:
 
     def _primary_failed(self, primary: Source, exc: _Failed, failures: list[str]) -> None:
         failures.append(f"{primary.name}: {exc}")
-        # (A wait at its limits is not its timeout; a DASH join's counts once.)
+        # (A wait at its limits is not its timeout; a DASH join's counts once; one that was
+        # preparing the song is its timeout only when it waited until its time ran out.)
         again = isinstance(exc, _Joining) and exc.again
-        if isinstance(exc, _TimedOut) and not _paced(exc) and not again:
+        at_once = isinstance(exc, _Preparing) and not exc.waited_out
+        if isinstance(exc, _TimedOut) and not _paced(exc) and not again and not at_once:
             self._primary_slow(primary, "timeouts_since_delivery")
 
     def _primary_slow(self, primary: Source, counter: str) -> None:
@@ -2764,8 +2820,10 @@ class Deliverer:
     def _source_error(self, source: Source, exc: AddonError) -> None:
         """An add-on's answer that is an error: its failure, and - a rate limit - the time
         it is left alone for; errors count toward its cooldown. Not one it was not asked
-        for ("cooling"), nor another request's answer shared (counted there)."""
-        if exc.kind == "cooling" or exc.shared:
+        for ("cooling"), one that it is preparing the song ("preparing": no failure - not
+        ready in time is counted where the attempt ends), nor another request's answer
+        shared (counted there)."""
+        if exc.kind in ("cooling", "preparing") or exc.shared:
             return
         self.registry.failed(source, exc.reason)
         if exc.kind == "rate_limited":
@@ -3375,13 +3433,13 @@ def _states(sources: list[Source], answers: dict[int, Availability | None], aske
 
 
 async def _own_id(source: Source, track: Track, settings: PlaybackSettings) -> str | None:
-    """The source's own track ID: name-based, or its confirmed catalog identity.
+    """The source's own track ID: by its key, or its confirmed catalog identity.
 
     A declared identity is trusted only at the configured catalog add-on, while its
     current manifest still matches the operator's confirmation.
     """
-    if of_catalog(source.name, track.ref):
-        return own_track(source.name, (await source.addon.manifest()).id, track.ref)
+    if of_catalog(source.key, track.ref):
+        return own_track(source.key, (await source.addon.manifest()).id, track.ref)
     if source.name != settings.catalog_addon or not settings.catalog_identity:
         return None
     manifest = await source.addon.manifest()
@@ -3395,6 +3453,34 @@ async def _own_id(source: Source, track: Track, settings: PlaybackSettings) -> s
     ):
         return item if ITEM_ID.fullmatch(item) and item not in (".", "..") else None
     return None
+
+
+async def _link(source: Source, track_id: str, preparing: list[float]) -> StreamInfo:
+    """The add-on's link for ``track_id``. While it says it is preparing the song (an HTTP
+    503 with a valid ``Retry-After``), it is asked again after the time it named (half a
+    second at least, each time) as often as the attempt's time allows - its budget, the
+    client's wait cap; when the time named is longer than what is left, not again
+    (``AddonError`` "preparing"). ``preparing``: the seconds waited, each."""
+    while True:
+        try:
+            return await source.addon.stream(track_id)
+        except AddonError as exc:
+            if exc.kind != "preparing":
+                raise
+            wait = max(MIN_PREPARING_WAIT, exc.retry_after or 0.0)
+            if wait >= anyio.current_effective_deadline() - anyio.current_time():
+                raise
+            _step(f"{source.name}: preparing, asked again after {wait:.1f}s")
+            await anyio.sleep(wait)
+            preparing.append(wait)
+
+
+def _not_ready(preparing: list[float], ready_in: float | None = None) -> str:
+    """Why: "not ready within its budget (preparing, ready in 5s, asked again 2 times)"."""
+    asked = len(preparing)
+    told = f", ready in {ready_in:g}s" if ready_in is not None else ""
+    again = f", asked again {asked} time{'s' if asked != 1 else ''}" if asked else ""
+    return f"{NOT_READY} (preparing{told}{again})"
 
 
 async def _looks_up(source: Source, track: Track) -> bool:
@@ -3453,8 +3539,9 @@ def _spared(exc: BaseException) -> bool:
 
 def _unfinished(exc: BaseException) -> bool:
     """No failure for the song that a client's retry would skip the add-on for: nothing it
-    did (``_spared``), or it is still joining the song's DASH link (``_Joining``)."""
-    return _spared(exc) or isinstance(exc, _Joining)
+    did (``_spared``), it is still joining the song's DASH link (``_Joining``), or it was
+    still preparing the song (``_Preparing``)."""
+    return _spared(exc) or isinstance(exc, (_Joining, _Preparing))
 
 
 def _kept(exc: BaseException) -> bool:

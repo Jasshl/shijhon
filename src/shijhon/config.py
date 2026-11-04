@@ -271,15 +271,19 @@ class DeliverySettings(BaseModel):
     # Shijhon's own background work together: the API requests one add-on is sent a second
     # (its manifest, lookups, link requests, availability checks; 0: no limit), how many may
     # go at once after a quiet moment, and the audio requests being opened there at once
-    # (until their answers start; 0: no limit). The song being played goes first. Add-ons
-    # at one address (scheme, host and port) share them. An add-on can have its own
+    # (until their answers start; 0: no limit). The song being played goes first. One
+    # add-on is its address (scheme, host and port) and the id in its manifest: add-ons at
+    # one address count separately, one added twice shares them; a manifest read before
+    # the add-on is known waits at its address (and counts at the add-on too). An add-on
+    # can have its own
     # ([[addons]] requests_per_second, request_burst, audio_openings; the dashboard's
     # Add-ons page): raise them for an add-on of your own, not for someone else's.
-    addon_requests_per_second: float = Field(default=2.0, ge=0, le=1000)
-    addon_request_burst: int = Field(default=4, ge=1, le=1000)
+    addon_requests_per_second: float = Field(default=5.0, ge=0, le=1000)
+    addon_request_burst: int = Field(default=10, ge=1, le=1000)
     addon_audio_openings: int = Field(default=4, ge=0, le=1000)
-    # Whole-file bulk acquisitions: installation-wide, per independent add-on/backend,
-    # and starts whose audio is not ready yet. 0 turns that cap off.
+    # Whole-file bulk acquisitions: installation-wide, per independent add-on/backend (one
+    # add-on as above, joined with others by capacity_group), and starts whose audio is not
+    # ready yet. 0 turns that cap off.
     bulk_downloads: int = Field(default=4, ge=0, le=1000)
     addon_downloads: int = Field(default=2, ge=0, le=1000)
     addon_preparations: int = Field(default=1, ge=0, le=1000)

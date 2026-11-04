@@ -65,8 +65,8 @@ folder = "_shijhon"          # inside the library
 # primary_source = "First add-on"
 # reliable_source = "First add-on"
 # The limits per add-on, for all users together (the defaults):
-# addon_requests_per_second = 2
-# addon_request_burst = 4
+# addon_requests_per_second = 5
+# addon_request_burst = 10
 # addon_audio_openings = 4
 
 # A catalog (docs/catalogs.md): the name of a catalog adapter installed in the

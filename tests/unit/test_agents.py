@@ -20,11 +20,13 @@ import httpx
 import pytest
 from jinja2 import Environment, PackageLoader
 from pydantic import SecretStr
+from starlette.applications import Starlette
 
 from shijhon.agents.app import Agents
 from shijhon.agents.oauth import SCOPES, OAuth
 from shijhon.config import AgentSettings
 from shijhon.playlists import edits as owner_edits
+from shijhon.playlists.api import API
 from shijhon.playlists.model import Definition, Track
 from shijhon.playlists.requests import RequestError
 from shijhon.proxy.forwarding import Forwarding
@@ -693,7 +695,7 @@ def test_an_agent_forgets_learned_edits_of_its_own_request_with_create_permissio
     anyio.run(run)
 
 
-@pytest.mark.parametrize("action", ["status", "pause"])
+@pytest.mark.parametrize("action", ["pause", "retry"])
 def test_revocation_while_waiting_for_the_change_lock_is_rechecked(
     tmp_path: Path, action: str
 ) -> None:
@@ -711,22 +713,22 @@ def test_revocation_while_waiting_for_the_change_lock_is_rechecked(
             }
             created = await call(http, tokens["access_token"], "create_playlist", args)
             assert created["ok"]
-            entered, release = anyio.Event(), anyio.Event()
+            entered, opened = anyio.Event(), anyio.Event()
 
             class Gate:
-                async def __aenter__(self):
+                async def acquire(self):
                     entered.set()
-                    await release.wait()
+                    await opened.wait()
 
-                async def __aexit__(self, *exc):
-                    return False
+                def release(self):
+                    pass
 
             app.service.changes = Gate()
             result = {}
 
             async def waiting() -> None:
                 arguments = {"request_id": created["request"]["id"]}
-                tool = "get_playlist_request"
+                tool = "retry_playlist_request"
                 if action == "pause":
                     tool = "manage_playlist_refresh"
                     arguments["action"] = action
@@ -739,8 +741,85 @@ def test_revocation_while_waiting_for_the_change_lock_is_rechecked(
                     "UPDATE playlist_agent_tokens SET revoked=? WHERE id=?",
                     [time.time(), token.claims["grant_id"]],
                 )
-                release.set()
+                opened.set()
             assert result["error"]["code"] == "authentication_required"
+
+    anyio.run(run)
+
+
+def test_a_change_behind_a_long_publication_is_refused_unchanged_and_reads_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A publication can hold the playlist changes for minutes. A change waiting behind it
+    is told, before anything changed, to send the same call again; status and capabilities
+    answer meanwhile. Over MCP and over HTTP."""
+    monkeypatch.setattr("shijhon.playlists.service.BUSY_SECONDS", 0.2)
+
+    def creation(key: str) -> dict[str, Any]:
+        return {
+            "idempotency_key": key,
+            "request": {
+                "name": "Lantern",
+                "count": 1,
+                "tracks": [{"artist": "Glass Orchard", "title": "First Lantern"}],
+            },
+        }
+
+    async def run() -> None:
+        async with app_at(tmp_path / "db") as (app, http):
+            tokens = await finish(http, await begin(http), "create status")
+            token = tokens["access_token"]
+            first = await call(http, token, "create_playlist", creation("before-busy"))
+            ident = first["request"]["id"]
+            api = httpx.AsyncClient(
+                transport=httpx.ASGITransport(Starlette(routes=API(lambda: app.service).routes())),
+                base_url="https://test.invalid",
+            )
+            headers = {"authorization": "Bearer " + token}
+            held, finished = anyio.Event(), anyio.Event()
+
+            async def publication() -> None:  # holds the changes, as a publication does
+                async with app.service.changes:
+                    held.set()
+                    await finished.wait()
+
+            async with api, anyio.create_task_group() as tasks:
+                tasks.start_soon(publication)
+                await held.wait()
+                busy = await call(http, token, "create_playlist", creation("behind-busy"))
+                added = await call(
+                    http,
+                    token,
+                    "add_playlist_tracks",
+                    {
+                        "request_id": ident,
+                        "idempotency_key": "behind-add-busy",
+                        "tracks": [{"artist": "Quill & Marrow", "title": "Unheard"}],
+                    },
+                )
+                status = await call(http, token, "get_playlist_request", {"request_id": ident})
+                capabilities = await call(http, token, "get_capabilities")
+                refused = await api.post(
+                    "/api/playlists/requests",
+                    headers={**headers, "idempotency-key": "behind-http-busy"},
+                    json=creation("unused-busy")["request"],
+                )
+                read = await api.get("/api/playlists/requests/" + ident, headers=headers)
+                finished.set()
+            for answer in (busy, added):
+                assert answer["ok"] is False
+                assert answer["error"]["code"] == "temporarily_unavailable"
+                assert "nothing was changed" in answer["error"]["message"]
+                assert "same idempotency key" in answer["error"]["message"]
+            assert status["ok"] and status["request"]["id"] == ident
+            assert capabilities["ok"]
+            assert refused.status_code == 503 and refused.headers["retry-after"] == "30"
+            assert "nothing was changed" in refused.json()["error"]
+            assert read.status_code == 200 and read.json()["id"] == ident
+            rows = await app.service.repo.store.fetchall("SELECT id FROM playlist_requests")
+            assert [row["id"] for row in rows] == [ident]
+            again = await call(http, token, "create_playlist", creation("behind-busy"))
+            assert again["ok"] and again["created"]
 
     anyio.run(run)
 
@@ -799,5 +878,71 @@ def test_history_read_survives_native_signin_but_refuses_changed_settings(
             else:
                 assert result["ok"], result
                 assert "Glass Orchard" in json.dumps(result)
+
+    anyio.run(run)
+
+
+def test_an_agent_adds_tracks_to_its_own_explicit_playlist(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with app_at(tmp_path / "db") as (app, http):
+            tokens = await finish(http, await begin(http, "create status"), "create status")
+            token = tokens["access_token"]
+            capabilities = await call(http, token, "get_capabilities")
+            curated = capabilities["features"]["agent_curated_playlist"]
+            assert "add_playlist_tracks" in curated["tools"]
+            created = await call(
+                http,
+                token,
+                "create_playlist",
+                {
+                    "idempotency_key": "add-tracks",
+                    "request": {
+                        "name": "Lantern",
+                        "count": 2,
+                        "tracks": [
+                            {"artist": "Glass Orchard", "title": "First Lantern"},
+                            {"artist": "Quill & Marrow", "title": "Unheard"},
+                        ],
+                    },
+                },
+            )
+            ident = created["request"]["id"]
+            run_id = created["request"]["run"]
+            report = [
+                {"position": 1, "outcome": "library"},
+                {"position": 2, "outcome": "unresolved", "reason": "not_found"},
+            ]
+            await app.service.repo.update(
+                run_id, "published", {"selected": [], "curation": {"tracks": report}}
+            )
+            status = await call(http, token, "get_playlist_request", {"request_id": ident})
+            assert status["request"]["resolution"]["unresolved"] == 1
+            args = {
+                "request_id": ident,
+                "idempotency_key": "add-tracks-1",
+                "tracks": [{"artist": "Paper Sky", "title": "Night Light", "replaces": 2}],
+            }
+            other = await finish(http, await begin(http, "create status"), "create status")
+            denied = await call(http, other["access_token"], "add_playlist_tracks", args)
+            assert denied["error"]["code"] == "not_found"
+            grant = (await app.oauth.verify_token(token)).claims["grant_id"]
+            scopes = "UPDATE playlist_agent_tokens SET scopes=? WHERE id=?"
+            await app.oauth.store.execute(scopes, [json.dumps(["status"]), grant])
+            denied = await call(http, token, "add_playlist_tracks", args)
+            assert denied["error"]["code"] == "permission_required"
+            await app.oauth.store.execute(scopes, [json.dumps(["create", "status"]), grant])
+            added = await call(http, token, "add_playlist_tracks", args)
+            assert added["ok"] and added["added"], added
+            assert added["request"]["state"] == "queued"
+            assert len(await app.service.repo.runs(ident)) == 2
+            mix = await app.service.repo.mix(ident, "owner")
+            titles = [t["title"] for t in json.loads(mix["definition"])["tracks"]]
+            assert titles == ["First Lantern", "Night Light"]
+            replay = await call(http, token, "add_playlist_tracks", args)
+            assert replay["ok"] and not replay["added"]
+            bad = {**args, "idempotency_key": "add-tracks-2"}
+            bad["tracks"] = [{"artist": "A", "title": "B", "replaces": 2}] * 2
+            refused = await call(http, token, "add_playlist_tracks", bad)
+            assert not refused["ok"]
 
     anyio.run(run)

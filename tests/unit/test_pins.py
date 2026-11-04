@@ -140,6 +140,7 @@ async def test_a_seek_checks_its_own_file_also_when_the_link_is_identified_meanw
 
         registry = SimpleNamespace(
             enabled=enabled,
+            streaming=enabled,
             cooling=lambda _: False,
             succeeded=lambda *args: None,
             failed=lambda *args: None,
@@ -200,6 +201,7 @@ async def test_a_play_remembers_its_file_under_the_name_it_was_asked_by() -> Non
 
         registry = SimpleNamespace(
             enabled=enabled,
+            streaming=enabled,
             cooling=lambda _: False,
             succeeded=lambda *args: None,
             failed=lambda *args: None,

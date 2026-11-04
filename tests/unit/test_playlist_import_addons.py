@@ -22,7 +22,7 @@ from shijhon.catalog.addon import AddonCatalogs
 from shijhon.catalog.base import CatalogError, SearchResults
 from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import CatalogRef, CatalogRelease, CatalogTrack, ReleaseKind
-from shijhon.delivery.addon import Addon, catalog_key, tagged
+from shijhon.delivery.addon import Addon, addon_key, tagged
 from shijhon.placeholders.engine import MaterializeResult
 from shijhon.playlists.model import Definition, PlaylistError, Suggestion, Track
 from shijhon.playlists.resolve import Resolver
@@ -33,7 +33,7 @@ from tests.unit.test_addon_catalog import BASE, SERVICE, Listed, Registry, Serve
 from tests.unit.test_playlist_import_batches import Native, process_until
 from tests.unit.test_playlist_requests import connected, service_at
 
-KEY = catalog_key("Fake")
+KEY = addon_key("Fake")
 
 
 def wanted(artist: str, title: str, album: str = "") -> dict[str, Any]:
@@ -249,7 +249,7 @@ def test_the_catalogs_are_those_of_the_enabled_add_ons_that_declare_one(
             installed.registry.sources = list(installed.sources)
             assert [name for name, _ in await catalogs.catalogs()] == ["Fake"]
             # The add-on that is the catalog is asked as that one.
-            skipping = AddonCatalogs(installed.registry, skip="Fake")  # type: ignore[arg-type]
+            skipping = AddonCatalogs(installed.registry, skip=KEY)  # type: ignore[arg-type]
             assert await skipping.catalogs() == [] and await skipping.by_key(KEY) is None
         finally:
             await catalogs.aclose()

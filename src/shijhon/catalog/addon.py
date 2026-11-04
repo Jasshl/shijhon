@@ -69,19 +69,20 @@ is the item asked for.
 - *Clean and explicit versions*: none are flagged, so none are reported; twins by
   title, artist and length are still one song.
 
-**IDs.** The catalog's key is made from the add-on's configured name
-(``delivery.addon.catalog_key``), so the items of two add-ons never meet, nor an
-add-on's and another catalog's. The ID of an item the add-on listed is a tag of the
-service the add-on is (a digest of its manifest's ``id``, which it must have:
+**IDs.** The catalog's key is the add-on's own key, given when it was added and made from
+the name it was added under (``delivery.addon.addon_key``; stored with the add-on, never
+changed - a rename on the dashboard changes only the name), so the items of two add-ons
+never meet, nor an add-on's and another catalog's. The ID of an item the add-on listed is
+a tag of the service the add-on is (a digest of its manifest's ``id``, which it must have:
 ``delivery.addon.service_tag``), then the add-on's own ID,
 with every character that is no letter or digit written as a dot and two hexadecimal
-digits (``delivery.addon.item_id``). Naming another add-on, or renaming this one, is a
-switch to another catalog, with what that always means: what is in the
-library stays and plays - at this add-on by the IDs it gave, while it keeps its name and is
-the same service; elsewhere by ISRC or title, artist and length -, and the new catalog
+digits (``delivery.addon.item_id``). Naming another add-on is a switch to another
+catalog, with what that always means: what is in the
+library stays and plays - at this add-on by the IDs it gave, while it is the same add-on
+and the same service; elsewhere by ISRC or title, artist and length -, and the new catalog
 serves searches, artist pages and the albums not yet filled. An add-on pointed at another
-service under its old name keeps the key, but not the items: those of the service before
-are not found (their tag is another), and nothing of them is asked of the new one.
+service keeps the key, but not the items: those of the service before are not found (their
+tag is another), and nothing of them is asked of the new one.
 
 **Artwork** addresses are whatever hosts the add-on names. They are fetched through the
 public-addresses-only network policy, up to 10 MiB, by a client of their own (never with
@@ -143,7 +144,7 @@ from shijhon.delivery.addon import (
     AddonError,
     FullCatalog,
     Manifest,
-    catalog_key,
+    addon_key,
     item_id,
     number,
     own_id,
@@ -661,10 +662,13 @@ def _release_page_done(task: asyncio.Task[Any]) -> None:
 
 
 class AddonCatalog:
-    """The catalog interface over the add-on named ``name``. ``registry``: the
-    installation's add-ons (None: none here - every request fails as unavailable); the
-    add-on is looked up there for every request, so one added, changed or switched off in
-    the dashboard is the one asked from then on. ``http``: the client covers are fetched
+    """The catalog interface over the add-on named ``name`` - the one whose key is ``key``,
+    by default the key of the add-on of that name as the list was last read
+    (``SourceRegistry.key_of``; a name no add-on has is unresolved: only an add-on added
+    under it later is it, ``SourceRegistry.vacant_key``). ``registry``: the installation's
+    add-ons (None: none here - every request fails as unavailable); the add-on is looked up
+    there by its key for every request, so one changed, renamed or switched off in the
+    dashboard is the one asked from then on. ``http``: the client covers are fetched
     with (public addresses only), closed with the catalog; ``resolver``: how a cover's
     host is looked up before a turn at the add-on's limit is taken for it; ``urgency``:
     how urgent its requests are at the add-on's request limit when whoever asks says
@@ -687,11 +691,19 @@ class AddonCatalog:
         resolver: Resolver = system_resolver,
         urgency: int = pacing.QUEUED,
         identity: str = "",
+        key: str = "",
     ) -> None:
         self.name = name
+        # Its add-on: the one with that name as the list was last read - or, for a name no
+        # add-on has, one added under it later; never another add-on (``vacant_key``: a key
+        # nobody holds, so the catalog is unavailable until then).
+        resolved = key or (registry.key_of(name) if registry is not None else addon_key(name))
+        self.addon_key: str = resolved or (
+            registry.vacant_key(name) if registry is not None else addon_key(name)
+        )
         self.identity = Settings(identity=identity).identity
         self.key, _, self.region = (
-            self.identity.partition(".") if self.identity else (catalog_key(name), "", "")
+            self.identity.partition(".") if self.identity else (self.addon_key, "", "")
         )
         self._full = False
         self._client_artwork = False
@@ -723,7 +735,8 @@ class AddonCatalog:
         if self.registry is None:
             raise CatalogError("unavailable", "no add-ons here")
         for source in await self.registry.enabled():
-            if source.name == self.name:
+            if source.key == self.addon_key:
+                self.name = source.name  # (renamed meanwhile: its name now)
                 return source
         raise CatalogError("unavailable", NOT_ENABLED)
 
@@ -1247,12 +1260,17 @@ class AddonCatalog:
         address = unmarked(self.key, url)
         if address is None:
             raise UnrecognizedArtwork()
+        mine: pacing.AddonPace | None = None  # this add-on's own, at its own origin
+        home: pacing.Origin | None = None
         if self.registry is not None:
-            await self.registry.enabled()  # (the add-ons' own addresses are known)
+            # (The add-ons' own addresses are known.)
+            for source in await self.registry.enabled():
+                if source.key == self.addon_key:  # (its add-on, also renamed since)
+                    mine, home = source.pace, pacing.origin(str(source.addon.base))
         at: list[pacing.AddonPace | None] = [None]  # the limit of the add-on the hop is at
 
         async def turn(hop: httpx.URL) -> None:
-            at[0] = await self._own_pace(hop)
+            at[0] = await self._own_pace(hop, mine if pacing.origin(str(hop)) == home else None)
 
         try:
             with anyio.fail_after(self.timeout):
@@ -1270,11 +1288,15 @@ class AddonCatalog:
                 raise CatalogError("invalid", NOT_PUBLIC) from None
             raise CatalogError("unavailable", f"artwork: {type(exc).__name__}") from None
 
-    async def _own_pace(self, url: httpx.URL) -> pacing.AddonPace | None:
+    async def _own_pace(
+        self, url: httpx.URL, mine: pacing.AddonPace | None = None
+    ) -> pacing.AddonPace | None:
         """A turn at an add-on's request limit for a cover request that goes to an add-on's
-        own address (covers on image hosts take none): as background work, after the views
-        - and only for an address covers are fetched from at all (a public one: an add-on
-        on this machine or network spends nothing on covers that are never fetched)."""
+        own address (covers on image hosts take none) - ``mine``, this add-on's, at its own
+        origin; at another add-on's address that address's -: as background work, after the
+        views - and only for an address covers are fetched from at all (a public one: an
+        add-on on this machine or network spends nothing on covers that are never
+        fetched)."""
         if self.registry is None:
             return None
         pace = self.registry.paces.own(str(url))
@@ -1286,6 +1308,7 @@ class AddonCatalog:
             found = []
         if not any(allowed(ip, Reach.PUBLIC) for ip in found):
             raise CatalogError("invalid", NOT_PUBLIC)
+        pace = mine or pace
         with pacing.urgent(pacing.current() or pacing.Urgency(pacing.WARM)):
             await pace.request()
         return pace
@@ -1319,9 +1342,9 @@ class AddonCatalogs:
     ``catalog``), in the add-ons' order. The list of add-ons is read for every question,
     so an add-on added, switched on or off in the dashboard counts from then on, without a
     restart. Each is an ``AddonCatalog`` behind a small cache, built when first needed and
-    kept by the add-on's name (what its answers showed is remembered: the protocol has no
+    kept by the add-on's key (what its answers showed is remembered: the protocol has no
     request for one song); its requests are background work at the add-on's request
-    limit. ``skip``: the name of the add-on that is the installation's own catalog;
+    limit. ``skip``: the key of the add-on that is the installation's own catalog;
     that add-on is asked as the configured catalog."""
 
     def __init__(
@@ -1339,15 +1362,17 @@ class AddonCatalogs:
         self.ttl = ttl
         self.resolver = resolver
         self._built: dict[str, CachedCatalog] = {}
+        self._names: dict[str, str] = {}  # the add-ons' names by key, as last asked
         self._closing: dict[asyncio.Task[None], CachedCatalog] = {}
         self._timeouts: dict[str, float] = {}
 
     def _catalog(self, source: Source) -> CachedCatalog:
         # A slow add-on's own time budget (``budget_seconds``) bounds its requests too.
-        name, timeout = source.name, max(self.timeout, source.budget or 0)
-        built = self._built.get(name)
-        if built is not None and self._timeouts.get(name) != timeout:
-            closing = asyncio.create_task(self._close_after(built, self._timeouts[name]))
+        key, timeout = source.key, max(self.timeout, source.budget or 0)
+        self._names[key] = source.name
+        built = self._built.get(key)
+        if built is not None and self._timeouts.get(key) != timeout:
+            closing = asyncio.create_task(self._close_after(built, self._timeouts[key]))
             self._closing[closing] = built
             closing.add_done_callback(lambda task: self._closing.pop(task, None))
             built = None
@@ -1356,16 +1381,17 @@ class AddonCatalogs:
                 Reach.PUBLIC, timeout=httpx.Timeout(timeout), resolver=self.resolver
             )
             inner = AddonCatalog(
-                name,
+                source.name,
                 self.registry,
                 http,
                 timeout=timeout,
                 ttl=self.ttl,
                 resolver=self.resolver,
                 urgency=pacing.WARM,
+                key=key,
             )
-            self._timeouts[name] = timeout
-            built = self._built[name] = CachedCatalog(
+            self._timeouts[key] = timeout
+            built = self._built[key] = CachedCatalog(
                 inner, ttl=self.ttl, maxsize=ANSWERS, remember=0, index=ArtworkIndex(SONGS)
             )
         return built
@@ -1382,7 +1408,7 @@ class AddonCatalogs:
             return []
         found = []
         for source in await self.registry.enabled():
-            if source.name == self.skip:
+            if source.key == self.skip:
                 continue
             if source.name in (unanswered or ()) or source.name in (unreadable or ()):
                 continue
@@ -1403,19 +1429,19 @@ class AddonCatalogs:
         return found
 
     async def by_key(self, key: str) -> CachedCatalog | None:
-        """The catalog whose items have the key ``key`` (``catalog_key``): that of the
-        enabled add-on of that name; None when no such add-on is enabled now."""
+        """The catalog whose items have the key ``key``: that of the enabled add-on with
+        that key (``addon_key``); None when no such add-on is enabled now."""
         if self.registry is None:
             return None
         for source in await self.registry.enabled():
-            if source.name != self.skip and catalog_key(source.name) == key:
+            if source.key != self.skip and source.key == key:
                 return self._catalog(source)
         return None
 
     def name(self, key: str) -> str | None:
         """The name of the add-on whose catalog has the key ``key`` (one asked since the
-        start)."""
-        return next((name for name, built in self._built.items() if built.key == key), None)
+        start), as it was when last asked."""
+        return self._names.get(key) if key in self._built else None
 
     async def _close_after(self, catalog: CachedCatalog, grace: float) -> None:
         # Callers may still be using this client with its old request timeout.
@@ -1449,7 +1475,8 @@ class Settings(BaseModel):
     """The kind's own setting in ``[catalog]``."""
 
     # The name of the add-on to take the catalog from, as the Add-ons page (or
-    # ``[[addons]]``) has it.
+    # ``[[addons]]``) has it (a rename there changes it too; the catalog is the add-on's
+    # key, which a rename keeps).
     addon: str = Field(default="", max_length=200)
     identity: str = Field(default="", max_length=49)
 
@@ -1507,7 +1534,8 @@ adapter = Adapter(
             "The name of the add-on to take the catalog from, as the Add-ons page has it."
             " It needs a catalog of its own: a search, albums and artists (not every"
             " add-on has one). Its requests go to that add-on like its audio requests: with"
-            " its settings, and at its request limit. Another name is another catalog.",
+            " its settings, and at its request limit. Another add-on is another catalog;"
+            " renaming this one on the Add-ons page keeps its catalog.",
             max_length=200,
             choices="sources",
         ),

@@ -22,6 +22,13 @@ enable personal context to work around a missing setting.
 - For agent curation, choose the exact requested count and ordered recordings,
   then submit artist/title plus album/version where needed. Preserve the original
   constraints in `prompt`. Explicit tracks use no server model and cannot recur.
+  Shijhon publishes the tracks that resolve (the original release when several
+  versions match) and leaves out the rest; status `tracks` gives each one's outcome
+  and, for a left-out track, its `reason` and `candidates`. Close the gaps with
+  `add_playlist_tracks` on the same request, never a new request: send the
+  candidate's exact title or album when it is the recording you meant, or a fitting
+  replacement within the user's constraints, with `replaces` set to the left-out
+  position. Set `require_all: true` only when the user wants all or nothing.
 - Read history or library only when the user asks to use that source for this
   task, through `get_listening_history`, `search_library` or `get_native_playlists`.
   Permission alone is not consent. Library membership is not listening evidence.
@@ -50,15 +57,18 @@ user how many songs you could not check. When Shijhon's own AI describes the pla
 sound-suggested songs join only if you set `use_library`.
 
 Preserve requested counts, order, versions, artist limits and exclusions. Choose
-a short musical name unless the user supplies one. Report insufficient or
-ambiguous recordings instead of substituting versions or relaxing constraints.
+a short musical name unless the user supplies one. Never relax constraints to fill
+gaps. Tell the user which tracks were left out and why, and which you replaced with
+what.
 For exact payload fields and the optional HTTP client, consult
 [the request contract](references/api.md).
 
 A request to create a playlist authorizes its native publication. Retain the exact
 input, one unique idempotency key and the returned request ID until completion.
 After a timeout or uncertain response, check `get_playlist_request`, or replay the
-same input and key to recover its ID. Never create again under a new key merely
+same input and key to recover its ID. A `temporarily_unavailable` answer that says
+nothing was changed means another playlist was being published: send the same call
+again a minute later, with the same key. Never create again under a new key merely
 because the response was lost. A conflict requires recovering the original input.
 After diagnosing a recoverable failure, use `retry_playlist_request` at most once
 and recheck status. Report pending or uncertain work honestly; only `published`

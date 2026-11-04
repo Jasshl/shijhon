@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from shijhon.catalog.base import SearchResults
-from shijhon.delivery.addon import catalog_key, tagged
+from shijhon.delivery.addon import addon_key, tagged
 from shijhon.delivery.netpolicy import Reach
 from tests.acceptance.test_R_playlist_imports import submit
 from tests.acceptance.test_R_playlists import SONGS, connected_admin, wait_state
@@ -29,7 +29,7 @@ from tests.harness.navidrome import ADMIN_PASSWORD, ADMIN_USER
 from tests.harness.replay import Replay
 
 NAME = "Fake"
-KEY = catalog_key(NAME)
+KEY = addon_key(NAME)
 SERVICE = "test.fake.fake"  # the fake add-on's manifest ID
 FOUND = f"Found in the catalog of add-on {NAME}"
 

@@ -238,6 +238,7 @@ async def test_only_audio_sent_to_a_client_makes_a_song_played() -> None:
 
         registry = SimpleNamespace(
             enabled=enabled,
+            streaming=enabled,
             cooling=lambda _: False,
             succeeded=lambda *a: None,
             failed=lambda *a: None,

@@ -24,7 +24,7 @@ import pytest
 
 from shijhon.catalog.addon import NO_CATALOG, AddonCatalog
 from shijhon.catalog.cache import CachedCatalog
-from shijhon.delivery.addon import catalog_key, tagged
+from shijhon.delivery.addon import addon_key, tagged
 from shijhon.delivery.pacing import Limits
 from tests.acceptance.test_J_contract import problems
 from tests.acceptance.test_J_xml import both
@@ -40,7 +40,7 @@ from tests.harness.navidrome import ADMIN_PASSWORD, ADMIN_USER
 from tests.harness.subsonic import SubsonicClient
 
 NAME = "Fake"
-KEY = catalog_key(NAME)
+KEY = addon_key(NAME)
 SERVICE = "test.fake.fake"  # the fake add-on's manifest ID
 HOST = {"host": "music.test"}
 # The library has one album of an artist the add-on's catalog has too.
@@ -554,7 +554,7 @@ def test_an_add_on_without_a_catalog_is_refused_with_the_reason(
                 assert client.ok("search3", {"query": "room"})["searchResult3"] == own
             assert any(NO_CATALOG in line for line in lines)
             assert {r["endpoint"] for r in plain.requests()} == {"manifest"}  # never asked
-            album = f"sh.al.{catalog_key('Audio only')}.{tagged('any', 'x')}"
+            album = f"sh.al.{addon_key('Audio only')}.{tagged('any', 'x')}"
             code = client.error_code("getAlbum", {"id": album})
             assert code == 0
         finally:
@@ -584,6 +584,60 @@ def test_the_dashboard_names_the_add_on_and_checks_it(
             browser.post("catalog/check", {"csrf": browser.csrf()})
         assert "Answering, checked" in browser.get("catalog").text
     finally:
+        browser.close()
+
+
+def test_a_renamed_add_on_keeps_its_catalog(
+    world: DeliveryWorld, client: SubsonicClient, main: FakeAddon
+) -> None:
+    """A rename on the dashboard changes the name people see: the catalog setting follows
+    it at once (saved, and in use without a restart), and the catalog is the same - its
+    IDs, and the add-on's own track IDs, still resolve."""
+    browser = Browser(world.server.base_url)
+    sources = world.services.sources
+    (fake,) = [s for s in world.server.call(sources.stored) if s.name == NAME]
+    action = f"addons/{fake.id}/settings"
+
+    def saved() -> dict[str, str]:
+        async def read() -> dict[str, str]:
+            rows = await world.services.store.fetchall(
+                "SELECT key, value FROM saved_settings WHERE section = 'catalog'"
+            )
+            return {row["key"]: row["value"] for row in rows}
+
+        return world.server.call(read)
+
+    try:
+        assert browser.sign_in(ADMIN_USER, ADMIN_PASSWORD).status_code == 303
+        assert browser.form("addons", action)["name"] == NAME
+        taken = browser.submit("addons", {"name": "Other"}, action)
+        assert taken.status_code == 400 and "Another add-on has this name." in taken.text
+        renamed = browser.submit("addons", {"name": "Fake Renamed"}, action)
+        assert renamed.status_code == 303
+        page = html.unescape(browser.get("addons").text)
+        assert "Fake renamed to Fake Renamed." in page and "Restart needed" not in page
+        assert saved() == {"addon": '"Fake Renamed"', "(adapter)": '"addon"'}
+        (stored,) = [s for s in world.server.call(sources.stored) if s.id == fake.id]
+        assert (stored.name, stored.key) == ("Fake Renamed", KEY)
+        assert '<option value="Fake Renamed" selected>' in browser.get("catalog").text
+        diagnostics = html.unescape(browser.get("diagnostics").text)
+        assert "An add-on's catalog: Fake Renamed" in diagnostics
+        # The same catalog: its items keep their IDs, and play by the add-on's own ID.
+        forget(world)
+        found = client.ok("search3", {"query": "glass rivers"})["searchResult3"]
+        assert ident("tr", "t102") in [song["id"] for song in found.get("song", [])]
+        audio = world.audio("renamed")
+        main.add(FakeTrack(isrc="ZZSHA0000102", audio=audio, track_id="lib:t102"))
+        main.clear()
+        played = client.request("stream", {"id": ident("tr", "t102")})
+        assert played.status_code == 200 and played.content == audio.read_bytes()
+        assert [r["key"] for r in main.requests("stream")] == ["lib:t102"]
+        assert main.requests("resolve-isrc") == []
+    finally:
+        back = browser.submit("addons", {"name": NAME}, action)
+        assert back.status_code == 303
+        # The configuration file's name again: nothing of it stays saved.
+        assert saved() == {}
         browser.close()
 
 

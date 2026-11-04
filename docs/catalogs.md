@@ -52,10 +52,11 @@ addon = "My add-on"       # its name, as on the Add-ons page or in [[addons]]
 
 - Catalog requests count against that add-on's [limits](add-ons.md#limits): a search, an
   album and an artist page take one request each, plus any release pages.
-- Without a confirmed identity, Shijhon keeps what it learned under the add-on's name.
-  Renaming the add-on, or choosing another one, starts over: what is in your library stays and plays,
-  and albums not filled yet are matched again. If you set an add-on up so that its
-  catalog changes, rename it too.
+- Without a confirmed identity, Shijhon keeps what it learned under the add-on's key, which
+  the add-on gets when it is added. Renaming the add-on on the Add-ons page keeps the key,
+  and changes `addon` too. Choosing another add-on starts over: what is in your library
+  stays and plays, and albums not filled yet are matched again. If you set an add-on up
+  so that its catalog changes, remove it and add it again under another name.
 - An add-on with the optional [full-catalog extension](reference/add-on-protocol.md#the-full-catalog-extension)
   can supply disc and track numbers, release kinds, version flags, song and ISRC
   lookups, and paged discographies. Add-ons without it have the limits in
@@ -89,7 +90,7 @@ claim is read, catalog requests fail safely and views answer from the library un
 you check and confirm the identity on the Catalog page. Nothing is re-keyed silently;
 changes between checks cannot be detected immediately. Library music stays in place.
 
-Leaving the identity empty keeps today's name-based items. The page offers to confirm
+Leaving the identity empty keeps the items under the add-on's key. The page offers to confirm
 any declared identity. Confirming later changes the catalog key, so matches and saved
 catalog lists start over. Library music stays and plays. Artwork addresses reach apps
 only if the add-on opts in, and only for public HTTPS hosts; other artwork uses cover IDs.

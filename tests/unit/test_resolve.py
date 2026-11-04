@@ -284,11 +284,15 @@ async def test_an_add_on_without_resolve_is_searched_by_artist_and_title() -> No
 
 @pytest.mark.anyio
 async def test_an_add_on_with_resolve_is_never_searched() -> None:
-    for resources in (["resolve", "search", "stream"], ["isrc", "resolve", "search", "catalog"]):
+    for resources in (["resolve", "search", "stream"], ["isrc", "resolve", "search", "stream"]):
         server = Searchable(resources, [_track()])
         assert (await _find(server))[0] is None
         assert "search" not in server.endpoints()
         assert "resolve" in server.endpoints()
+    # An add-on for its catalog only (no ``stream``) is not looked up at all.
+    server = Searchable(["isrc", "resolve", "search", "catalog"], [_track()])
+    assert (await _find(server))[0] is None
+    assert server.endpoints() == ["manifest.json"]
 
 
 @pytest.mark.anyio
