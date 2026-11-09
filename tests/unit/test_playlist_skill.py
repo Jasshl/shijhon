@@ -160,7 +160,6 @@ def test_automatic_prompt_name_preserves_defaults_and_explicit_names(skill: Modu
         {"prompt": "x\ud800"},
         {"count": 1, "tracks": [{"artist": "A", "title": "T"}], "use_history": True},
         {"count": 1, "tracks": [{"artist": "A", "title": "T"}], "use_library": True},
-        {"count": 2, "tracks": [{"artist": "A", "title": "T"}]},
         {
             "count": 1,
             "tracks": [{"artist": "A", "title": "T"}],
@@ -705,3 +704,11 @@ def test_require_all_is_accepted_only_as_a_boolean_for_explicit_tracks(skill: Mo
     ):
         with pytest.raises(skill.ClientError):
             skill.validate_create(bad)
+
+
+def test_explicit_tracks_are_their_own_count_in_the_client(skill: ModuleType) -> None:
+    tracks = [{"artist": "A", "title": "One"}, {"artist": "B", "title": "Two"}]
+    assert skill.validate_create({"name": "N", "tracks": tracks})["count"] == 2
+    assert skill.validate_create({"name": "N", "tracks": tracks, "count": 30})["count"] == 2
+    assert skill.validate_create({"name": "N", "tracks": tracks, "count": 2})["count"] == 2
+    assert skill.validate_create({"prompt": "quiet"})["count"] == 30

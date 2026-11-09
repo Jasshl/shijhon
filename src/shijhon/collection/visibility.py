@@ -51,6 +51,8 @@ FAILURES = (
 # the whole library at once, and like apps it does not ask again after an answer that says
 # the view is being prepared.
 REAL_AUDIO_WAIT_SECONDS = 30.0
+# The rows of a search's first look at Navidrome, per kind, before a full source page.
+FIRST_SEARCH_ROWS = 100
 
 
 class Collections(Protocol):
@@ -307,7 +309,7 @@ class Visibility:
             return None  # no supplied credentials: Navidrome decides the answer
         real = self.real_audio(verdict.username)
         try:
-            principal = await self.access.verify(verdict.username)
+            principal = await self.access.grants(verdict.username)
             if not principal.can_access(self.access.navidrome.library_id):
                 return None
             if self.learn is not None and not real:
@@ -417,7 +419,7 @@ class Visibility:
         ``FAILURES`` when that cannot be told."""
         if not idents:
             return {}
-        principal = await self.access.verify(caller.username)
+        principal = await self.access.grants(caller.username)
         if not principal.can_access(self.access.navidrome.library_id):
             raise AccessDenied
         binding = await self.binding(principal)
@@ -674,6 +676,21 @@ class Visibility:
         root[container] = meta
         return response(call, 200, root, total=page.total, original_songs=page.original_songs)
 
+    async def _holds(
+        self,
+        binding: Binding,
+        mode: Selection | None,
+        kind: str,
+        first: SourcePage,
+        wanted: int | None,
+    ) -> bool:
+        """Whether a search's first rows hold ``wanted`` of what the selection shows: nothing
+        further on could come before them."""
+        if wanted is None or wanted > len(first.rows):
+            return False
+        ids = [str(row["id"]) for row in first.rows]
+        return len(await self.index.shown(binding, mode, kind, ids)) >= wanted
+
     async def _search(
         self,
         call: RestCall,
@@ -747,7 +764,11 @@ class Visibility:
                     offset = number(call.get(offset_name), 0)
                     reader: Callable[[int, int], Awaitable[SourcePage]] = fetch
                     if lane and not await self.index.has_ready(binding, query):
-                        first = await fetch(0, self.index.budgets.page_size)
+                        # Enough for most searches, which ask for a few dozen: Navidrome's
+                        # answer is read and parsed whole.
+                        full = self.index.budgets.page_size
+                        asked = min(full, max(FIRST_SEARCH_ROWS, (offset + count) * 3))
+                        first = await fetch(0, asked)
                         if not first.rows:
                             # This is the complete caller-authorized result, not a
                             # filtered first page. Empty typeahead/burst reads need no
@@ -755,26 +776,26 @@ class Visibility:
                             # required generation.
                             root = dict((first.envelope or {}).get("response") or {})
                             continue
+
                         # Less than a page is the complete result too, and a first page
                         # with all this request asks for of the selection is as good: the
                         # rest could not come before it. The selection applies to it
                         # directly, in this search's one snapshot. Nothing waits for a
                         # background job or is kept, and the lane's previous build goes on
                         # for the requests waiting for it (``QueryIndex.moved_on``).
-                        whole = len(first.rows) < self.index.budgets.page_size and first.total in (
+                        full_look = len(first.rows) == asked
+                        wanted = offset + count if first_pages else None
+                        holds = full_look and await self._holds(binding, mode, kind, first, wanted)
+                        if full_look and asked < full and not holds:
+                            first, asked = await fetch(0, full), full
+                            holds = len(first.rows) == asked and await self._holds(
+                                binding, mode, kind, first, wanted
+                            )
+                        whole = len(first.rows) < asked and first.total in (
                             None,
                             len(first.rows),
                         )
-                        if whole or (
-                            first_pages
-                            and offset + count <= len(first.rows)
-                            and len(
-                                await self.index.shown(
-                                    binding, mode, kind, [str(row["id"]) for row in first.rows]
-                                )
-                            )
-                            >= offset + count
-                        ):
+                        if whole or holds:
                             await self.index.moved_on(binding, query, lane)
                             if not whole:
                                 partial.add(len(requests))

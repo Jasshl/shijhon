@@ -384,19 +384,19 @@ async def test_import_absence_never_uses_unbound_or_incomplete_negative_evidence
 
 
 async def test_music_gate_proves_credentials_before_current_grants_and_fails_closed():
-    access = SimpleNamespace(verify=AsyncMock(return_value=OWNER))
+    access = SimpleNamespace(grants=AsyncMock(return_value=OWNER))
     gate = MusicGate(access, 1)
     call = RestCall.build("getAlbumList2", "GET", b"/rest/getAlbumList2", b"", [], None)
     other = RestCall.build("getAlbumList2", "GET", b"/rest/x", b"musicFolderId=2", [], None)
     ctx = SimpleNamespace(caller=AsyncMock(return_value=None), kept={})
     assert not await gate(call, ctx)
-    access.verify.assert_not_awaited()
+    access.grants.assert_not_awaited()
     ctx.caller.return_value = SimpleNamespace(username="Listener")
     assert await gate(call, ctx)
     assert not await gate(other, ctx)  # another library's list: Navidrome's own
-    access.verify.return_value = Principal("owner-a", "Listener", False, frozenset({2}))
+    access.grants.return_value = Principal("owner-a", "Listener", False, frozenset({2}))
     assert not await gate(call, ctx)
-    access.verify.side_effect = AccessUnavailable
+    access.grants.side_effect = AccessUnavailable
     with pytest.raises(CheckFailed):
         await gate(call, ctx)
 

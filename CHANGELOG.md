@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1
+
+- Album pages, artist pages and searches take less work per request, so an app opening many
+  at once waits less. A request asks Navidrome for an account's library access once, and
+  requests at the same moment share the question. Access changes still count at once.
+- A search reads fewer rows from Navidrome when the first ones hold what was asked for.
+- The answer to an agent's change waits a few seconds for the result and says what to call
+  next. It no longer shows the old songs as if they were the result.
+- An error about too many tracks by one artist names the artists and how to allow more.
+- `import_playlist` says that matching runs in the background and when its review key is
+  ready.
+- A live playlist reads as published after a preview of a change to it is discarded.
+- Discarding a preview of added tracks gives the playlist back the tracks it had. They used
+  to come back with the next addition.
+
 ## 0.5.0
 
 - Library lists and searches stay fast as a library grows, and one app's large request no

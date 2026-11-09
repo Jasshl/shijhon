@@ -253,10 +253,27 @@ class Repository:
         return ident
 
     async def update(self, run: str, state: str, data: dict[str, Any], error: str = "") -> None:
-        await self.store.execute(
-            "UPDATE playlist_runs SET state=?,data=?,error=? WHERE id=?",
-            [state, await anyio.to_thread.run_sync(json.dumps, data), error, run],
-        )
+        encoded = await anyio.to_thread.run_sync(json.dumps, data)
+        before = data.get("addition", {}).get("before") if state == "discarded" else None
+        if not before:
+            await self.store.execute(
+                "UPDATE playlist_runs SET state=?,data=?,error=? WHERE id=?",
+                [state, encoded, error, run],
+            )
+            return
+        # Added tracks are saved when they are asked for: discarding them gives the
+        # playlist back the tracks it had, so the next addition does not bring them.
+        # Only those: anything else changed since stays.
+        async with self.store.transaction() as db:
+            await db.execute(
+                "UPDATE playlist_runs SET state=?,data=?,error=? WHERE id=?",
+                [state, encoded, error, run],
+            )
+            await db.execute(
+                "UPDATE playlist_mixes SET definition=json_set(definition,'$.tracks',json(?),"
+                "'$.count',?) WHERE id=(SELECT mix FROM playlist_runs WHERE id=?)",
+                [json.dumps(before["tracks"]), before["count"], run],
+            )
 
     async def pause(self, mix: str) -> None:
         """Revoke pending refresh enables together with the mix's schedule."""

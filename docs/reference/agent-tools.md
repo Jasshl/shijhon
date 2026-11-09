@@ -65,6 +65,15 @@ Configured server AI can still fail at runtime.
   repeating the songs of a playlist found by name. The AI sees reference songs with
   their facts, and the request's status shows the references, the goal, each song's
   fit and the facts coverage.
+- A change is durable as soon as a tool accepts it, and a worker on the server carries it
+  out. The tool's answer waits a few seconds for that work. If it finished, `state` is
+  final. If it did not, `state` is `queued`, `generating` or `publishing`, the answer leaves
+  out `published_songs`, because those are still the songs from before the change, and
+  `next` says what to call. `playlist_id` is empty until a first publication. The same `next`
+  appears when a preview waits or a run failed.
+- With explicit tracks, `count` is ignored and the number of tracks is used. `max_per_artist`
+  defaults to 2 and goes up to 10. A list over the limit is refused with the artists named
+  and how to allow them.
 - Daily/weekly described playlists need saved server AI and explicitly saved
   refresh instructions. Shijhon's durable worker runs them after the agent
   disconnects. A remote agent does not need to stay connected or supply a timer.
@@ -73,7 +82,11 @@ Configured server AI can still fail at runtime.
   `get_playlist_request` reads one, with its brief and the songs the user removed or
   added in their apps. Its songs need the library permission when another agent or the
   dashboard made the playlist, and the history permission when it was made from
-  listening history. `retry_playlist_request` retries a failed run.
+  listening history. `retry_playlist_request` retries a failed run. In both, `live` says
+  whether the playlist has been published. While a run waits or after one failed, `state`
+  and `selected` describe that run, and `brief` and `published_songs` what is live. A
+  discarded run changes nothing, so a live playlist then reads as `published`; the run
+  appears as `discarded_run` in `get_playlist_request` and as `latest_run_state` in the list.
 - `replace_playlist_tracks` publishes a new ordered list (up to 100 tracks) under the
   same playlist, resolved like `create_playlist`'s tracks. Songs the user removed stay
   out (`removed_by_user`). On a playlist the agent curated, `brief` updates what it is
@@ -90,10 +103,13 @@ Configured server AI can still fail at runtime.
 - `create_discovery_mix` and `update_discovery_mix` make and change discovery mixes. They
   need the history permission and a connected Last.fm profile.
 - `import_playlist` imports pasted lines or structured entries through the same matching
-  as the dashboard's import, with the library permission. `get_playlist_import` reads
-  the matches, and `review_playlist_import` chooses among an entry's candidates,
-  publishes with a confirmed number of missing entries, and rechecks or completes them
-  later.
+  as the dashboard's import, with the library permission. Matching runs in the background
+  and can take a while. `get_playlist_import` reads the matches and shows `checked` of
+  `total`, and its `review_key` is empty until `state` is `preview`. `review_playlist_import`
+  chooses among an entry's candidates, publishes with a confirmed number of missing entries,
+  and rechecks or completes them later. The key changes after each choice, so read it again
+  before the next action. An entry that nothing matched while an add-on did not answer says
+  so, and can be published without by counting it in `missing_count`, or asked about again.
 - `prepare_playlist_audio` snapshots an owned native playlist and queues server
   audio preparation. It needs separate optional `downloads` permission and an
   explicit user request. A native/library connection is sufficient; AI and Last.fm

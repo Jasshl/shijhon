@@ -24,7 +24,7 @@ class MusicGate:
         if folders and str(self.library_id) not in folders:
             return False
         try:
-            principal = await self.access.verify(caller.username)
+            principal = await self.access.grants(caller.username)
         except AccessDenied:
             return False
         except AccessUnavailable:

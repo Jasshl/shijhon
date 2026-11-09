@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import base64
 import json
+import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -17,6 +19,14 @@ import anyio
 import httpx
 
 from shijhon.navidrome.client import NavidromeError, NavidromeService
+
+# An account's grants as this request just read them, for its next steps. A request can wait
+# long between steps, for a catalog, and tasks it starts inherit this: it holds for no longer
+# than a question to Navidrome can take under load, so a revocation is not missed.
+REQUEST_SECONDS = 0.25
+_THIS_REQUEST: ContextVar[tuple[str, float, Principal] | None] = ContextVar(
+    "shijhon_request_grants", default=None
+)
 
 
 class AccessDenied(Exception):
@@ -38,9 +48,46 @@ class Principal:
         return library_id in self.library_ids
 
 
+class _Reading:
+    """A question about an account's grants on its way to Navidrome."""
+
+    def __init__(self) -> None:
+        self.done = anyio.Event()
+        self.principal: Principal | None = None
+
+
 class AccessService:
     def __init__(self, navidrome: NavidromeService) -> None:
         self.navidrome = navidrome
+        self._reading: dict[str, _Reading] = {}
+
+    async def grants(self, username: str) -> Principal:
+        """``verify`` for a request whose credentials were just accepted, asked as little as
+        possible: a request's steps right after each other ask once, and requests that come
+        while the same question is on its way share the answer. An app opening sends dozens
+        at once, each asking Navidrome twice per step. The answer is current: nothing is kept
+        for later requests, and anything else that decides on access uses ``verify``."""
+        # The name exactly as accepted: what folds alike in Python can be two accounts.
+        known = _THIS_REQUEST.get()
+        if (
+            known is not None
+            and known[0] == username
+            and time.monotonic() - known[1] < REQUEST_SECONDS
+        ):
+            return known[2]
+        reading = self._reading.get(username)
+        if reading is not None:
+            await reading.done.wait()
+            principal = reading.principal or await self.verify(username)
+        else:
+            reading = self._reading[username] = _Reading()
+            try:
+                principal = reading.principal = await self.verify(username)
+            finally:
+                del self._reading[username]
+                reading.done.set()
+        _THIS_REQUEST.set((username, time.monotonic(), principal))
+        return principal
 
     async def verify(self, username: str, *, expected_user_id: str | None = None) -> Principal:
         """Resolve an authenticated name and current grants; never adopt a new owner ID.

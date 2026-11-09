@@ -15,6 +15,7 @@ import pytest
 from defusedxml import ElementTree
 
 from shijhon.collection.policy import default_profile_id
+from shijhon.collection.visibility import Visibility
 from shijhon.proxy.params import RestCall
 from shijhon.views.answers import library_answer
 from tests.conftest import NavidromeFactory
@@ -630,6 +631,47 @@ def test_a_broad_search_answers_from_a_first_page_with_what_it_asks_for(world: W
         assert len(built) == 1
     finally:
         index._build = original_build  # type: ignore[method-assign]
+        index.budgets = budgets
+        client.close()
+        native.close()
+
+
+def test_a_search_looks_at_few_rows_first_and_answers_as_from_all_of_them(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Navidrome's answer to a search is read whole: what the app asks for is usually in far
+    fewer rows than a source page. Where it is not, the answer is the same."""
+    index = world.app.index
+    budgets = index.budgets
+    client = world.nd.client("second", "fixture-password").with_base(world.proxy.base_url)
+    native = world.nd.client("second", "fixture-password")
+    originals = world.app.originals
+    asked: list[int] = []
+    source = Visibility._source
+
+    async def counted(self: Visibility, *args: Any) -> Any:
+        asked.append(args[-1])
+        return await source(self, *args)
+
+    monkeypatch.setattr(Visibility, "_source", counted)
+    monkeypatch.setattr("shijhon.collection.visibility.FIRST_SEARCH_ROWS", 3)
+    index.budgets = replace(budgets, page_size=7)
+    try:
+        # Each search its own, not prepared by another test or by the one before it.
+        for query, wanted in (("Invented Artist 0", 1), ("Invented Artist 1", 2)):
+            listed = native.ok(
+                "search3", {"query": query, "artistCount": 0, "albumCount": 0, "songCount": 500}
+            )["searchResult3"]["song"]
+            every = [song["id"] for song in listed if song["id"] in originals]
+            assert len(every) >= wanted
+            asked.clear()
+            answer = client.ok(
+                "search3",
+                {"query": query, "artistCount": 0, "albumCount": 0, "songCount": wanted},
+            )["searchResult3"]
+            assert [song["id"] for song in answer.get("song", [])] == every[:wanted]
+            assert asked[0] == min(7, max(3, wanted * 3))
+    finally:
         index.budgets = budgets
         client.close()
         native.close()

@@ -567,6 +567,8 @@ class Imports:
             "choices": [{"track": s.model_dump(), "path": ""} for s in ambiguous[:MAX_CHOICES]],
             "overflow": len(ambiguous) > MAX_CHOICES,
             "note": note,
+            # Who could not be asked about an entry nothing else matched.
+            **({"unanswered": sorted(unanswered)} if unanswered and not found else {}),
         }
 
     def addon(self, ident: str) -> str | None:

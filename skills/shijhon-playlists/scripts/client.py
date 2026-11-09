@@ -85,6 +85,8 @@ def validate_create(value: object) -> dict:
     ):
         raise ClientError("Invalid creation values; see references/api.md.")
     body = defaults | value
+    if isinstance(body["tracks"], list) and body["tracks"]:
+        body["count"] = len(body["tracks"])  # explicit tracks are their own count
     if (
         not _text(body["name"], 100, required=body["name"] != "")
         or not _text(body["prompt"], 2000)
@@ -120,18 +122,17 @@ def validate_create(value: object) -> dict:
             raise ClientError("References work with a prompt, not with explicit tracks.")
         if (
             not body["name"]
-            or len(tracks) != body["count"]
             or body["cadence"] != "manual"
             or body["use_history"]
             or body["use_library"]
             or body["save_instructions"]
         ):
             raise ClientError(
-                "Explicit tracks require count matching their length, manual cadence "
-                "both contexts off and no saved refresh instructions."
+                "Explicit tracks require a name, manual cadence, both contexts off and no "
+                "saved refresh instructions."
             )
     elif not body["prompt"].strip():
-        raise ClientError("Supply a nonempty prompt or an explicit selection matching count.")
+        raise ClientError("Supply a nonempty prompt or an explicit selection.")
     if body["cadence"] != "manual" and (
         not body["save_instructions"] or not body["prompt"].strip()
     ):

@@ -5,12 +5,21 @@ from __future__ import annotations
 import base64
 import json
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
+import anyio
 import httpx
 import pytest
 
-from shijhon.access import AccessDenied, AccessService, AccessUnavailable
+from shijhon.access import (
+    REQUEST_SECONDS,
+    AccessDenied,
+    AccessService,
+    AccessUnavailable,
+    Principal,
+)
+from shijhon.navidrome.client import NavidromeError
 
 pytestmark = pytest.mark.anyio
 
@@ -107,3 +116,118 @@ async def test_each_pooled_proof_reads_current_grants_and_ignores_response_cooki
         assert (await access.verify_native(bearer("a"))).library_ids == frozenset()
         assert seen == ["a", "b", "a"]
         assert not http.is_closed
+
+
+async def test_grants_are_shared_while_asked_and_within_a_request_only() -> None:
+    asked: list[str] = []
+    release = anyio.Event()
+    release.set()
+    fails = {"now": False}
+
+    class Native:
+        library_id = 1
+
+        async def native_json(self, method: str, path: str, **kwargs: Any) -> Any:
+            asked.append(path)
+            await release.wait()
+            if fails["now"]:
+                raise NavidromeError("unavailable", status=500)
+            if path == "user":
+                return [{"id": "u1", "userName": "listener", "isAdmin": False}]
+            return [{"id": 1}]
+
+    access = AccessService(Native())  # type: ignore[arg-type]
+    answers: list[Principal] = []
+
+    async def request(name: str = "listener", steps: int = 1) -> None:
+        # (anyio gives each started task a context of its own, as each request has)
+        for _ in range(steps):
+            answers.append(await access.grants(name))
+
+    # One request's steps ask once.
+    async with anyio.create_task_group() as group:
+        group.start_soon(request, "listener", 3)
+    assert len(answers) == 3 and len(asked) == 2
+
+    # Requests at the same moment share one question.
+    asked.clear()
+    release = anyio.Event()
+    async with anyio.create_task_group() as group:
+        for name in ("listener", "listener", "listener"):
+            group.start_soon(request, name)
+        await anyio.wait_all_tasks_blocked()
+        release.set()
+    assert len(asked) == 2
+
+    # A later request asks again: nothing is kept for it, so a revocation counts at once.
+    asked.clear()
+    async with anyio.create_task_group() as group:
+        group.start_soon(request)
+    assert len(asked) == 2
+
+    # A failure is its own: the next one asks.
+    fails["now"] = True
+
+    async def failing() -> None:
+        with pytest.raises(AccessUnavailable):
+            await access.grants("listener")
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(failing)
+    fails["now"] = False
+    asked.clear()
+    async with anyio.create_task_group() as group:
+        group.start_soon(request)
+    assert len(asked) == 2
+
+
+async def test_grants_never_stand_in_for_another_spelling_or_for_a_later_step() -> None:
+    """Names that fold alike in Python can be two accounts in Navidrome, and a request can
+    wait long between its steps while the account's access changes."""
+    grants = {"straße": [1], "strasse": [2]}
+    release = anyio.Event()
+    asked: list[str] = []
+
+    class Native:
+        library_id = 1
+
+        async def native_json(self, method: str, path: str, **kwargs: Any) -> Any:
+            asked.append(path)
+            await release.wait()
+            name = (kwargs.get("params") or {}).get("user_name")
+            if name is not None:
+                return [{"id": "id-" + name, "userName": name, "isAdmin": False}]
+            owner = path.split("/")[1].removeprefix("id-")
+            return [{"id": library} for library in grants[owner]]
+
+    access = AccessService(Native())  # type: ignore[arg-type]
+    found: dict[str, Principal] = {}
+
+    async def ask(name: str) -> None:
+        # Verified under the name asked for, as a real account's own lookup would be.
+        found[name] = await access.grants(name)
+
+    async def by_name(username: str, **kwargs: Any) -> Principal:
+        users = await access.navidrome.native_json("GET", "user", params={"user_name": username})
+        libraries = await access.navidrome.native_json("GET", f"user/{users[0]['id']}/library")
+        return Principal(users[0]["id"], username, False, frozenset(i["id"] for i in libraries))
+
+    access.verify = by_name  # type: ignore[method-assign]
+    async with anyio.create_task_group() as group:
+        group.start_soon(ask, "straße")
+        group.start_soon(ask, "strasse")
+        await anyio.wait_all_tasks_blocked()
+        release.set()
+    assert found["straße"].user_id == "id-straße" and found["strasse"].user_id == "id-strasse"
+    assert found["straße"].library_ids == frozenset({1})
+
+    # One request, its steps apart: a change of access in between counts.
+    async def request() -> None:
+        assert (await access.grants("straße")).library_ids == frozenset({1})
+        grants["straße"] = [2]
+        assert (await access.grants("straße")).library_ids == frozenset({1})  # right after
+        await anyio.sleep(REQUEST_SECONDS + 0.01)
+        assert (await access.grants("straße")).library_ids == frozenset({2})
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(request)

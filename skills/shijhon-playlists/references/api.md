@@ -25,7 +25,7 @@ OAuth login and refresh. The MCP interface handles this through its client.
 | --- | --- | --- |
 | `name` | `"Described playlist"` | Printable nonblank text, at most 100 characters; `""` chooses automatically in prompt mode |
 | `prompt` | `""` | Text, at most 2000 characters; retain user constraints (with `tracks`: saved as the playlist's brief) |
-| `count` | `30` | Integer 1..100 |
+| `count` | `30` | Integer 1..100; explicit tracks ignore it and use their number |
 | `max_per_artist` | `2` | Integer 1..10 |
 | `use_history` | `false` | Boolean; explicit user opt-in and token history grant |
 | `use_library` | `false` | Boolean; explicit user opt-in and token library grant |
@@ -38,7 +38,7 @@ OAuth login and refresh. The MCP interface handles this through its client.
 | `exclude_reference` | `true` | Boolean; leave the chosen references' songs out of the result |
 | `require_all` | `false` | Boolean; explicit tracks only: publish nothing unless every track resolves |
 
-Require a nonblank prompt or a nonempty `tracks` list whose length equals `count`.
+Require a nonblank prompt or a nonempty `tracks` list.
 Each track requires nonblank `artist` and `title`, at most 300 characters each;
 `album` defaults to `""` and permits 300, `version` defaults to `""` and permits 100.
 No IDs, URLs, model configuration or actions are accepted as track fields.
@@ -205,10 +205,17 @@ authority the playlist was made with.
 - `list_playlist_requests` (`limit` 1..100, `offset`, `kind`: `all`, `agent_curated`,
   `described`, `discovery`, `import`) lists `id`, `kind`, `name`, `state`,
   `playlist_id`, `cadence`, `refreshes` and `made_by` (`this_agent`, `another_agent`,
-  `dashboard`, or `account` for discovery mixes and imports), newest first.
-- `get_playlist_request` adds `kind`, `made_by`, `brief` and `cadence`. `selected` is
-  the latest run's songs; `published_songs` the last published ones, each with its
-  `song_id`, also while a later preview waits or after a later change failed.
+  `dashboard`, or `account` for discovery mixes and imports), newest first, and `live`,
+  whether it has been published. A live playlist whose latest run was discarded reads as
+  `published`, with `latest_run_state` beside it. An import keeps its latest run's `state`,
+  because its review acts on that run.
+- `get_playlist_request` adds `kind`, `made_by`, `live`, `brief` and `cadence`. `selected`
+  is the latest run's songs; `published_songs` the last published ones, each with its
+  `song_id`, also while a later preview waits or after a later change failed. A discarded
+  run changes nothing, so on a live playlist `state`, `run`, `selected` and `tracks` then
+  describe the last publication, and `discarded_run` has that run's `run` and `selected`,
+  and its `brief` if it had one. `next` says what to call when work is still running, a
+  preview waits or a run failed or is uncertain.
   `user_edits` lists up to 100 songs the user removed from the playlist and up to 100
   they added, each `song_id`, `artist`, `title`, `album`, with `remembered` counts. On a
   playlist this agent did not make, each run's songs (`selected`, `published_songs`)
@@ -220,6 +227,9 @@ authority the playlist was made with.
   `published_songs`, and `songs_hidden` says what is missing. Without library permission, outcomes read `resolved` and there is no
   `source`, references or edits. An import shows its counts (`entries`, `matched`,
   `missing`, `removed`), `review_key` and recheck state.
+- The answer of a tool that changes a playlist waits up to a few seconds for the work to
+  finish. Until `state` is `published` it leaves out `published_songs`, and `next` says
+  what to call. Replaying its key waits and answers in the same way.
 - `replace_playlist_tracks` (`tracks` 1..100, optional `max_per_artist`, `require_all`,
   `preview`, `brief`, a new `idempotency_key`) replaces every song of a playlist that is
   not an import, keeping its Navidrome ID. Tracks resolve as explicit tracks; a song the
@@ -227,6 +237,8 @@ authority the playlist was made with.
   since the last publication are learned first. A described playlist or discovery mix
   keeps its instructions, rules and schedule; only an agent-curated playlist takes
   `brief`, and its tracks and brief change only when the replacement is published.
+  A list over `max_per_artist` is refused with the artists named. `max_per_artist` defaults
+  to the playlist's own limit and goes up to 10.
   Refused (`409`) while a run is unfinished or a preview waits. Replaying the key with
   the same input changes nothing (`replaced: false`); other input conflicts.
 - `edit_playlist_tracks` (`remove`: song IDs, each taking out one copy of that song,
@@ -253,9 +265,11 @@ authority the playlist was made with.
   profile.
 - `import_playlist` (`name`, `idempotency_key`, and either `lines`, up to 100,000
   characters, or `entries` of `artist`, `title`, `album`, `version`, `isrc`, `song_id`)
-  needs `create` and `library` permission and uses the dashboard's import matching.
-  `get_playlist_import` (`offset`, `limit` 1..100, `only_missing`) lists entries with
-  `state`, `note`, `song` and up to 10 `choices`. `review_playlist_import` (`run_id`,
+  needs `create` and `library` permission and uses the dashboard's import matching, which
+  runs in the background. `get_playlist_import` (`offset`, `limit` 1..100, `only_missing`)
+  lists entries with `state`, `note`, `song` and up to 10 `choices`, and `checked` of
+  `total`. Its `review_key` is empty while `state` is `queued` or `generating`, and changes
+  after each choice. `review_playlist_import` (`run_id`,
   `review_key`, `action`: `choose` with `entry` and `choice`, `publish` with
   `missing_count`, `discard`, `retry`, `recheck`, `stop`, `resume`, `keep`) acts as the
   import page does.

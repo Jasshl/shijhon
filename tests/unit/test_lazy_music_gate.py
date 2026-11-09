@@ -40,7 +40,7 @@ async def test_first_caller_proves_credentials_then_grants_once() -> None:
         SimpleNamespace(check=credentials),
         call(),
         {},
-        music_gate=MusicGate(SimpleNamespace(verify=grants), 1),
+        music_gate=MusicGate(SimpleNamespace(grants=grants), 1),
     )
     assert order == []
     assert await ctx.caller() == Caller("Listener")
@@ -52,23 +52,23 @@ async def test_first_caller_proves_credentials_then_grants_once() -> None:
 @pytest.mark.parametrize("verdict", [None, Refusal(200, [], b"native refusal")])
 async def test_without_accepted_credentials_no_identity_lookup(verdict) -> None:
     checker = SimpleNamespace(check=AsyncMock(return_value=verdict))
-    access = SimpleNamespace(verify=AsyncMock())
+    access = SimpleNamespace(grants=AsyncMock())
     ctx = RequestContext(checker, call(), {}, music_gate=MusicGate(access, 1))
     assert await ctx.caller() is None
     assert await ctx.caller() is None
     assert ctx.refusal is verdict
     checker.check.assert_awaited_once()
-    access.verify.assert_not_awaited()
+    access.grants.assert_not_awaited()
 
 
 @pytest.mark.parametrize("denied", ["grant", "identity", "foreign-folder"])
 async def test_missing_grant_hides_caller_and_latches_native_bypass(denied) -> None:
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
     access = SimpleNamespace(
-        verify=AsyncMock(return_value=Principal("owner-a", "Listener", True, frozenset({2})))
+        grants=AsyncMock(return_value=Principal("owner-a", "Listener", True, frozenset({2})))
     )
     if denied == "identity":
-        access.verify.side_effect = AccessDenied
+        access.grants.side_effect = AccessDenied
     asked = call(call().query + (b"&musicFolderId=2" if denied == "foreign-folder" else b""))
     if denied == "foreign-folder":  # a list: Navidrome reads the folder there
         asked = RestCall.build(
@@ -79,7 +79,7 @@ async def test_missing_grant_hides_caller_and_latches_native_bypass(denied) -> N
     assert ctx.bypass and ctx.refusal is None
     assert await ctx.caller() is None
     checker.check.assert_awaited_once()
-    assert access.verify.await_count == (0 if denied == "foreign-folder" else 1)
+    assert access.grants.await_count == (0 if denied == "foreign-folder" else 1)
 
 
 @pytest.mark.parametrize("folders", [b"musicFolderId=01&musicFolderId=999", b"musicFolderId=7"])
@@ -88,13 +88,13 @@ async def test_a_list_naming_a_library_the_caller_cannot_read_is_navidrome_s(
 ) -> None:
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
     access = SimpleNamespace(
-        verify=AsyncMock(return_value=Principal("owner-a", "Listener", False, frozenset({1, 7})))
+        grants=AsyncMock(return_value=Principal("owner-a", "Listener", False, frozenset({1, 7})))
     )
     query = call().query + b"&" + folders
     asked = RestCall.build("search3", "GET", b"/rest/search3", query, [], None)
     ctx = RequestContext(checker, asked, {}, music_gate=MusicGate(access, 1))
     assert await ctx.caller() is None and ctx.bypass  # (7 alone: another library's list)
-    assert access.verify.await_count == (1 if b"999" in folders else 0)
+    assert access.grants.await_count == (1 if b"999" in folders else 0)
 
 
 @pytest.mark.parametrize(
@@ -113,23 +113,23 @@ async def test_a_folder_navidrome_does_not_read_as_another_library_takes_no_bypa
     method: str, folder: bytes
 ) -> None:
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
-    access = SimpleNamespace(verify=AsyncMock(return_value=OWNER))
+    access = SimpleNamespace(grants=AsyncMock(return_value=OWNER))
     query = call().query + b"&id=x&musicFolderId=" + folder
     asked = RestCall.build(method, "GET", b"/rest/" + method.encode(), query, [], None)
     ctx = RequestContext(checker, asked, {}, music_gate=MusicGate(access, 1))
     assert await ctx.caller() == Caller("Listener")
     assert not ctx.bypass
-    access.verify.assert_awaited_once()
+    access.grants.assert_awaited_once()
 
 
 @pytest.mark.parametrize("failed", ["credentials", "grants"])
 async def test_unavailable_proof_is_remembered_and_rethrown(failed) -> None:
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
-    access = SimpleNamespace(verify=AsyncMock(return_value=OWNER))
+    access = SimpleNamespace(grants=AsyncMock(return_value=OWNER))
     if failed == "credentials":
         checker.check.side_effect = CheckFailed("no credential verdict")
     else:
-        access.verify.side_effect = AccessUnavailable
+        access.grants.side_effect = AccessUnavailable
     ctx = RequestContext(checker, call(), {}, music_gate=MusicGate(access, 1))
     with pytest.raises(CheckFailed) as first:
         await ctx.caller()
@@ -137,7 +137,7 @@ async def test_unavailable_proof_is_remembered_and_rethrown(failed) -> None:
         await ctx.caller()
     assert first.value is second.value
     checker.check.assert_awaited_once()
-    assert access.verify.await_count == (0 if failed == "credentials" else 1)
+    assert access.grants.await_count == (0 if failed == "credentials" else 1)
 
 
 async def proxy_request(proxy: ProxyApp) -> httpx.Response:
@@ -149,7 +149,7 @@ async def proxy_request(proxy: ProxyApp) -> httpx.Response:
 
 async def test_noop_before_handler_and_library_answer_need_no_proof() -> None:
     checker = SimpleNamespace(check=AsyncMock(side_effect=AssertionError("no credential work")))
-    access = SimpleNamespace(verify=AsyncMock(side_effect=AssertionError("no grant work")))
+    access = SimpleNamespace(grants=AsyncMock(side_effect=AssertionError("no grant work")))
     upstream = Upstream("http://native.test")
     proxy = ProxyApp(upstream, checker)
     proxy.music_gate = MusicGate(access, 1)
@@ -176,7 +176,7 @@ async def test_noop_before_handler_and_library_answer_need_no_proof() -> None:
         assert (await proxy_request(proxy)).content == b"native"
         assert order == ["before", "handler", "library-answer", "forward"]
         checker.check.assert_not_awaited()
-        access.verify.assert_not_awaited()
+        access.grants.assert_not_awaited()
     finally:
         await upstream.aclose()
 
@@ -185,7 +185,7 @@ async def test_noop_before_handler_and_library_answer_need_no_proof() -> None:
 async def test_denied_work_preserves_original_call_and_skips_final_answer(stage) -> None:
     upstream = Upstream("http://native.test")
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
-    access = SimpleNamespace(verify=AsyncMock(side_effect=AccessDenied))
+    access = SimpleNamespace(grants=AsyncMock(side_effect=AccessDenied))
     proxy = ProxyApp(upstream, checker)
     proxy.music_gate = MusicGate(access, 1)
     upstream.library_answer = AsyncMock(side_effect=AssertionError("bypassed library answer"))
@@ -221,7 +221,7 @@ async def test_denied_work_preserves_original_call_and_skips_final_answer(stage)
 async def test_optional_wrapper_cannot_swallow_unavailable_current_proof(failed) -> None:
     upstream = Upstream("http://native.test")
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
-    access = SimpleNamespace(verify=AsyncMock(side_effect=AccessUnavailable))
+    access = SimpleNamespace(grants=AsyncMock(side_effect=AccessUnavailable))
     proxy = ProxyApp(upstream, checker)
     proxy.music_gate = MusicGate(access, 1)
     if failed == "credentials":
@@ -246,7 +246,7 @@ async def test_optional_wrapper_cannot_swallow_unavailable_current_proof(failed)
 async def test_final_answer_native_refusal_is_sent_without_second_login(method) -> None:
     refusal = Refusal(200, [(b"content-type", b"text/plain")], b"native credential refusal")
     checker = SimpleNamespace(check=AsyncMock(return_value=refusal))
-    access = SimpleNamespace(verify=AsyncMock())
+    access = SimpleNamespace(grants=AsyncMock())
     upstream = Upstream("http://native.test")
     proxy = ProxyApp(upstream, checker)
     proxy.music_gate = MusicGate(access, 1)
@@ -265,7 +265,7 @@ async def test_final_answer_native_refusal_is_sent_without_second_login(method) 
         assert response.status_code == 200
         assert response.content == (refusal.body if method == "GET" else b"")
         checker.check.assert_awaited_once()
-        access.verify.assert_not_awaited()
+        access.grants.assert_not_awaited()
         upstream.library_answer.assert_not_awaited()
         proxy.forward_call.assert_not_awaited()
     finally:
@@ -277,7 +277,7 @@ async def test_final_answer_cannot_forward_when_current_grants_unavailable() -> 
     upstream = Upstream("http://native.test")
     proxy = ProxyApp(upstream, checker)
     proxy.music_gate = MusicGate(
-        SimpleNamespace(verify=AsyncMock(side_effect=AccessUnavailable)), 1
+        SimpleNamespace(grants=AsyncMock(side_effect=AccessUnavailable)), 1
     )
 
     async def final(call, ctx):
@@ -299,14 +299,14 @@ async def test_complete_counts_require_current_grant_only_with_shown_plans(shown
     fills = SimpleNamespace(any_shown=AsyncMock(return_value=shown))
     complete = CompleteAlbums(fills, upstream)
     checker = SimpleNamespace(check=AsyncMock(return_value=Caller("Listener")))
-    access = SimpleNamespace(verify=AsyncMock(side_effect=AccessDenied))
+    access = SimpleNamespace(grants=AsyncMock(side_effect=AccessDenied))
     asked = RestCall.build("getAlbumList2", "GET", b"/rest/getAlbumList2", b"", [], None)
     ctx = RequestContext(checker, asked, {}, music_gate=MusicGate(access, 1))
     try:
         assert await complete.wrap_list("getAlbumList2", None)(asked, ctx) is None
         assert ctx.bypass == shown
         assert checker.check.await_count == int(shown)
-        assert access.verify.await_count == int(shown)
+        assert access.grants.await_count == int(shown)
         upstream.library_answer.assert_not_awaited()
     finally:
         await upstream.aclose()

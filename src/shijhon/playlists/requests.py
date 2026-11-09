@@ -8,6 +8,7 @@ import re
 import secrets
 import time
 from collections import Counter
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field, field_validator, model_validator
@@ -34,6 +35,9 @@ if TYPE_CHECKING:
     from shijhon.playlists.service import Playlists
 
 
+MOST_PER_ARTIST = 10  # the highest max_per_artist any playlist takes
+
+
 class RequestError(PlaylistError):
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
@@ -58,13 +62,42 @@ class SetupRequired(RequestError):
         self.feature = feature
 
 
+def artist_limit_error(tracks: Iterable[Suggestion], limit: int, how: str) -> str:
+    """What is wrong when ``tracks`` have more than ``limit`` songs of an artist, naming
+    each such artist, and ``how`` to allow them; empty when they are within it."""
+    spelled: dict[str, str] = {}
+    counts: Counter[str] = Counter()
+    for track in tracks:
+        key = fold(track.artist)
+        spelled.setdefault(key, track.artist)
+        counts[key] += 1
+    over = [f"{spelled[key]} ({n} tracks)" for key, n in counts.items() if n > limit]
+    if not over:
+        return ""
+    if limit >= MOST_PER_ARTIST:
+        how = f"{MOST_PER_ARTIST} is the highest limit, so send fewer tracks by them."
+    return f"The tracks exceed max_per_artist, which is {limit} here, for {', '.join(over)}. {how}"
+
+
 class PlaylistRequest(Model):
     # Keep the historical default and canonical request input stable for replays.
     # Only an explicitly empty name opts a prompt into automatic naming.
     name: str = Field(default="Described playlist", max_length=100)
     prompt: str = Field(default="", max_length=2000)
-    count: int = Field(default=30, ge=1, le=100, strict=True)
-    max_per_artist: int = Field(default=2, ge=1, le=10, strict=True)
+    count: int = Field(
+        default=30,
+        ge=1,
+        le=100,
+        strict=True,
+        description="Songs a description asks for. Explicit tracks ignore it and use their number.",
+    )
+    max_per_artist: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        strict=True,
+        description="Tracks per artist at most. Pass a higher value when tracks repeat an artist.",
+    )
     use_history: bool = Field(default=False, strict=True)
     use_library: bool = Field(default=False, strict=True)
     tracks: list[Suggestion] = Field(default_factory=list, max_length=100)
@@ -95,6 +128,15 @@ class PlaylistRequest(Model):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def count_of_tracks(cls, data: Any) -> Any:
+        """Explicit tracks are their own count, whatever was sent. A request whose count
+        already matched its tracks keeps its replay hash."""
+        if isinstance(data, dict) and isinstance(data.get("tracks"), list) and data["tracks"]:
+            return {**data, "count": len(data["tracks"])}
+        return data
+
     @field_validator("reference_playlists", "reference_songs")
     @classmethod
     def distinct_references(cls, values: list[str]) -> list[str]:
@@ -109,18 +151,18 @@ class PlaylistRequest(Model):
         if self.tracks and (self.reference_playlists or self.reference_songs):
             raise ValueError("references work with a description, not explicit tracks")
         if self.tracks and (
-            len(self.tracks) != self.count
-            or self.use_history
+            self.use_history
             or self.use_library
             or self.cadence != "manual"
             or self.save_instructions
         ):
-            raise ValueError("explicit tracks must match count and cannot use context or recur")
-        if (
-            self.tracks
-            and max(Counter(fold(s.artist) for s in self.tracks).values()) > self.max_per_artist
+            raise ValueError("explicit tracks cannot use context or recur")
+        if message := artist_limit_error(
+            self.tracks,
+            self.max_per_artist,
+            "Pass a higher max_per_artist in the request, up to 10, or send fewer tracks by them.",
         ):
-            raise ValueError("explicit tracks exceed max_per_artist")
+            raise ValueError(message)
         if self.cadence != "manual" and not self.save_instructions:
             raise ValueError("refreshes need explicit saved instructions")
         self.definition()  # Validate the native playlist name too.
@@ -493,13 +535,17 @@ class Requests:
         await self.owned(owner, ident, creator)
         return await self.describe(owner, ident)
 
-    async def describe(self, owner: str, ident: str) -> dict[str, Any]:
+    async def describe(
+        self, owner: str, ident: str, run: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """The latest run of the owner's playlist ``ident`` (a request's, or a discovery
-        mix's), as its status shows it; the caller has checked who may see it."""
+        mix's), or its run ``run``, as its status shows it; the caller has checked who may
+        see it."""
         mix = await self.service.repo.mix(ident, owner)
-        runs = await self.service.repo.runs(ident)
-        # (A mix saved without its first run has none yet.)
-        run: dict[str, Any] = runs[0] if runs else {"id": "", "state": "", "error": "", "data": {}}
+        if run is None:
+            runs = await self.service.repo.runs(ident)
+            # (A mix saved without its first run has none yet.)
+            run = runs[0] if runs else {"id": "", "state": "", "error": "", "data": {}}
         spec = Definition.model_validate_json(mix["definition"])
         curation = run["data"].get("curation", {})
         songs = curation.get("songs", {})
@@ -591,13 +637,15 @@ class Requests:
                 "This playlist has taken all the additions it can. Create a new playlist.", 409
             )
         # The latest report: a later run may have failed or been discarded before one. An
-        # agent's replacement or edit that was not published reports another list.
+        # agent's replacement or edit that was not published reports another list, and so
+        # does an addition that was discarded, which gave back the list before it.
         reported = next(
             (
                 r
                 for r in runs
                 if r["data"].get("curation", {}).get("tracks")
                 and (r["state"] == "published" or not r["data"].get("agent"))
+                and not (r["state"] == "discarded" and "before" in r["data"].get("addition", {}))
             ),
             None,
         )
@@ -617,8 +665,14 @@ class Requests:
                 )
         if len(tracks) > 100:
             raise RequestError("A playlist of explicit tracks has at most 100 tracks.")
-        if max(Counter(fold(t.artist) for t in tracks).values()) > definition.max_per_artist:
-            raise RequestError("The tracks would exceed max_per_artist.")
+        if message := artist_limit_error(
+            tracks,
+            definition.max_per_artist,
+            "add_playlist_tracks keeps the playlist's limit. To allow more, send the whole list "
+            "to replace_playlist_tracks with a higher max_per_artist, up to 10, or add fewer "
+            "tracks by them.",
+        ):
+            raise RequestError(message)
         connection = await self.service.connection(owner)
         await self.room(owner)
         if mix["playlist_id"] and mix["published"]:
@@ -631,7 +685,12 @@ class Requests:
         data = {
             "publish_after_generation": not definition.review_before_publishing,
             "enable_after": False,
-            "addition": {"key": key, "hash": digest(addition.canonical())},
+            # ``before``: the tracks saved so far, restored if this addition is discarded.
+            "addition": {
+                "key": key,
+                "hash": digest(addition.canonical()),
+                "before": definition.model_dump(mode="json"),
+            },
             **acting,
         }
         async with self.store.transaction() as db:

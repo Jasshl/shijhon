@@ -21,6 +21,11 @@ personal context to work around a missing setting.
   plus album/version where needed as `tracks` to `create_playlist`. Put the user's
   wish and constraints in `prompt`: Shijhon saves it as the playlist's brief, so you
   or another agent later know what the playlist is for. No server model is used.
+  `count` is taken from the tracks. `max_per_artist` defaults to 2; pass a higher value
+  (up to 10) when the user's list repeats an artist.
+- A change's answer waits a few seconds for the work. If it has not finished, the answer
+  has a `next` that says what to call. Songs in `published_songs` are live; in an
+  unfinished change's answer they are left out.
 - Shijhon publishes the tracks that resolve (the original release when several
   versions match) and leaves out the rest; status `tracks` gives each one's outcome
   and, for a left-out track, its `reason` and `candidates`. Close the gaps with
@@ -95,10 +100,12 @@ sound-suggested songs join only if you set `use_library`.
   review first) the server's refreshes of described playlists and discovery mixes, only
   when requested.
 - `import_playlist` imports a list the user gives you (pasted lines or entries), with
-  library permission. Shijhon matches each entry in the background. Read the matches
-  with `get_playlist_import`, `choose` among an ambiguous entry's `choices`, and
-  `publish` with `review_playlist_import`, confirming how many entries stay missing
-  (`missing_count`). Do not build the playlist again with `create_playlist`.
+  library permission. Shijhon matches each entry in the background, which can take a
+  while. Read `get_playlist_import` until `state` is `preview`, because `review_key` is
+  empty until then and changes after each choice. `choose` among an ambiguous entry's
+  `choices`, and `publish` with `review_playlist_import`, confirming how many entries
+  stay missing (`missing_count`). An entry's `note` says when an add-on did not answer:
+  tell the user, then publish without it or ask again. Do not build the playlist again with `create_playlist`.
 
 ## Every change
 

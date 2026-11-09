@@ -78,7 +78,6 @@ def test_request_boundaries_and_legacy_defaults() -> None:
         {"prompt": "music", "model": "external"},
         {"prompt": "music", "endpoint": "https://elsewhere.invalid"},
         {"prompt": "music", "actions": ["publish"]},
-        {"tracks": [{"artist": "A", "title": "B"}], "count": 2},
         {"tracks": [{"artist": "A", "title": "B"}], "count": 1, "use_library": True},
         {
             "tracks": [{"artist": "A", "title": "B"}],

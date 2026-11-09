@@ -151,6 +151,9 @@ def count_statements(index: QueryIndex, monkeypatch: pytest.MonkeyPatch) -> list
         return conn
 
     monkeypatch.setattr(index, "_connect", traced)
+    for conn in index._idle:
+        conn.close()
+    index._idle.clear()
     return statements
 
 
@@ -909,4 +912,30 @@ async def test_a_cache_of_another_revision_starts_over_and_its_own_stays(tmp_pat
         assert lists() == 0
         assert (path.stat().st_mode & 0o777) == 0o600
         await older.close()
+        group.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_a_reused_connection_keeps_nothing_of_the_read_before(tmp_path: Path) -> None:
+    collection = tmp_path / "collection.sqlite3"
+    library(collection)
+    budgets = Budgets(read_workers=1)
+    async with anyio.create_task_group() as group:
+        index = QueryIndex(tmp_path / "cache" / "db", collection, group.start_soon, budgets=budgets)
+        first = SourcePage(rows_of("song", ["s10", "s11"]), 2, complete=True)
+        second = SourcePage(rows_of("song", ["s12"]), 1, complete=True)
+        assert [row["id"] for row in (await index.live_page(BINDING, "all", "song", first)).rows]
+        await index.count(BINDING, "all")
+        assert len(index._idle) == 1
+        kept = index._idle[0]
+        assert not kept.in_transaction
+        again = await index.live_page(BINDING, "all", "song", second)
+        assert index._idle == [kept]
+        assert len(again.rows) <= 1 and all(row["id"] == "s12" for row in again.rows)
+        # What was committed in the meantime is seen by the next read on it.
+        before = await index.count(BINDING, "all")
+        edit(collection, "UPDATE collection_tracks SET present=0 WHERE song_id='s12'")
+        assert await index.count(BINDING, "all") == before - 1
+        await index.close()
+        assert index._idle == []
         group.cancel_scope.cancel()

@@ -23,7 +23,7 @@ from shijhon.playlists.model import (
     fingerprint,
 )
 from shijhon.playlists.references import entries
-from shijhon.playlists.requests import RequestError, SetupRequired, digest
+from shijhon.playlists.requests import RequestError, SetupRequired, artist_limit_error, digest
 
 if TYPE_CHECKING:
     from shijhon.playlists.service import Playlists
@@ -242,8 +242,12 @@ class Changes:
                 "instructions stay as they were saved."
             )
         limit = replacement.max_per_artist or definition.max_per_artist
-        if most_per_artist(replacement.tracks) > limit:
-            raise RequestError("The tracks would exceed max_per_artist.")
+        if message := artist_limit_error(
+            replacement.tracks,
+            limit,
+            "Pass a higher max_per_artist, up to 10, or send fewer tracks by them.",
+        ):
+            raise RequestError(message)
         update: dict[str, Any] = {"max_per_artist": limit, "require_all": replacement.require_all}
         if replacement.brief is not None:
             update["brief"] = replacement.brief.strip()

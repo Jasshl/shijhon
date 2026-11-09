@@ -882,7 +882,7 @@ class Tools:
                 creator=self.grant(token),
                 scopes=token.scopes,
             )
-            return {"created": created, "request": await self.managed.view(token, ident)}
+        return {"created": created, "request": await self.managed.answer(ident)}
 
     async def request(
         self, ident: str, action: str = "status", songs: list[str] | None = None
@@ -968,7 +968,7 @@ class Tools:
                     except PlaylistError as exc:
                         raise RequestError(str(exc), 409) from None
             self.service.notify()
-        return {"request": await self.managed.view(token, ident)}
+        return {"request": await self.managed.answer(ident)}
 
     async def add(self, ident: str, tracks: TrackAddition, idempotency_key: str) -> dict[str, Any]:
         token = await self.auth("create")
@@ -980,7 +980,7 @@ class Tools:
             added = await self.service.requests.add_tracks(
                 str(token.subject), ident, idempotency_key, tracks, actor=self.grant(token)
             )
-        return {"added": added, "request": await self.managed.view(token, ident)}
+        return {"added": added, "request": await self.managed.answer(ident)}
 
     async def listing(self, limit: int, offset: int, kind: str) -> dict[str, Any]:
         token = await self.auth("status")
@@ -1170,6 +1170,12 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         AI. Context defaults off. Keep one key and identical input through recovery.
         Publication may add library placeholders, not download audio. preview=true waits for
         review (review_playlist_preview or the dashboard).
+        Every field, including name and tracks, goes inside `request`. max_per_artist
+        defaults to 2 and goes up to 10; pass a higher value when your tracks repeat an
+        artist. With explicit tracks, `count` is ignored and the number of tracks is used.
+        The answer waits a few seconds for the work to finish. If `state` is not yet
+        final, `next` says what to call, and `playlist_id` stays empty until the first
+        publication.
         Explicit tracks: each resolves to the library's recording, else the catalog's (the
         original release when several versions match). The tracks that resolve are
         published in order; get_playlist_request's `tracks` reports every track's outcome
@@ -1183,12 +1189,15 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         request_id: str, tracks: list[TrackChange], idempotency_key: str
     ) -> CallToolResult:
         """Add tracks to one of the user's published agent-curated playlists (or one whose
-        tracks all failed), without a new request. A track with `replaces` (a left-out
-        track's position in the request's `tracks` report) takes its place; others go at
-        the end. Published tracks stay; still unresolved ones are looked up again; the same
-        playlist is republished. Refused when the playlist was edited in Navidrome since
-        publication: then use replace_playlist_tracks. Use a new key for each addition and
-        keep it through recovery; confirm with get_playlist_request.
+        tracks all failed), without a new request. `request_id` is the Shijhon request ID
+        (`id` in create_playlist's answer or list_playlist_requests), not a Navidrome
+        playlist ID. The playlist's max_per_artist still applies. A track with `replaces`
+        (a left-out track's position in the request's `tracks` report) takes its place;
+        others go at the end. Published tracks stay; still unresolved ones are looked up
+        again; the same playlist is republished. Refused when the playlist was edited in
+        Navidrome since publication: then use replace_playlist_tracks. Use a new key for
+        each addition and keep it through recovery. Songs in the answer's `published_songs`
+        are the finished result; otherwise follow its `next`.
         """
         return await tools.guarded(
             lambda: tools.add(request_id, TrackAddition(tracks=tracks), idempotency_key)
@@ -1196,13 +1205,16 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
 
     @mcp.tool(annotations=read)
     async def get_playlist_request(request_id: str) -> CallToolResult:
-        """Read one of the user's Shijhon playlists, whoever made it: `kind`, `state`, its
-        `brief`, the latest run's songs (`selected`), the last published songs with their
-        `song_id` (`published_songs`), each requested track's outcome (`tracks`) and the
-        songs the user removed or added in their apps (`user_edits`). Songs of a playlist
-        you did not make need library permission (and history if history chose them).
-        Only `published` confirms verified native publication. Retain the request ID and
-        use this after uncertain submissions.
+        """Read one of the user's Shijhon playlists, whoever made it. `live` says whether
+        it has been published. `brief` and `published_songs` (with each `song_id`) describe
+        the published playlist, and `user_edits` lists the songs the user removed or added
+        in their apps. `state`, `run`, `selected` and `tracks` (each requested track's
+        outcome) describe the latest run, which can be waiting or failed while the published
+        songs stay live. A discarded run changes nothing, so a live playlist then reads as
+        `published` and the run is listed under `discarded_run`. `next` says what to call
+        when something is still to do. Songs of a playlist you did not make need library
+        permission (and history if history chose them). Only `published` confirms verified
+        native publication. Retain the request ID and use this after uncertain submissions.
         """
         return await tools.guarded(lambda: tools.request(request_id))
 
@@ -1214,7 +1226,9 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
     ) -> CallToolResult:
         """List the user's Shijhon playlists, newest first: those made on the dashboard, by
         this agent or by other agents, discovery mixes and imports, with state and refresh
-        state. Read one with get_playlist_request.
+        state. `live` says whether it has been published. A live playlist whose latest run
+        was discarded reads as `published`, with `latest_run_state` beside it. Read one with
+        get_playlist_request.
         """
         return await tools.guarded(lambda: tools.listing(limit, offset, kind))
 

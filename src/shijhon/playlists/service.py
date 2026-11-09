@@ -185,6 +185,7 @@ class Playlists:
         self.changes = anyio.Lock()
         self.worker = anyio.Lock()
         self.wake = anyio.Event()
+        self.working = False  # the worker is running: a queued run will be taken up
 
     @asynccontextmanager
     async def changing(self, seconds: float | None = None) -> AsyncIterator[None]:
@@ -365,15 +366,19 @@ class Playlists:
             "error='Selection was interrupted. Generate the playlist again.'"
             " WHERE state='generating'"
         )
-        while True:
-            self.wake = anyio.Event()
-            try:
-                await self.tick()
-            except Exception as exc:
-                # Database/downstream failures never terminate the scheduler permanently.
-                log.warning("playlist scheduler: %s", type(exc).__name__)
-            with anyio.move_on_after(30):
-                await self.wake.wait()
+        self.working = True
+        try:
+            while True:
+                self.wake = anyio.Event()
+                try:
+                    await self.tick()
+                except Exception as exc:
+                    # Database/downstream failures never terminate the scheduler permanently.
+                    log.warning("playlist scheduler: %s", type(exc).__name__)
+                with anyio.move_on_after(30):
+                    await self.wake.wait()
+        finally:
+            self.working = False
 
     async def tick(self) -> None:
         # The application writer lock excludes another process; a single worker excludes

@@ -45,7 +45,7 @@ async def test_album_action_authenticates_before_any_pending_lookup() -> None:
 async def test_only_completion_capture_needs_a_late_credential_proof(completion: bool) -> None:
     caller = Caller("listener")
     checker = SimpleNamespace(check=AsyncMock(return_value=caller))
-    access = SimpleNamespace(verify=AsyncMock(side_effect=AccessDenied))
+    access = SimpleNamespace(grants=AsyncMock(side_effect=AccessDenied))
     upstream = SimpleNamespace(library_answer=None)
     visibility = Visibility(upstream, checker, access, None, None)
     upstream.library_answer = visibility.answer
@@ -59,7 +59,7 @@ async def test_only_completion_capture_needs_a_late_credential_proof(completion:
         )
         checker.check.assert_not_awaited()
     assert answer is not None
-    access.verify.assert_awaited_once_with("listener")
+    access.grants.assert_awaited_once_with("listener")
 
 
 async def test_artist_capture_passes_the_verified_caller() -> None:

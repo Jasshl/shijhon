@@ -27,8 +27,8 @@ import time
 import zlib
 from array import array
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
-from contextlib import closing, suppress
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
+from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -169,7 +169,7 @@ class Budgets:
     # Selections kept (their songs on disk) and visible orders kept (their rows in memory).
     selections: int = 16
     remembered_rows: int = 4_000_000
-    remembered_statistics: int = 1_000  # items of a page from which its statistics are kept
+    remembered_statistics: int = 200  # items of a page from which its statistics are kept
     # The longest a read waits for its selection to be kept before working it out itself,
     # which takes longer unless the writer is busy with much else.
     selection_wait_seconds: float = 4.0
@@ -292,6 +292,8 @@ class QueryIndex:
         self.remembered: OrderedDict[tuple[Any, ...], tuple[Any, int]] = OrderedDict()
         self.remembered_rows = 0
         self.remembering = threading.Lock()
+        self._idle: list[sqlite3.Connection] = []
+        self._idle_lock = threading.Lock()
         # key -> the monotonic time before which it is not refreshed (``ensure``)
         self.paced: dict[str, float] = {}
         # facts -> the event of their writing; library -> the snapshot its facts are ready for
@@ -314,7 +316,7 @@ class QueryIndex:
         self.keeper: sqlite3.Connection | None = None
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=5, uri=True)
+        conn = sqlite3.connect(self.path, timeout=5, uri=True, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA main.synchronous=NORMAL")  # disposable cache, never collection state
         conn.create_function(
@@ -328,6 +330,34 @@ class QueryIndex:
             (self.collection_path.resolve().as_uri() + "?mode=ro",),
         )
         return conn
+
+    @contextmanager
+    def _reader(self) -> Iterator[sqlite3.Connection]:
+        """A connection for one read, kept for the next: opening one and attaching the
+        collection takes longer than most reads. No transaction and nothing temporary
+        outlives the read: it is rolled back."""
+        with self._idle_lock:
+            conn = self._idle.pop() if self._idle else None
+        if conn is None:
+            conn = self._connect()
+        try:
+            yield conn
+        except sqlite3.Error:
+            conn.close()
+            raise
+        except BaseException:
+            conn.rollback()  # what stopped the read says nothing about the connection
+            self._keep_idle(conn)
+            raise
+        conn.rollback()
+        self._keep_idle(conn)
+
+    def _keep_idle(self, conn: sqlite3.Connection) -> None:
+        with self._idle_lock:
+            if not self.closed and len(self._idle) < self.budgets.read_workers:
+                self._idle.append(conn)
+                return
+        conn.close()
 
     def _limit_size(self, conn: sqlite3.Connection) -> None:
         page_size = conn.execute("PRAGMA page_size").fetchone()[0]
@@ -385,6 +415,10 @@ class QueryIndex:
         if self.keeper is not None:
             await anyio.to_thread.run_sync(self.keeper.close)
             self.keeper = None
+        with self._idle_lock:
+            idle, self._idle = self._idle, []
+        for conn in idle:
+            conn.close()
 
     async def source_state(self, library: str) -> IndexState:
         """Read structural readiness AFTER the adapter proves the current principal.
@@ -395,7 +429,7 @@ class QueryIndex:
         await self.open()
 
         def read() -> IndexState:
-            with closing(self._connect()) as conn:
+            with self._reader() as conn:
                 row = conn.execute(
                     "SELECT * FROM collectiondb.collection_index WHERE library_id=?", (library,)
                 ).fetchone()
@@ -409,7 +443,7 @@ class QueryIndex:
         await self.open()
 
         def read() -> bool:
-            with closing(self._connect()) as conn:
+            with self._reader() as conn:
                 return (
                     conn.execute(
                         "SELECT 1 FROM foreign_ready WHERE facts=?", (binding.facts,)
@@ -633,7 +667,7 @@ class QueryIndex:
             job[1].cancel()
 
     def _state(self, key: str) -> dict[str, Any] | None:
-        with closing(self._connect()) as conn:
+        with self._reader() as conn:
             row = conn.execute(
                 "SELECT q.* FROM slots s JOIN queries q ON q.key=s.generation WHERE s.key=?", (key,)
             ).fetchone()
@@ -1765,7 +1799,8 @@ class QueryIndex:
                     key,
                     i,
                     str(row["id"]),
-                    zlib.compress(json.dumps(dict(row), separators=(",", ":")).encode(), 3),
+                    # Read once, in this connection: stored, not worth compressing.
+                    zlib.compress(json.dumps(dict(row), separators=(",", ":")).encode(), 0),
                 )
                 for i, row in enumerate(source.rows)
             ],
@@ -1962,7 +1997,7 @@ class QueryIndex:
         work: Callable[[sqlite3.Connection, _View], T],
         live: bool,
     ) -> T:
-        with closing(self._connect()) as conn, conn:
+        with self._reader() as conn:
             conn.execute("BEGIN")
             return work(conn, self._view(conn, binding, mode, live))
 
