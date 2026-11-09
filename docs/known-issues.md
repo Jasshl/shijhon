@@ -84,7 +84,7 @@
   example "NightLetters" by "TidePaper" for "Night Letters" by "Tide Paper") is not
   found: the catalog's release is added as a separate album beside it.
 - **An automatic pick can be another edition than yours.** The Library page lists the
-  picks. You can change one until the album is filled, not after.
+  picks. A pick can be changed until the album is filled, not after.
 - **A picked release keeps its track numbers.** Where your files are numbered
   differently, two songs of the album can have the same number.
 - **An album in the review list, without a match, or kept as it is** has your songs only.

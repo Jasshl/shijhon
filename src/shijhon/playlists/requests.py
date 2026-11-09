@@ -136,7 +136,8 @@ class PlaylistRequest(Model):
             exclude_days=0,
             repeat_days=0,
             cadence=self.cadence,
-            brief=self.prompt.strip() if not self.tracks else "",
+            # Explicit tracks keep the prompt as the playlist's brief: what it is for.
+            brief=self.prompt.strip(),
             ai=not bool(self.tracks),
             mode="tracks" if self.tracks else "prompt",
             use_history=self.use_history,
@@ -275,22 +276,42 @@ class Requests:
 
     async def guard(self, mix: dict[str, Any], data: dict[str, Any] | None = None) -> None:
         """Current authorization for the mix's request. ``data``: the run about to be saved
-        or published; playlists it found by name keep needing the library permission."""
-        await self._guard(mix)
-        if data is not None and found_by_name(data) and not await self.reads_library(mix["id"]):
-            raise RequestError(LIBRARY_LOST, 403)
+        or published; playlists it found by name keep needing the library permission. A run
+        someone asked for after the request was made (``data["actor"]``: an agent's grant,
+        or "" for the owner on the dashboard) is that one's work: its own authority
+        authorizes it, not the grant that made the request."""
+        actor = (data or {}).get("actor")
+        await self._guard(mix, actor, context=not (data or {}).get("agent"))
+        if data is not None and found_by_name(data):
+            allowed = (
+                await self.grants_library(actor)
+                if actor is not None
+                else await self.reads_library(mix["id"])
+            )
+            if not allowed:
+                raise RequestError(LIBRARY_LOST, 403)
 
-    async def _guard(self, mix: dict[str, Any]) -> None:
+    async def _guard(
+        self, mix: dict[str, Any], actor: str | None = None, *, context: bool = True
+    ) -> None:
+        """``context``: the run reads the context the request's saved instructions use
+        (not so for tracks an agent chose)."""
         if Definition.model_validate_json(mix["definition"]).mode == "import":
             await self.service.imports.guard(mix)
             return
         row = await self.store.fetchone("SELECT * FROM playlist_requests WHERE id=?", [mix["id"]])
+        if row and row["library"] != self.library:
+            raise RequestError("This request belongs to a different library.", 403)
+        if actor is not None:
+            await self.acting(mix["owner"], actor)
+            if actor and row and context:
+                _, grant = await self.grant(actor, "create")
+                self.context_scopes(PlaylistRequest.model_validate_json(row["input"]), grant)
+            return
         if not row:
             if Definition.model_validate_json(mix["definition"]).mode != "discovery":
                 raise RequestError("This creation request is no longer available.", 403)
             return  # Legacy discovery mix.
-        if row["library"] != self.library:
-            raise RequestError("This request belongs to a different library.", 403)
         spec = PlaylistRequest.model_validate_json(row["input"])
         if row["creator"]:
             connection, grant = await self.grant(row["creator"], "create")
@@ -300,6 +321,28 @@ class Requests:
             self.context_scopes(spec, grant)
         else:
             await self.service.connection(mix["owner"])
+
+    async def acting(self, owner: str, actor: str) -> Connection:
+        """The owner's connection while ``actor`` - an agent grant, or "" for the owner
+        on the dashboard - may still change the owner's playlists."""
+        if not actor:
+            return await self.service.connection(owner)
+        connection, _ = await self.grant(actor, "create")
+        if connection.user_id != owner:
+            raise RequestError("This request belongs to another owner.", 403)
+        return connection
+
+    async def grants_library(self, actor: str) -> bool:
+        """Whether ``actor`` (an agent grant; "" for the owner) may now read the library."""
+        if not actor:
+            return True
+        grant = await self.store.fetchone("SELECT * FROM playlist_agent_tokens WHERE id=?", [actor])
+        return bool(
+            grant
+            and not grant["revoked"]
+            and grant["library"] == self.library
+            and "library" in json.loads(grant["scopes"])
+        )
 
     async def reads_library(self, ident: str) -> bool:
         """Whether request ``ident`` may now read the library beyond what it names: the
@@ -448,12 +491,22 @@ class Requests:
     async def status(self, owner: str, ident: str, *, creator: str | None = None) -> dict[str, Any]:
         await self.service.connection(owner)
         await self.owned(owner, ident, creator)
+        return await self.describe(owner, ident)
+
+    async def describe(self, owner: str, ident: str) -> dict[str, Any]:
+        """The latest run of the owner's playlist ``ident`` (a request's, or a discovery
+        mix's), as its status shows it; the caller has checked who may see it."""
         mix = await self.service.repo.mix(ident, owner)
         runs = await self.service.repo.runs(ident)
-        run = runs[0]
+        # (A mix saved without its first run has none yet.)
+        run: dict[str, Any] = runs[0] if runs else {"id": "", "state": "", "error": "", "data": {}}
         spec = Definition.model_validate_json(mix["definition"])
         curation = run["data"].get("curation", {})
         songs = curation.get("songs", {})
+        selected = run["data"].get("selected", [])
+        # Published songs carry their Navidrome IDs, to edit the playlist by.
+        native = run["data"].get("native_ids", []) if run["state"] == "published" else []
+        ids = native if len(native) == len(selected) else [""] * len(selected)
         return {
             "id": ident,
             "run": run["id"],
@@ -470,8 +523,9 @@ class Requests:
                         k: songs.get(s.get("id"), {}).get(k, default)
                         for k, default in (("fit", ""), ("source", ""), ("facts", {}))
                     },
+                    **({"song_id": native_id} if native_id else {}),
                 }
-                for s in run["data"].get("selected", [])
+                for s, native_id in zip(selected, ids, strict=True)
             ],
             # A refresh: what it learned from the owner's edits of the playlist.
             "edits": run["data"].get("edits", {}),
@@ -499,10 +553,12 @@ class Requests:
         addition: TrackAddition,
         *,
         creator: str | None = None,
+        actor: str | None = None,
     ) -> bool:
         """Add tracks to explicit playlist ``ident`` - in the places of left-out tracks, or
         at its end - as a new run of the same request; its other tracks are resolved
-        again. False: this key already added the same tracks. The caller holds changes."""
+        again. False: this key already added the same tracks. ``actor``: the agent grant
+        whose work the run is (else the request's own). The caller holds changes."""
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
             raise RequestError("Send an Idempotency-Key of 8 to 128 plain characters.")
         await self.owned(owner, ident, creator)
@@ -510,7 +566,8 @@ class Requests:
         definition = Definition.model_validate_json(mix["definition"])
         if definition.mode != "tracks":
             raise RequestError("Only a playlist of explicit tracks takes added tracks.")
-        await self.guard(mix)
+        acting = {} if actor is None else {"actor": actor}
+        await self.guard(mix, acting)
         runs = await self.service.repo.runs(ident)
         done = [r for r in runs if r["data"].get("addition")]
         for run in done:
@@ -533,8 +590,17 @@ class Requests:
             raise RequestError(
                 "This playlist has taken all the additions it can. Create a new playlist.", 409
             )
-        # The latest report: a later run may have failed or been discarded before one.
-        reported = next((r for r in runs if r["data"].get("curation", {}).get("tracks")), None)
+        # The latest report: a later run may have failed or been discarded before one. An
+        # agent's replacement or edit that was not published reports another list.
+        reported = next(
+            (
+                r
+                for r in runs
+                if r["data"].get("curation", {}).get("tracks")
+                and (r["state"] == "published" or not r["data"].get("agent"))
+            ),
+            None,
+        )
         report = {
             t["position"]: t for t in (reported["data"]["curation"]["tracks"] if reported else [])
         }
@@ -566,6 +632,7 @@ class Requests:
             "publish_after_generation": not definition.review_before_publishing,
             "enable_after": False,
             "addition": {"key": key, "hash": digest(addition.canonical())},
+            **acting,
         }
         async with self.store.transaction() as db:
             await db.execute(
@@ -597,10 +664,23 @@ class Requests:
         return await forget(self.store, ident)
 
     async def retry(self, owner: str, ident: str, *, creator: str | None = None) -> None:
+        """``creator``: the agent grant retrying its own request (the HTTP API); None for
+        the owner on the dashboard, who takes over a run an agent asked for (also when
+        that agent was disconnected since)."""
         await self.owned(owner, ident, creator)
+        await self.rerun(owner, ident, actor=creator or "", taking_over=False)
+
+    async def rerun(self, owner: str, ident: str, *, actor: str, taking_over: bool = True) -> None:
+        """Continue the latest failed or uncertain run of the owner's playlist ``ident``.
+        It reconciles a stored publication intent; it never chooses new music for a
+        frozen selection. The run becomes ``actor``'s work (an agent grant; "" for the
+        owner); without ``taking_over``, only a run someone asked for after the request
+        was made changes hands - others keep the request's own authority."""
         mix = await self.service.repo.mix(ident, owner)
-        await self.guard(mix)
         run = (await self.service.repo.runs(ident))[0]
+        if taking_over or "actor" in run["data"]:
+            run["data"]["actor"] = actor
+        await self.guard(mix, run["data"])
         if run["state"] not in ("failed", "uncertain"):
             raise RequestError("Only a failed or uncertain run can be retried.", 409)
         # No new selection after the first one was frozen; uncertain creates reconcile.

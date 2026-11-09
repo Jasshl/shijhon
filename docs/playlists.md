@@ -4,11 +4,16 @@ To preserve an existing ordered track list, including repeated songs, use
 [Import a playlist](playlist-imports.md). Paste artist/title lines or upload a CSV,
 review matched and unresolved entries, then explicitly publish the reviewed selection.
 
+## Agents
+
+AI agents connected over MCP can make and change playlists
+([agent access](agent-access.md)). The rest of this page covers the dashboard's own tools.
+
 ## Describe a playlist
 
 Open **Playlists → Describe a playlist** in the dashboard. Signing in already connects
-your Navidrome account (after you disconnect, connect it again on **Playlists**), and an
-AI service must be set up ([AI connections](#ai-connections)); Last.fm is optional. Enter the
+your Navidrome account (after you disconnect, connect it again on **Playlists**). It
+needs [server AI](#server-ai); Last.fm is optional. Enter the
 instructions, track count (1–100) and maximum tracks per artist (1–10), then choose
 **Create playlist**. Publication is included. The **Review a preview before
 publication** option, under **Advanced**, stops before publication until you choose
@@ -72,9 +77,8 @@ Requests are one-off by default. Their instructions and run state remain in priv
 state for status and recovery, but no schedule is enabled. **Save these instructions for
 reuse** also allows an explicit manual refresh from the request page. Daily or weekly
 refreshes require that checkbox, an explicit cadence and usable saved AI; they start
-after verified publication. Pause stops future refreshes. You can pause an agent-created
-playlist or discard its preview in the dashboard even after revoking the agent
-connection. Retry reuses a frozen selection and reconciles an uncertain native write
+after verified publication. Pause stops future refreshes. An agent-created playlist can be paused, and its preview
+discarded, in the dashboard even after the agent connection is revoked. Retry reuses a frozen selection and reconciles an uncertain native write
 rather than choosing different music or blindly creating a second playlist. A selection
 interrupted before it was frozen can be regenerated.
 
@@ -170,25 +174,6 @@ action) clears them for that playlist: removed songs can be suggested again and 
 songs stop guiding the AI. Your playlist in Navidrome does not change, and edits made
 since its last refresh are learned again at the next one.
 
-## External agents
-
-Connect to `/shijhon/mcp` with OAuth. Agents discover which features are configured,
-which permissions were granted and what needs setup. Library reads, configured
-history reads and agent-curated explicit selections work without server AI.
-Descriptions and daily/weekly refreshes use the saved server AI connection;
-Shijhon runs recurring work after the external agent disconnects.
-
-See [agent setup](agent-access.md) for enabling the endpoint, reverse-proxy routes,
-permissions, tools and configuration choices. The optional
-[playlist skill](../skills/shijhon-playlists/SKILL.md) adds curation and recovery
-guidance.
-
-The [request contract](../skills/shijhon-playlists/references/api.md) describes
-payload limits and recovery. Keep the same idempotency key and identical input
-after an uncertain response. OAuth token refresh preserves request ownership.
-History and library remain independent opt-ins for each task. Publishing can add
-library placeholders; audio downloads remain separate.
-
 ## Discovery playlists
 
 Open **Playlists** in the dashboard. Signing in already connects your Navidrome account
@@ -225,8 +210,8 @@ another tab.
 
 Regular refreshes are optional. Choose every day or every week and check **Enable regular
 refreshes after publishing**, or enable them later on the mix page. Leaving it unchecked
-keeps a new or paused mix paused. Saving rules shows the current refresh choice so you can
-keep or change it; manual generation preserves it. Daily and weekly refreshes run 24 hours
+keeps a new or paused mix paused. Saving rules shows the current refresh choice, to keep or
+change; manual generation preserves it. Daily and weekly refreshes run 24 hours
 or seven days after the last successful publication; the service must be running. After
 downtime, one overdue refresh runs, without replaying every missed interval. Pause also
 cancels a pending request to enable refreshes. A scheduled selection still choosing tracks
@@ -234,7 +219,7 @@ stops when paused; an already-started publication finishes its verification.
 
 The defaults are 30 tracks, at least 70% unfamiliar music, two tracks per artist,
 excluding the last 14 days of listening and the last 28 days of this mix's tracks.
-You can change these rules. Saving generates and publishes a new selection, or creates
+These rules can be changed. Saving generates and publishes a new selection, or creates
 a preview when **Review before publishing** is selected. Refreshes wait for that publication.
 A brief such as “melodic, adventurous music for an evening walk” requires AI curation.
 
@@ -244,7 +229,7 @@ from the imported history, not that you have never heard a track. Your library's
 and placeholder files do not count as listening history. Last.fm similarity supplies
 candidates; Shijhon checks recording titles, versions, artists and available duration,
 album and recording identifiers. Ambiguous matches are skipped. If too few recordings
-meet the rules, the run fails and you can adjust the rules and generate again.
+meet the rules, the run fails, and the rules can be adjusted before generating again.
 
 When a local album has a current match, discovery prefers that edition when the
 recording's ISRC and details agree. The saved selection records the edition that will actually
@@ -280,8 +265,8 @@ where possible. Re-enable refreshes if needed; an explicit pause stays in effect
 
 After publication, open **Downloads** to prepare the audio of a native playlist in the
 server library. This also works for other native playlists owned by your connected
-account. Shijhon can reuse a valid discovery connection, or you can connect separately
-with your Navidrome password and choose a playlist. It saves a reusable authorization
+account. Shijhon can reuse a valid discovery connection, or connect separately with a
+Navidrome password and a chosen playlist. It saves a reusable authorization
 token, not the password; reconnect if the password changes.
 Preparing audio does not edit the playlist, add releases or choose new recordings.
 Owned and already downloaded songs need no add-on fetch. A playlist can have as many
@@ -307,24 +292,25 @@ own offline-save feature afterward. Catalog search only shows tracks, and publis
 discovery playlist can add silent library placeholders without fetching their audio.
 The default limits and shared-account controls are explained in [Add-ons](add-ons.md#downloads-and-playlist-preparation).
 
-## AI connections
+## Server AI
 
-AI is optional for history discovery. Without it, Shijhon selects from the resolved
-candidates using listening
-and similarity evidence. With it, the brief, candidate artists/titles/albums, familiarity
+Server AI is AI that Shijhon runs itself. Playlists described on the dashboard and their
+scheduled refreshes need it. It can also curate discovery mixes; without it, Shijhon
+chooses their songs from listening and similarity evidence. An agent you connect works
+without it. With it, the brief, candidate artists/titles/albums, familiarity
 flags and similarity scores are sent to the selected model. Account credentials and the
 raw listening timeline are excluded. Shijhon validates the model's candidate IDs, track
 count, unfamiliar share and artist limits. An AI failure stops the run; it does not
 silently substitute a mix that ignores the brief.
 
 The shared administrator-configured service is the default for new accounts. In
-**Connection and AI settings → Your AI preferences**, each account can disable AI, follow the administrator's
+**Connection and AI settings → Server AI**, each account can disable AI, follow the administrator's
 default model, or select an additional administrator-approved model. This preference
 applies across that account's devices and affects described playlists, discovery
 curation and future refreshes. History settings and playlist instructions remain
 personal.
 
-Administrators configure **Shared AI service** separately: backend, API URL/key,
+Administrators configure the connection in the same section: API URL and key,
 default model and up to 50 additional approved model names (one per line). The default
 model is always approved. Saving host settings changes the shared service for all
 accounts; selecting **No AI** disables it. Approve models whose access and cost the
@@ -332,8 +318,7 @@ installation can support. Executables, runner login, network permissions, deadli
 and other installation limits remain administrator-controlled. Personal choices and
 agent tools cannot change them or change another account's model.
 
-API connections require a URL and default model; local runners allow a blank model
-to use the runner's default. Ordinary users see approved model names without the
+API connections require a URL and default model. Ordinary users see approved model names without the
 endpoint or credentials. Removing a selected model stops future model requests until
 the user chooses another approved model or the administrator's default. Shijhon
 checks current account credentials, administrator status for private connections,
@@ -348,41 +333,22 @@ service does not rewrite those private connections. Ordinary users cannot supply
 an endpoint, key, executable or arbitrary model name. The forms show relevant
 fields for each backend and work without JavaScript.
 
-- **API:** enter a base URL, model and optional key. The endpoint must support
-  `POST <base>/chat/completions` and `response_format: json_schema`. Use a base such as
-  `https://your-endpoint.example/v1`. Public endpoints require HTTPS. Local/private
-  endpoints require the installation setting `allow_private_api = true`. Redirects are
-  refused, and the existing network policy excludes metadata/link-local addresses.
-- **Codex CLI:** install and authenticate Codex in the environment where Shijhon runs,
-  then enable its command below. Runs use a scratch directory, read-only sandbox,
-  ephemeral sessions,
-  ignored user configuration/rules, disabled shell/app/plugin/web features and a final
-  output schema. These controls do **not** establish a universal tool-free boundary:
-  read-only still permits reads. Use a dedicated controlled service account/container
-  whose files contain only the intended CLI authentication and required runtime data.
-- **Claude Code:** install and authenticate it in that service environment. Runs disable
-  built-in tools, MCP servers, customizations, hooks and session persistence using supported CLI
-  flags. Managed policy can still force hooks, so use a controlled installation with
-  known policy. Shijhon does not manage a model service's account login.
+The API has to accept `POST <base>/chat/completions` with
+`response_format: json_schema`, which most providers and local AI servers do. Use a base
+such as `https://your-endpoint.example/v1`. Public addresses need HTTPS. For AI on this
+machine or your network, an administrator turns on **Allow AI on this machine or
+your network** (`playlists.allow_private_api`). With Docker, the machine itself is
+`host.docker.internal`, such as `http://host.docker.internal:11434/v1`, and the AI service
+has to listen on more than `127.0.0.1` for the container to reach it. Redirects are
+refused, and metadata and link-local addresses stay blocked.
 
-CLI usage and limits follow the authenticated account. API usage uses that API account.
-The commands run as Shijhon's operating-system user. With Docker, they must be available
-inside its container, with their authentication configured there. Installing or signing
-in on the Docker host does not automatically make them available inside the container;
-authenticating on another computer also does not connect it to Shijhon. A runner on a
-separate host is not implemented. The standard image does not bundle either CLI.
-Unsupported CLI flags cause a failed
-run instead of being dropped. The integration was checked against Codex CLI 0.162.1 and
-Claude Code 2.1.296; model inference still depends on your runtime/account.
+The connection can also be Codex CLI or Claude Code on the server. They need more setup
+([local AI runners](reference/local-ai-runners.md)).
 
-The installation configuration controls the executable, never a dashboard form:
+The installation configuration also sets the limits:
 
 ```toml
 [playlists]
-allow_cli = true
-codex_command = "codex"
-claude_command = "claude"
-allow_private_api = false
 history_days = 90
 history_pages = 100
 candidate_limit = 160
@@ -390,17 +356,13 @@ run_seconds = 900
 ai_seconds = 180
 ```
 
-Use executable paths or commands available on the service's PATH, without embedded
-arguments. The history page limit bounds one complete import (200 listens per page).
+The history page limit bounds one complete import (200 listens per page).
 Increase it for very busy histories. An incomplete import never advances its saved
 cursor. Increase the run deadline if the selected catalog is slow; requests and model
-processes also have individual deadlines. Runner processes are terminated on timeout
-or shutdown.
+calls also have individual deadlines.
 
-See the [Codex non-interactive guide](https://learn.chatgpt.com/docs/non-interactive-mode),
-[Claude CLI reference](https://code.claude.com/docs/en/cli-reference),
-[Claude managed hooks](https://code.claude.com/docs/en/hooks#disable-or-remove-hooks), and
-[Last.fm history API](https://www.last.fm/api/show/user.getRecentTracks) for their contracts.
+See the [Last.fm history API](https://www.last.fm/api/show/user.getRecentTracks) for its
+contract.
 
 ## Privacy and current scope
 

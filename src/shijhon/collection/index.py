@@ -10,6 +10,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+import aiosqlite
 import anyio
 import anyio.lowlevel
 
@@ -20,6 +21,27 @@ COLUMNS = (
     "library_id,track_key,song_id,release_key,album_id,artist_id,title,album,artist,"
     "search_text,duration,size,year,metadata,original,present,generation,indexed_at"
 )
+# What a snapshot says of a song; a song that says the same in the next stays as it is.
+_COMPARED = ",".join(c for c in COLUMNS.split(",") if c not in ("generation", "indexed_at"))
+_SAME = " AND ".join(
+    f"s.{c} IS t.{c}" for c in _COMPARED.split(",") if c not in ("library_id", "track_key")
+)
+_STALE = (  # songs of the library that are not, or not like this, in the scan
+    "SELECT t.track_key FROM collection_tracks t WHERE t.library_id=? AND t.present=1 AND NOT "
+    "EXISTS (SELECT 1 FROM collection_scan_tracks s WHERE s.library_id=t.library_id "
+    "AND s.generation=? AND s.track_key=t.track_key AND " + _SAME + ")"
+)
+_FRESH = (  # songs of the scan that are not, or not like this, in the library
+    "SELECT s.track_key FROM collection_scan_tracks s WHERE s.library_id=? AND s.generation=? "
+    "AND NOT EXISTS (SELECT 1 FROM collection_tracks t WHERE t.library_id=s.library_id "
+    "AND t.track_key=s.track_key AND t.present=1 AND " + _SAME + ")"
+)
+_REVISION = "SELECT revision FROM collection_revisions WHERE scope=''"
+_DELETED_AT_ONCE = 2000  # staged rows, so that everything else gets the store between them
+
+
+def _revision(row: Any) -> int:
+    return int(row[0]) if row is not None else 0
 
 
 class Index:
@@ -84,6 +106,10 @@ class Index:
                         break
                     await anyio.lowlevel.checkpoint()
                 await self._authorize(owner_id, library_id)
+                # Comparing passes over the whole library: on a connection of its own,
+                # so that nothing else asking the store waits for it.
+                async with self.store.snapshot() as reader:
+                    compared = await self._differences(reader, library_id, generation)
                 async with self.store.transaction() as conn:
                     # Publication must never silently repoint a durable alias,
                     # including when import publication raced this structural scan.
@@ -98,29 +124,15 @@ class Index:
                         raise CollectionError(
                             "The music index contains conflicting durable identities."
                         )
+                    # The comparison stands unless a song was written since (every writer of
+                    # the songs counts: ``collection_revisions``).
+                    cursor = await conn.execute(_REVISION)
+                    if _revision(await cursor.fetchone()) != compared[0]:
+                        compared = await self._differences(conn, library_id, generation)
+                    _, stale, fresh = compared
                     # A refresh with identical structural facts keeps its generation:
                     # native query caches need no rebuild merely because time passed.
-                    comparable = ",".join(
-                        c for c in COLUMNS.split(",") if c not in ("generation", "indexed_at")
-                    )
-                    different = await conn.execute(
-                        "SELECT 1 FROM ("
-                        f"SELECT {comparable} FROM collection_scan_tracks"
-                        " WHERE library_id=? AND generation=? EXCEPT "
-                        f"SELECT {comparable} FROM collection_tracks"
-                        " WHERE library_id=? AND present=1) LIMIT 1",
-                        [library_id, generation, library_id],
-                    )
-                    unchanged = await different.fetchone() is None
-                    reverse = await conn.execute(
-                        "SELECT 1 FROM ("
-                        f"SELECT {comparable} FROM collection_tracks"
-                        " WHERE library_id=? AND present=1 EXCEPT "
-                        f"SELECT {comparable} FROM collection_scan_tracks"
-                        " WHERE library_id=? AND generation=?) LIMIT 1",
-                        [library_id, library_id, generation],
-                    )
-                    unchanged = unchanged and await reverse.fetchone() is None
+                    unchanged = not stale and not fresh
                     current = await conn.execute(
                         "SELECT generation FROM collection_index WHERE library_id=?",
                         [library_id],
@@ -139,19 +151,24 @@ class Index:
                             [offset, time.time(), library_id],
                         )
                         return
+                    # The songs that changed, however large the library: the others are
+                    # part of this snapshot as they stand.
                     await conn.execute(
-                        "UPDATE collection_tracks SET present=0 WHERE library_id=?", [library_id]
+                        "UPDATE collection_tracks SET present=0 WHERE library_id=?"
+                        " AND track_key IN (SELECT value FROM json_each(?))",
+                        [library_id, json.dumps(stale)],
                     )
                     await conn.execute(
                         f"INSERT INTO collection_tracks({COLUMNS}) SELECT {COLUMNS}"
                         " FROM collection_scan_tracks WHERE library_id=? AND generation=?"
+                        " AND track_key IN (SELECT value FROM json_each(?))"
                         " ON CONFLICT(library_id,track_key) DO UPDATE SET "
                         + ",".join(
                             f"{c}=excluded.{c}"
                             for c in COLUMNS.split(",")
                             if c not in ("library_id", "track_key")
                         ),
-                        [library_id, generation],
+                        [library_id, generation, json.dumps(fresh)],
                     )
                     await conn.execute(
                         "INSERT INTO collection_track_aliases SELECT library_id,alias,track_key"
@@ -181,13 +198,31 @@ class Index:
                 raise
             finally:
                 with anyio.CancelScope(shield=True):
-                    await self.store.execute(
-                        "DELETE FROM collection_scan_aliases WHERE library_id=?",
-                        [library_id],
-                    )
-                    await self.store.execute(
-                        "DELETE FROM collection_scan_tracks WHERE library_id=?", [library_id]
-                    )
+                    await self._forget_staged("collection_scan_aliases", library_id)
+                    await self._forget_staged("collection_scan_tracks", library_id)
+
+    async def _differences(
+        self, conn: aiosqlite.Connection, library_id: str, generation: str
+    ) -> tuple[int, list[str], list[str]]:
+        """As of one read: (the count of songs written, the library's songs the scan does not
+        have as they are, the scan's songs the library does not have as they are)."""
+        async with conn.execute(_REVISION) as cursor:
+            revision = _revision(await cursor.fetchone())
+        async with conn.execute(_STALE, [library_id, generation]) as cursor:
+            stale = [str(row[0]) for row in await cursor.fetchall()]
+        async with conn.execute(_FRESH, [library_id, generation]) as cursor:
+            fresh = [str(row[0]) for row in await cursor.fetchall()]
+        return revision, stale, fresh
+
+    async def _forget_staged(self, table: str, library_id: str) -> None:
+        while await self.store.fetchone(
+            f"SELECT 1 FROM {table} WHERE library_id=? LIMIT 1", [library_id]
+        ):
+            await self.store.execute(
+                f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table}"
+                " WHERE library_id=? LIMIT ?)",
+                [library_id, _DELETED_AT_ONCE],
+            )
 
     async def add(
         self, library_id: str, songs: Sequence[Mapping[str, Any]]

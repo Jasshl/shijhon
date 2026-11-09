@@ -225,7 +225,8 @@ class Repository:
         }[query.sort]
         # Rows, totals, ownership and full-group badges share one SQLite snapshot.
         join = joined(owner, profile_id, library)
-        async with self.store.transaction() as conn:
+        # A pass over the whole pool, on a connection of its own: nothing else waits for it.
+        async with self.store.snapshot() as conn:
             # The page's groups count all matching groups (``group_total``); only a page
             # past the end counts them on its own.
             cursor = await conn.execute(
@@ -236,7 +237,6 @@ class Repository:
                 "sum(t.present) AS available_tracks,sum(t.present=0) AS unavailable_tracks,"
                 f"sum({RESTORABLE_SQL}) AS restorable_tracks,"
                 f"sum({IMPORTED_SQL}) AS imported_tracks,1 AS editable,"
-                "max(json_extract(t.metadata,'$.coverArt')) AS cover_art,"
                 f"sum({effective}) AS saved,sum(t.duration) AS duration,"
                 "max(t.indexed_at) AS newest,count(*) OVER () AS group_total"
                 + JOIN
@@ -259,6 +259,18 @@ class Repository:
                 )
                 counted = await cursor.fetchone()
                 total = int(counted["n"]) if counted else 0
+            # The covers of the page's groups only: each takes parsing a song's metadata.
+            page = json.dumps([row["item_key"] for row in rows])
+            cursor = await conn.execute(
+                WITH_KEYS
+                + f"SELECT t.{key} AS item_key,max(json_extract(t.metadata,'$.coverArt')) AS cover"
+                + JOIN
+                + " WHERE "
+                + condition
+                + f" AND t.{key} IN (SELECT value FROM json_each(?)) GROUP BY t.{key}",
+                [*join, *params, page],
+            )
+            covers = {group["item_key"]: group["cover"] for group in await cursor.fetchall()}
             # Each listed group as a whole, in one statement for the page.
             cursor = await conn.execute(
                 WITH_KEYS + f"SELECT t.{key} AS item_key,count(*) AS all_tracks,"
@@ -267,7 +279,7 @@ class Repository:
                 + JOIN
                 + f" WHERE t.library_id=? AND ({pool})"
                 f" AND t.{key} IN (SELECT value FROM json_each(?)) GROUP BY t.{key}",
-                [*join, library, json.dumps([row["item_key"] for row in rows])],
+                [*join, library, page],
             )
             whole = {
                 group["item_key"]: {k: group[k] for k in FULL} for group in await cursor.fetchall()
@@ -276,6 +288,7 @@ class Repository:
             shown = [
                 {
                     **{k: v for k, v in dict(row).items() if k != "group_total"},
+                    "cover_art": covers.get(row["item_key"]),
                     **whole.get(row["item_key"], nothing),
                 }
                 for row in rows

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal
 
@@ -16,6 +17,7 @@ from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import AnyHttpUrl, Field, ValidationError
 
 from shijhon.agents.oauth import OAuth
+from shijhon.agents.playlists import IMPORT_TEXT, PlaylistTools, register_playlist_tools
 from shijhon.agents.songs import (
     LIBRARY_KEYS,
     entry,
@@ -32,10 +34,11 @@ from shijhon.downloads.model import (
     ConnectionRequired,
     PreparationError,
 )
+from shijhon.playlists.edits import forget
 from shijhon.playlists.facts import Facts, tag_key
+from shijhon.playlists.import_formats import MAX_ROWS
 from shijhon.playlists.model import (
     Connection,
-    Definition,
     Model,
     PlaylistError,
     UpstreamUnavailable,
@@ -99,6 +102,7 @@ class Tools:
         self.preparation = preparation
         self.setup_url = oauth.base + "/shijhon/playlists"
         self.sound_url = oauth.base + "/shijhon/sound"
+        self.managed = PlaylistTools(self)
 
     async def auth(self, *scopes: str) -> AccessToken:
         current = get_access_token()
@@ -257,16 +261,40 @@ class Tools:
                 "listening_history": feature(("history",), history_missing),
                 "agent_curated_playlist": {
                     **feature(("create",), []),
-                    "tools": ["create_playlist", "add_playlist_tracks"],
+                    "tools": [
+                        "create_playlist",
+                        "replace_playlist_tracks",
+                        "add_playlist_tracks",
+                        "edit_playlist_tracks",
+                    ],
+                },
+                "playlist_management": {
+                    **feature(("create",), []),
+                    "tools": [
+                        "review_playlist_preview",
+                        "retry_playlist_request",
+                        "manage_playlist_refresh",
+                    ],
+                },
+                "request_status": {
+                    **feature(("status",), []),
+                    "tools": ["list_playlist_requests", "get_playlist_request"],
+                },
+                "discovery_mix": {
+                    **feature(("create", "history"), history_missing),
+                    "tools": ["create_discovery_mix", "update_discovery_mix"],
+                },
+                "playlist_import": {
+                    **feature(("create", "library"), []),
+                    "tools": ["import_playlist", "get_playlist_import", "review_playlist_import"],
                 },
                 "description_playlist": feature(("create",), ai_missing),
                 "recurring_description_playlist": feature(("create",), ai_missing),
-                "request_status": feature(("status",), []),
                 "connection_choices": feature(
                     ("settings",),
                     []
                     if choices["available"] and connection.use_shared_ai
-                    else ["Select the administrator-configured shared AI service in Playlists."],
+                    else ["Select server AI in Playlists."],
                 ),
                 "audio_preparation": {
                     **feature(("downloads",), audio_missing),
@@ -286,12 +314,15 @@ class Tools:
             "recurrence": {
                 "executor": "shijhon",
                 "cadences": ["daily", "weekly"],
-                "requires_server_ai": True,
+                "described_playlists_need": "server_ai",
+                "discovery_mixes_need": "listening_history",
+                "agent_curated_playlists": "not scheduled: refresh them with "
+                "replace_playlist_tracks when the user asks",
             },
             "setup": {
                 "url": self.setup_url,
                 "agent_configurable": [
-                    "your model choice among administrator-approved shared AI models",
+                    "your model choice among administrator-approved server AI models",
                 ],
                 "browser_required": [
                     "AI connection credentials and endpoint",
@@ -306,6 +337,8 @@ class Tools:
             "limits": {
                 "playlist_tracks": 100,
                 "playlist_additions": ADDITIONS,
+                "import_entries": getattr(self.service.settings, "import_max_entries", MAX_ROWS),
+                "import_line_characters": IMPORT_TEXT,
                 "read_page": 100,
                 "song_facts_songs": MAX_SONG_IDS,
                 "sound_seed_songs": MAX_SEEDS,
@@ -317,6 +350,11 @@ class Tools:
                 "audio_preparation_keys": MAX_AGENT_REQUESTS,
             },
             "notes": [
+                "Agent curation is the main path: you choose the songs and Shijhon resolves "
+                "and publishes them; replace_playlist_tracks refreshes them later. Server AI "
+                "is optional, for described playlists and their unattended refreshes.",
+                "The user's playlists made on the dashboard or by other agents are listed and "
+                "managed too. Telling library songs apart in them needs library permission.",
                 "Read permissions do not imply consent to use personal context for every task.",
                 "Library membership is not listening evidence. Entries can include placeholders.",
                 "Song facts, Last.fm tags and sound analysis are approximate hints and many "
@@ -844,61 +882,93 @@ class Tools:
                 creator=self.grant(token),
                 scopes=token.scopes,
             )
-            return {
-                "created": created,
-                "request": await self.service.requests.status(
-                    str(token.subject), ident, creator=self.grant(token)
-                ),
-            }
+            return {"created": created, "request": await self.managed.view(token, ident)}
 
-    async def request(self, ident: str, action: str = "status") -> dict[str, Any]:
+    async def request(
+        self, ident: str, action: str = "status", songs: list[str] | None = None
+    ) -> dict[str, Any]:
+        """Any of the owner's Shijhon playlists, whatever made it: read with status
+        permission, changed with create permission (and history for a discovery mix, or
+        the context its saved instructions use). A retry or a refresh is this agent's own
+        work, authorized by its grant. ``songs``: forget_edits forgets only these."""
+        if songs is not None and (
+            action != "forget_edits"
+            or not 1 <= len(songs) <= 200
+            or not all(isinstance(s, str) and 0 < len(s) <= 100 for s in songs)
+        ):
+            raise RequestError("Send 1 to 200 song IDs, with forget_edits only.")
         token = await self.auth("status" if action == "status" else "create")
-        owner, grant_id = str(token.subject), self.grant(token)
         if not ident or len(ident) > 100:
             raise RequestError("Use a playlist request ID.")
         if action == "status":  # a read: it does not wait for a publication to finish
-            await self.service.requests.owned(owner, ident, grant_id)
-            return {"request": await self.service.requests.status(owner, ident, creator=grant_id)}
+            return {"request": await self.managed.view(token, ident)}
         async with self.service.changing():
             token = await self.auth("create")
-            owner, grant_id = str(token.subject), self.grant(token)
-            await self.service.requests.owned(owner, ident, grant_id)
-            mix = await self.service.repo.mix(ident, owner)
-            definition = Definition.model_validate_json(mix["definition"])
+            owner, grant = str(token.subject), self.grant(token)
+            await self.service.connection(owner)
+            mix, definition = await self.managed.changes.mix(owner, ident)
+            discovery = definition.mode == "discovery"
+            if definition.mode == "import":
+                raise RequestError("Act on an import with review_playlist_import.")
+            if definition.mode == "tracks" and action in ("resume", "refresh", "preview"):
+                raise RequestError(
+                    "An agent-curated playlist has no server refresh: replace its tracks with "
+                    "replace_playlist_tracks when the user asks."
+                )
             if action not in ("pause", "forget_edits"):
                 await self.auth(
                     "create",
-                    *(("history",) if definition.use_history else ()),
+                    *(("history",) if definition.use_history or discovery else ()),
                     *(("library",) if definition.use_library else ()),
                 )
-                await self.service.requests.guard(mix)
+                if discovery:
+                    await self.managed.changes.discovery(owner)
+                if action == "resume":
+                    # Scheduled refreshes run with the authority the playlist was made with.
+                    try:
+                        await self.service.requests.guard(mix)
+                    except RequestError as exc:
+                        if exc.status != 401:
+                            raise
+                        raise RequestError(
+                            "The agent that made this playlist was disconnected, so its "
+                            "scheduled refreshes cannot run. Refresh it once with refresh, or "
+                            "replace its tracks with replace_playlist_tracks.",
+                            409,
+                        ) from None
+                elif action != "retry":
+                    await self.service.requests.guard(mix, {"actor": grant})
             if action == "retry":
-                await self.service.requests.retry(owner, ident, creator=grant_id)
+                await self.service.requests.rerun(owner, ident, actor=grant)
             elif action == "forget_edits":
                 # Like a pause: it reads nothing and calls no model.
-                forgotten = await self.service.requests.forget_edits(owner, ident, creator=grant_id)
-                status = await self.service.requests.status(owner, ident, creator=grant_id)
-                return {"request": status, "forgotten": forgotten}
-            elif action in ("pause", "resume", "refresh"):
-                if action == "pause":
-                    await self.service.repo.pause(ident)
-                else:
-                    connection = await self.service.connection(owner)
-                    self.service.requests.usable_ai(connection)
-                    if not definition.save_instructions:
-                        raise RequestError("This playlist has no saved refresh instructions.")
-                    if action == "resume":
-                        if not definition.interval or not mix["published"]:
-                            raise RequestError(
-                                "Publish a playlist with daily or weekly instructions first."
-                            )
-                        await self.service.repo.store.execute(
-                            "UPDATE playlist_mixes SET enabled=1 WHERE id=?", [ident]
+                forgotten = await forget(self.service.repo.store, ident, songs)
+                return {"request": await self.managed.view(token, ident), "forgotten": forgotten}
+            elif action == "pause":
+                await self.service.repo.pause(ident)
+            else:  # resume, refresh or preview: Shijhon's own selection
+                if definition.ai:
+                    self.service.requests.usable_ai(await self.service.connection(owner))
+                if not discovery and not definition.save_instructions:
+                    raise RequestError("This playlist has no saved refresh instructions.")
+                if action == "resume":
+                    if not definition.interval or not mix["published"]:
+                        raise RequestError(
+                            "Publish a playlist with daily or weekly refreshes first."
                         )
-                    else:
-                        await self.service.repo.enqueue(ident)
-                self.service.notify()
-            return {"request": await self.service.requests.status(owner, ident, creator=grant_id)}
+                    await self.service.repo.store.execute(
+                        "UPDATE playlist_mixes SET enabled=1,due=? WHERE id=?",
+                        [time.time() + definition.interval, ident],
+                    )
+                else:
+                    try:
+                        await self.service.repo.enqueue(
+                            ident, review=True if action == "preview" else None, actor=grant
+                        )
+                    except PlaylistError as exc:
+                        raise RequestError(str(exc), 409) from None
+            self.service.notify()
+        return {"request": await self.managed.view(token, ident)}
 
     async def add(self, ident: str, tracks: TrackAddition, idempotency_key: str) -> dict[str, Any]:
         token = await self.auth("create")
@@ -906,32 +976,15 @@ class Tools:
             raise RequestError("Use a playlist request ID.")
         async with self.service.changing():
             token = await self.auth("create")
-            owner, grant_id = str(token.subject), self.grant(token)
+            # The agent's own grant authorizes the addition, also on another's request.
             added = await self.service.requests.add_tracks(
-                owner, ident, idempotency_key, tracks, creator=grant_id
+                str(token.subject), ident, idempotency_key, tracks, actor=self.grant(token)
             )
-            return {
-                "added": added,
-                "request": await self.service.requests.status(owner, ident, creator=grant_id),
-            }
+        return {"added": added, "request": await self.managed.view(token, ident)}
 
-    async def listing(self, limit: int) -> dict[str, Any]:
+    async def listing(self, limit: int, offset: int, kind: str) -> dict[str, Any]:
         token = await self.auth("status")
-        if not 1 <= limit <= 100:
-            raise RequestError("List 1 to 100 requests at a time.")
-        rows = await self.service.repo.store.fetchall(
-            "SELECT id FROM playlist_requests WHERE owner=? AND creator=?"
-            " ORDER BY rowid DESC LIMIT ?",
-            [token.subject, self.grant(token), limit],
-        )
-        return {
-            "requests": [
-                await self.service.requests.status(
-                    str(token.subject), r["id"], creator=self.grant(token)
-                )
-                for r in rows
-            ]
-        }
+        return await self.managed.listing(token, limit, offset, kind)
 
     async def configure(self, choices: Choices) -> dict[str, Any]:
         token = await self.auth("settings")
@@ -1105,18 +1158,18 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
 
     @mcp.tool(annotations=write)
     async def create_playlist(request: PlaylistRequest, idempotency_key: str) -> CallToolResult:
-        """Create and publish exactly the requested playlist. Send a description with saved server
-        AI; send ordered artist/title tracks for agent curation without server AI.
-        Preserve constraints in prompt and versions in version. When the user relates the
-        request to a playlist or songs they have ("more energetic than my Evening mix"),
-        find them with get_native_playlists or search_library and pass their IDs in
-        request.reference_playlists or request.reference_songs instead of pasting names
-        into the prompt. Song facts and sound analysis are approximate optional hints;
-        use your own musical knowledge first and never drop a song only for missing facts.
-        Daily/weekly cadence requires explicit user intent, saved instructions and server
+        """Create and publish exactly the requested playlist. The main path: choose the
+        songs yourself and send them as ordered artist/title `tracks`, with the user's wish
+        and constraints in `prompt` (saved as the playlist's brief). A description alone
+        needs Shijhon's server AI. When the user relates the request to a playlist or songs
+        they have ("more energetic than my Evening mix"), find them with
+        get_native_playlists or search_library; with a description, pass their IDs in
+        request.reference_playlists or request.reference_songs. Song facts and sound
+        analysis are approximate optional hints: your own musical knowledge comes first.
+        Daily/weekly cadence needs an explicit user request, saved instructions and server
         AI. Context defaults off. Keep one key and identical input through recovery.
-        Publication may add library placeholders, not download audio. preview=true waits
-        for human dashboard approval.
+        Publication may add library placeholders, not download audio. preview=true waits for
+        review (review_playlist_preview or the dashboard).
         Explicit tracks: each resolves to the library's recording, else the catalog's (the
         original release when several versions match). The tracks that resolve are
         published in order; get_playlist_request's `tracks` reports every track's outcome
@@ -1129,13 +1182,13 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
     async def add_playlist_tracks(
         request_id: str, tracks: list[TrackChange], idempotency_key: str
     ) -> CallToolResult:
-        """Add explicit tracks to this connection's published explicit-track playlist (or
-        one whose tracks all failed), without a new request. A track with `replaces` (a
-        left-out track's position in the request's `tracks` report) takes its place;
-        others go at the end. Published tracks stay; still unresolved ones are looked up
-        again; the same playlist is republished. Refused when the playlist was edited in
-        Navidrome since publication. Use a new key
-        for each addition and keep it through recovery; confirm with get_playlist_request.
+        """Add tracks to one of the user's published agent-curated playlists (or one whose
+        tracks all failed), without a new request. A track with `replaces` (a left-out
+        track's position in the request's `tracks` report) takes its place; others go at
+        the end. Published tracks stay; still unresolved ones are looked up again; the same
+        playlist is republished. Refused when the playlist was edited in Navidrome since
+        publication: then use replace_playlist_tracks. Use a new key for each addition and
+        keep it through recovery; confirm with get_playlist_request.
         """
         return await tools.guarded(
             lambda: tools.add(request_id, TrackAddition(tracks=tracks), idempotency_key)
@@ -1143,19 +1196,31 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
 
     @mcp.tool(annotations=read)
     async def get_playlist_request(request_id: str) -> CallToolResult:
-        """Check this connection's request. Only published confirms verified native publication.
-        Retain the request ID and use this after uncertain submissions.
+        """Read one of the user's Shijhon playlists, whoever made it: `kind`, `state`, its
+        `brief`, the latest run's songs (`selected`), the last published songs with their
+        `song_id` (`published_songs`), each requested track's outcome (`tracks`) and the
+        songs the user removed or added in their apps (`user_edits`). Songs of a playlist
+        you did not make need library permission (and history if history chose them).
+        Only `published` confirms verified native publication. Retain the request ID and
+        use this after uncertain submissions.
         """
         return await tools.guarded(lambda: tools.request(request_id))
 
     @mcp.tool(annotations=read)
-    async def list_playlist_requests(limit: int = 30) -> CallToolResult:
-        """List bounded requests belonging to this OAuth connection, including refresh state."""
-        return await tools.guarded(lambda: tools.listing(limit))
+    async def list_playlist_requests(
+        limit: int = 30,
+        offset: int = 0,
+        kind: Literal["all", "agent_curated", "described", "discovery", "import"] = "all",
+    ) -> CallToolResult:
+        """List the user's Shijhon playlists, newest first: those made on the dashboard, by
+        this agent or by other agents, discovery mixes and imports, with state and refresh
+        state. Read one with get_playlist_request.
+        """
+        return await tools.guarded(lambda: tools.listing(limit, offset, kind))
 
     @mcp.tool(annotations=write)
     async def retry_playlist_request(request_id: str) -> CallToolResult:
-        """Retry the same failed/uncertain request after diagnosis, preserving frozen selections.
+        """Retry the same failed/uncertain run after diagnosis, preserving frozen selections.
         Do not create another playlist or retry indefinitely.
         """
         return await tools.guarded(lambda: tools.request(request_id, "retry"))
@@ -1166,16 +1231,23 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         )
     )
     async def manage_playlist_refresh(
-        request_id: str, action: Literal["pause", "resume", "refresh", "forget_edits"]
+        request_id: str,
+        action: Literal["pause", "resume", "refresh", "preview", "forget_edits"],
+        song_ids: list[str] | None = None,
     ) -> CallToolResult:
-        """Pause/resume explicitly saved recurring instructions or refresh them once, only when
-        requested. The server executes refreshes while this agent is offline. Does not
-        approve previews. `forget_edits` makes refreshes forget what they learned from the
-        user's edits of the published playlist (removed songs may be suggested again; the
-        result's `forgotten` counts the songs); use it only when the user asks. Does not
+        """Shijhon's own refreshes of a described playlist (saved instructions, server AI)
+        or a discovery mix (history permission, Last.fm), only when requested: pause/resume
+        daily or weekly refreshes, or refresh once (`preview` waits for review). They run
+        while you are offline. Refresh an agent-curated playlist with
+        replace_playlist_tracks instead. `forget_edits` makes refreshes and replacements
+        forget the songs the user removed or added, so removed songs may come back: all of
+        them, or only `song_ids` (as `user_edits` lists them), for example to put one song
+        back. The result's `forgotten` counts them; only when the user asks. Does not
         change the Navidrome playlist.
         """
-        return await tools.guarded(lambda: tools.request(request_id, action))
+        return await tools.guarded(lambda: tools.request(request_id, action, song_ids))
+
+    register_playlist_tools(mcp, tools)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -1183,7 +1255,7 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         )
     )
     async def configure_playlist_connection(choices: Choices) -> CallToolResult:
-        """Save this user's choice among administrator-approved shared AI models only when the
+        """Save this user's choice among administrator-approved server AI models only when the
         user requests it, with settings permission. Blank uses the administrator's default.
         Shijhon uses it for description-based and recurring
         playlists; this does not change the external agent's model. Last.fm account changes,

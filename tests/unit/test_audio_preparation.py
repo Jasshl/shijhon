@@ -123,7 +123,7 @@ class Fetcher:
 async def world(tmp_path: Path) -> Any:
     store = await Store.open(tmp_path / "state")
     fetcher = Fetcher(tmp_path)
-    service = Preparation(store, SimpleNamespace(base_url="", library_id=1), fetcher)
+    service = Preparation(store, SimpleNamespace(socket=None, base_url="", library_id=1), fetcher)
     await service.client.aclose()
     client = Client(tmp_path)
     service.client = client

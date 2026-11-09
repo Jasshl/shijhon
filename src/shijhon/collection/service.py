@@ -6,8 +6,10 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
 from dataclasses import asdict
 from typing import Any, cast
 
@@ -32,7 +34,7 @@ from shijhon.collection.history import record_positive
 from shijhon.collection.index import COLUMNS, Index
 from shijhon.collection.policy import builtin_profile_id
 from shijhon.collection.profiles import Profiles
-from shijhon.collection.query_index import QueryIndex
+from shijhon.collection.query_index import IndexPending, QueryIndex
 from shijhon.collection.repository import (
     IMPORTED_SQL,
     WITH_KEYS,
@@ -126,6 +128,12 @@ class Collection:
 
     async def refresh(self, owner_id: str, library_id: str) -> None:
         await self.index.scan(owner_id, library_id)
+        if self.query_index is None:
+            return
+        state = await self.index_state(owner_id, library_id)
+        if state.generation:
+            with suppress(IndexPending, sqlite3.Error, OSError):
+                await self.query_index.prepare(library_id, state.generation)
 
     async def predicate(
         self,
@@ -208,15 +216,20 @@ class Collection:
         await self.ready(owner_id, library_id)
         if not ident or len(ident) > 300 or any(c in ident for c in ("/", "\\", ":", "?", "#")):
             raise CollectionError("Artwork is unavailable.")
+        # One index each: a page asks this for every cover it shows.
         known = await self.store.fetchone(
-            "SELECT 1 FROM collection_tracks WHERE library_id=? AND present=1"
-            " AND (json_extract(metadata,'$.coverArt')=? OR (artist_id=? AND ?<>'')"
-            " OR (album_id=? AND ?<>'')) LIMIT 1",
+            "SELECT 1 WHERE EXISTS (SELECT 1 FROM collection_tracks WHERE library_id=?"
+            " AND present=1 AND json_extract(metadata,'$.coverArt')=?)"
+            " OR EXISTS (SELECT 1 FROM collection_tracks"
+            " WHERE library_id=? AND artist_id=? AND present=1 AND ?<>'') OR EXISTS (SELECT 1 FROM"
+            " collection_tracks WHERE library_id=? AND album_id=? AND present=1 AND ?<>'')",
             [
                 library_id,
                 ident,
+                library_id,
                 ident[3:] if ident.startswith("ar-") else "",
                 ident[3:] if ident.startswith("ar-") else "",
+                library_id,
                 ident[3:] if ident.startswith("al-") else "",
                 ident[3:] if ident.startswith("al-") else "",
             ],

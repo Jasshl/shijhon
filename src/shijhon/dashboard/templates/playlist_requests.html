@@ -97,7 +97,7 @@
     <p class="page-summary">Write what you want to hear. The AI chooses the songs and Shijhon publishes the playlist to your music app.</p>
   </div>
   <details class="page-about"><summary>How described playlists work</summary>
-    <p>Connect your Navidrome account on Playlists and choose the shared AI service. Your listening history and your library are optional influences; the exact recording lookup still checks your library when library context is off.</p>
+    <p>Connect your Navidrome account on Playlists and choose server AI. Your listening history and your library are optional influences; the exact recording lookup still checks your library when library context is off.</p>
     <p>Regular refreshes need saved instructions and AI. Publishing can add whole catalog releases as placeholders; it does not download audio. Audio is fetched through normal playback and download rules.</p>
   </details>
 </div>
@@ -137,16 +137,10 @@
 <p class="field-help">Publishing can add whole catalog releases as placeholders. Audio is fetched through normal playback and download rules.</p>
 <div class="form-actions"><button class="btn-primary">Create playlist</button></div>
 </form></section>
-{% else %}<div class="notice notice-info"><p class="notice-title">Connect first</p><p><a href="{{ prefix }}/playlists#settings">Connect your Navidrome account on Playlists and choose the shared AI service</a> to describe a playlist. Last.fm is optional.</p></div>{% endif %}
+{% else %}<div class="notice notice-info"><p class="notice-title">Connect first</p><p><a href="{{ prefix }}/playlists#settings">Connect the Navidrome account on Playlists and choose server AI</a> to describe a playlist. Last.fm is optional.</p></div>{% endif %}
 <section class="group" aria-labelledby="requests-title"><div class="group-head"><h2 id="requests-title">Your described playlists</h2>{% if listing %}<p class="group-meta">{{ listing|length }}</p>{% endif %}</div>
 {% if listing %}<ul class="rows playlist-list">{% for item in listing %}<li><a href="{{ prefix }}/playlists/describe/{{ item.id }}">{{ item.spec.name }}</a><span>{{ item.spec.count }} tracks</span></li>{% endfor %}</ul>{% else %}<p class="empty">No described playlists yet.</p>{% endif %}
 </section>
-{% if connected %}
-<details class="more-settings" id="agents"><summary><span class="more-title">Agent access</span>{% if agents %}<span class="more-changed">{{ agents|rejectattr('revoked')|list|length }} active</span>{% endif %}</summary>
-<p class="group-help">Connect your agent to <code>/shijhon/mcp</code> and sign in with OAuth. The installation needs <code>agents.public_url</code> set to its public HTTPS address.</p>
-<p class="group-help">Connections can create playlists and read their own requests. History, library reads and connection choices have separate permissions. Revoking a connection stops its unfinished work and future refreshes.</p>
-{% if agents %}<ul class="rows playlist-list">{% for agent in agents %}<li><span class="playlist-agent">{{ agent.name }}</span><span class="tag{{ '' if agent.revoked else ' tag-set' }}">{{ 'Revoked' if agent.revoked else 'Active' }}</span>{% if not agent.revoked %}<form method="post" action="{{ prefix }}/playlists/agents"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="agent" value="{{ agent.id }}"><button class="btn-danger btn-small" name="action" value="revoke">Revoke</button></form>{% endif %}</li>{% endfor %}</ul>{% endif %}
-</details>
-{% endif %}
+{% if agents_on %}<p class="field-help agent-note">Agents can also make playlists: <a href="{{ prefix }}/playlists#agents">AI agents on Playlists</a>.</p>{% endif %}
 {% endif %}
 {% endblock %}

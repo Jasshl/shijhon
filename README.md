@@ -54,8 +54,8 @@ and tested for music; other audio organized as releases of tracks is untested
 
 ## Install
 
-You need Docker with Compose, and a music folder in which Shijhon may create its
-placeholder folder, `_shijhon`. Then:
+With Docker, you need Docker with Compose, and a music folder in which Shijhon may create
+its placeholder folder, `_shijhon`. Then:
 
 ```sh
 git clone https://github.com/Jasshl/shijhon && cd shijhon
@@ -68,6 +68,10 @@ Windows, run it inside WSL (untested). Then add add-ons ([add-ons](docs/add-ons.
 choose a catalog ([catalogs](docs/catalogs.md)); without an add-on, catalog tracks show
 but do not play.
 
+On NixOS, the flake's service sets up Navidrome, Shijhon and the accounts from a music
+folder and an account. An existing Navidrome keeps its accounts and favorites
+([NixOS](docs/nixos.md)).
+
 In your apps, add Shijhon's address as a **Subsonic** (or OpenSubsonic) server, not a
 Navidrome one. An app's Navidrome option uses Navidrome's own API for some or all of
 what it shows, and that API shows your library without the catalog.
@@ -78,18 +82,17 @@ what it shows, and that API shows your library without the catalog.
   hand.
 - [How it works](docs/how-it-works.md): placeholders, downloads, matching and the cleanup.
 - [Add-ons](docs/add-ons.md) and [catalogs](docs/catalogs.md).
-- [Your collection](docs/collection.md): choose what your apps show: **All** you
-  collected, your imports and favorites, what Shijhon added for you, or libraries you
-  create.
-- [Import music files](docs/music-imports.md): upload your own files, review them, then approve.
+- [Your collection](docs/collection.md): what apps show: **All**, imports and favorites,
+  what Shijhon added, or custom libraries.
+- [Import music files](docs/music-imports.md): uploading files, reviewing and approving them.
 - [Configuration](docs/configuration.md): the settings, the command line, the dashboard.
-- [Playlists](docs/playlists.md): describe a playlist or make discovery mixes from your
-  listening history; preview, publish and refresh them.
-- [Import a playlist](docs/playlist-imports.md): bring in a playlist from pasted lines or a file.
+- [Agent access](docs/agent-access.md): AI agents over MCP, and what they can do.
+- [Playlists](docs/playlists.md): described playlists and discovery mixes from listening
+  history, with previews and refreshes.
+- [Import a playlist](docs/playlist-imports.md): playlists from pasted lines or a file.
 - [Sound analysis](docs/sound-analysis.md): optional AudioMuse-AI facts for described playlists.
-- [Agent access](docs/agent-access.md): connect an agent through OAuth and MCP.
 - [Deployment](docs/deployment.md): an existing Navidrome, reverse proxies, backups,
-  upgrades. [Nix and NixOS](docs/nixos.md) covers the native package and service.
+  upgrades. [NixOS](docs/nixos.md) covers the NixOS service.
 - [Privacy and security](docs/privacy-and-security.md) and
   [known issues](docs/known-issues.md).
 - Reference: [the other settings](docs/reference/settings.md),
@@ -97,12 +100,14 @@ what it shows, and that API shows your library without the catalog.
   [advanced deployment](docs/reference/advanced-deployment.md),
   [library visibility](docs/reference/library-visibility.md),
   [personal access](docs/reference/personal-access.md),
+  [agent tools](docs/reference/agent-tools.md),
+  [local AI runners](docs/reference/local-ai-runners.md),
   [known gaps](docs/reference/known-gaps.md).
 - [Development](docs/development.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Status
 
-Shijhon is in beta (0.4.0), tested with Navidrome 0.64.2. The configuration and the
+Shijhon is in beta (0.5.0), tested with Navidrome 0.64.2. The configuration and the
 database can change between beta versions; the database migrates itself at startup, so
 keep a backup from before an upgrade. What changed is in [CHANGELOG.md](CHANGELOG.md).
 

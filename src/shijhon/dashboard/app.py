@@ -43,7 +43,7 @@ from shijhon.catalog import plugin
 from shijhon.catalog.addon import AddonCatalog
 from shijhon.catalog.base import CatalogError
 from shijhon.cleanup import PreviewFailed, why_failed
-from shijhon.config import Settings
+from shijhon.config import LOOPBACK_HOSTS, Settings
 from shijhon.dashboard import cleanup as cleaning
 from shijhon.dashboard import library, live, sections, status
 from shijhon.dashboard.addons import (
@@ -109,6 +109,7 @@ from shijhon.delivery.quality_gate import CHOICES as QUALITY_CHOICES
 from shijhon.delivery.sources import MAX_LIMIT, NameTaken, StoredSource
 from shijhon.fill.fills import ChoiceRefused
 from shijhon.locks import KeyedLocks
+from shijhon.navidrome import connect
 from shijhon.navidrome.client import NavidromeError
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.model import Connection
@@ -118,6 +119,7 @@ from shijhon.store import Store
 if TYPE_CHECKING:
     import aiosqlite
 
+    from shijhon.agents.app import Agents
     from shijhon.app import Services
 
 log = logging.getLogger(__name__)
@@ -163,6 +165,7 @@ NAV = (
             ("playback", "Playback"),
             ("catalog", "Catalog"),
             ("library", "Library"),
+            ("agent-access", "Agent access"),
             ("sound", "Sound analysis"),
             ("cleanup", "Cleanup"),
             ("diagnostics", "Diagnostics"),
@@ -177,7 +180,12 @@ ACCENT_NAMES = {
     "graphite": "Graphite",
     "purple": "Purple",
 }
-PAGE_SECTIONS = {"playback": "delivery", "catalog": "catalog", "sound": "audiomuse"}
+PAGE_SECTIONS = {
+    "playback": "delivery",
+    "catalog": "catalog",
+    "sound": "audiomuse",
+    "agent-access": "agents",
+}
 SECTION_WORDS = {
     "playback": (
         "Playback",
@@ -190,6 +198,11 @@ SECTION_WORDS = {
     "sound": (
         "Sound analysis",
         "AudioMuse-AI analyzes how your songs sound; described playlists use it as a hint.",
+    ),
+    "agent-access": (
+        "Agent access",
+        "People connect the AI agents they already use over MCP, sign in with their"
+        " Navidrome account, and ask for playlists in their own words.",
     ),
 }
 HEADERS = {
@@ -221,7 +234,13 @@ def _page_of(section: str, key: str) -> str:
         return "Cleanup" if key in DOWNLOAD_LIMITS else "Playback"
     if section == "search":
         return "Catalog"
-    pages = {"catalog": "Catalog", "fill": "Library", "cleanup": "Cleanup"}
+    pages = {
+        "catalog": "Catalog",
+        "fill": "Library",
+        "cleanup": "Cleanup",
+        "agents": "Agent access",
+        "playlists": "Playlists",
+    }
     return pages.get(section, "Sound analysis")
 
 
@@ -351,6 +370,7 @@ class Host(Protocol):
     configured: Settings
     locked: Locked  # the dashboard's settings the environment sets
     services: Services | None
+    agents: Agents | None  # agent access, when an agent address is set
     forwarding: Forwarding  # who the client is
     restarting: bool  # a restart was asked for and is under way
 
@@ -485,6 +505,7 @@ class Dashboard:
             Route("/catalog/check", page(self.catalog_check_now), methods=["POST"]),
             Route("/catalog/wait", page(self.catalog_wait_save), methods=["POST"]),
             Route("/sound", page(self.section_page), methods=["GET", "POST"]),
+            Route("/agent-access", page(self.section_page), methods=["GET", "POST"]),
             Route("/library", page(self.library_page), methods=["GET"]),
             Route("/library/policy", page(self.library_save), methods=["POST"]),
             Route("/library/pass", page(self.library_save), methods=["POST"]),
@@ -527,7 +548,7 @@ class Dashboard:
         self.sessions = Sessions(store)
         self.running = running
         self.problems = dict(problems)
-        self._http = httpx.AsyncClient(timeout=10.0, trust_env=False)
+        self._http = connect.async_client(self.host.configured.navidrome.socket, timeout=10.0)
 
     async def aclose(self) -> None:
         logging.getLogger("shijhon").removeHandler(self.errors)
@@ -1127,6 +1148,8 @@ class Dashboard:
             extra = {"missing": self._missing_sources(saved, names, notes)}
         if page == "sound":
             extra = await self._sound_status(saved)
+        if page == "agent-access":
+            extra = self._agent_status(saved)
         groups = sections.rows(
             section,
             self.host.configured,
@@ -1561,6 +1584,28 @@ class Dashboard:
             except Exception:
                 log.exception("dashboard: the sound analysis status could not be read")
         return info
+
+    def agent_access(self) -> tuple[str, bool]:
+        """The MCP address agents reach in this run ("" when agent access is not serving),
+        and whether an agent address is set but serving failed (the log says why)."""
+        agents = self.host.agents
+        if agents is None:
+            return "", False
+        return (agents.oauth.resource, False) if agents.serving else ("", True)
+
+    def _agent_status(self, saved: Any) -> dict[str, str]:
+        """The Agent access page's status: the MCP address agents use in this run ("" when
+        agent access is off or failed to start), and the one the saved settings give after
+        a restart."""
+        applying = effective(self.host.configured, saved, locked=self.host.locked)[0].agents
+        running, failed = self.agent_access()
+        host = urlsplit(running).hostname
+        return {
+            "running": running,
+            "failed": "true" if failed else "",
+            "configured": applying.public_url + "/shijhon/mcp" if applying.public_url else "",
+            "plain": "true" if running.startswith("http://") and host not in LOOPBACK_HOSTS else "",
+        }
 
     async def catalog_wait_save(self, request: Request, session: Session) -> Response:
         """The Catalog page's second form: how long a search or an artist page waits for
@@ -3445,7 +3490,11 @@ class Dashboard:
             current="diagnostics",
             checked_at=time.time(),
             nd=results["navidrome"],
-            nd_url=_origin(self.host.configured.navidrome.url),
+            nd_url=(
+                f"{self.host.configured.navidrome.socket} (socket)"
+                if self.host.configured.navidrome.socket is not None
+                else _origin(self.host.configured.navidrome.url)
+            ),
             pinned=status.PINNED_NAVIDROME,
             chain=chain,
             catalog=results["catalog"],

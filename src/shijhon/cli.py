@@ -7,7 +7,8 @@ lists what the cleanup of unused releases would take out now (read only);
 ``shijhon usage-export`` writes what the cleanup reads of Navidrome's database, for a
 Shijhon that does not see that database itself; ``shijhon carry-over`` shows the catalog
 albums carried over at the upgrade to schema 24, and ``--account NAME`` gives them to one
-account's Shijhon library (``collection/carryover.py``).
+account's Shijhon library (``collection/carryover.py``); ``shijhon navidrome-accounts``
+creates Navidrome's first accounts in a new installation (``navidrome/accounts.py``).
 
 ``serve`` exits with ``RESTART_STATUS`` when the dashboard's "Restart Shijhon" stopped it:
 whatever runs Shijhon starts it again (``Restart``)."""
@@ -41,7 +42,7 @@ from shijhon.fill import undo
 from shijhon.fill.fills import FillPolicy
 from shijhon.fill.report import ReportError, report
 from shijhon.log import configure_logging
-from shijhon.navidrome import export
+from shijhon.navidrome import accounts, export
 from shijhon.navidrome.checks import PlaceholderWrites
 from shijhon.navidrome.client import NavidromeService
 from shijhon.navidrome.export import Snapshot
@@ -177,6 +178,46 @@ def main(argv: list[str] | None = None) -> None:
         help="keep running: export now, every SECONDS, and whenever Shijhon asks"
         " (default: one export)",
     )
+    made = sub.add_parser(
+        "navidrome-accounts",
+        help="create Navidrome's accounts for Shijhon: its service account ([navidrome] user,"
+        " with a random password written to password_file when that file is missing) and"
+        " your own; on a Navidrome that has accounts already, your admin account creates the"
+        " service account; accounts Navidrome has already are kept",
+    )
+    made.add_argument(
+        "--account",
+        metavar="NAME",
+        help="your own account, made an admin; on a Navidrome that has accounts, an admin there",
+    )
+    made.add_argument(
+        "--account-password-file",
+        type=Path,
+        metavar="FILE",
+        help="its password, used only to create that account or the service account",
+    )
+    made.add_argument(
+        "--password-file-name",
+        metavar="TEXT",
+        help="how messages name the service account's password file (default: its path)",
+    )
+    made.add_argument(
+        "--account-setting-name",
+        metavar="TEXT",
+        help="how messages name the setting of your account (default: the option)",
+    )
+    made.add_argument(
+        "--account-password-setting-name",
+        metavar="TEXT",
+        help="how messages name the setting of its password file (default: the option)",
+    )
+    made.add_argument(
+        "--wait",
+        type=float,
+        default=120.0,
+        metavar="SECONDS",
+        help="how long to wait for Navidrome to answer (default: 120)",
+    )
     sub.add_parser("version", help="print the version")
     args = parser.parse_args(argv)
 
@@ -194,6 +235,9 @@ def main(argv: list[str] | None = None) -> None:
         )
         if status:
             raise SystemExit(status)
+        return
+    if args.command == "navidrome-accounts":
+        _navidrome_accounts(args)
         return
     if args.command == "matches":
         configured = _settings(args.config)
@@ -568,6 +612,7 @@ async def _apply_undo(
         client_name=settings.navidrome.client_name,
         library_id=settings.navidrome.library_id,
         timeout=settings.navidrome.timeout_seconds,
+        socket=settings.navidrome.socket,
     )
     engine = PlaceholderEngine(
         layout=Layout(settings.navidrome.library_path, settings.placeholders.folder),
@@ -687,6 +732,7 @@ async def _account(settings: Settings, name: str) -> Principal:
         client_name=nd.client_name,
         library_id=nd.library_id,
         timeout=nd.timeout_seconds,
+        socket=nd.socket,
     )
     try:
         return await AccessService(navidrome).verify(name)
@@ -731,6 +777,41 @@ def _refuse(message: str) -> NoReturn:
     """A command's refusal: nothing was changed."""
     print(f"shijhon: {message}: nothing done", file=sys.stderr)
     raise SystemExit(1)
+
+
+def _navidrome_accounts(args: argparse.Namespace) -> None:
+    navidrome = _settings(args.config).navidrome
+    if not navidrome.user or navidrome.password_file is None:
+        print("shijhon: [navidrome] user and password_file are needed", file=sys.stderr)
+        raise SystemExit(2)
+    default = accounts.Names()
+    names = accounts.Names(
+        password_file=args.password_file_name,
+        account=args.account_setting_name or default.account,
+        account_password=args.account_password_setting_name or default.account_password,
+    )
+    # Exit status 1: Navidrome did not answer as it should (starting again may help);
+    # 2: what needs changing first.
+    try:
+        accounts.ensure(
+            navidrome.url,
+            navidrome.user,
+            navidrome.password_file,
+            socket=navidrome.socket,
+            account=args.account,
+            account_password_file=args.account_password_file,
+            wait=args.wait,
+            names=names,
+        )
+    except accounts.Unsettled as exc:
+        print(f"shijhon: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except accounts.AccountsError as exc:
+        print(f"shijhon: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    except OSError as exc:
+        print(f"shijhon: {exc.strerror or type(exc).__name__}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 def _settings(config: Path | None) -> Settings:

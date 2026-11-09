@@ -30,8 +30,9 @@ Shijhon runs in front of a stock Navidrome that only Shijhon reaches.
 configuration in [`packaging/`](../packaging); [advanced deployment](reference/advanced-deployment.md)
 has the rarer setups.
 
-[Nix and NixOS](nixos.md) describes the native package and systemd service, including
-catalog adapters and moving from an existing container installation.
+On NixOS, [the NixOS service](nixos.md) sets up Navidrome and Shijhon together, also with
+a Navidrome you already run. [Its reference](reference/nixos.md) covers catalog adapters
+and moving from the Docker setup.
 
 ## Starting from an existing Navidrome
 
@@ -84,8 +85,8 @@ The copy is then the new setup's data; do not copy the old database over it agai
 
 ## Network and reverse proxy
 
-For remote OAuth/MCP access, set `[agents] public_url` to the public HTTPS origin
-and forward the [agent endpoint and discovery paths](agent-access.md#enable-access),
+For agents connecting from elsewhere, set the agent address on the dashboard
+([agent access](agent-access.md#turn-on-agent-access)) and forward the [agent endpoint and discovery paths](agent-access.md#with-a-reverse-proxy),
 including the well-known paths at the origin root. Preserve the public Host header.
 This optional interface does not support URL path prefixes.
 
@@ -213,6 +214,12 @@ are in no account's library. To give them to one account's Shijhon library (and 
 account's Navidrome user name. It can run while Shijhon runs; other accounts never get them
 (`--replace` gives them to another account instead), and `shijhon carry-over` alone shows
 them and who has them.
+
+Schema 33 adds `collection_revisions`, counters kept by triggers on the tables that decide
+what a library selection holds, and an index for checking covers. The first start applies
+it in a moment even on a large library. Older versions refuse this schema, so going back
+means the coordinated recovery below. `collection-queries/` beside the database is a cache:
+its old lists are replaced as they are used.
 
 This release's database is at schema 31: playlists, collections, music imports and agent
 access add tables, discovery mixes remember their creation requests, agents' playlist

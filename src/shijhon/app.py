@@ -172,7 +172,11 @@ class ShijhonApp:
         self.settings = settings  # at startup: with the values saved in the dashboard
         self.resolver = resolver
         self._catalog = catalog  # given by tests; otherwise built from the settings
-        self.upstream = Upstream(settings.navidrome.url, timeout=settings.navidrome.timeout_seconds)
+        self.upstream = Upstream(
+            settings.navidrome.url,
+            timeout=settings.navidrome.timeout_seconds,
+            socket=settings.navidrome.socket,
+        )
         self.checker = CredentialChecker(
             self.upstream,
             ttl=settings.server.credential_cache_seconds,
@@ -271,6 +275,7 @@ class ShijhonApp:
             client_name=settings.navidrome.client_name,
             library_id=settings.navidrome.library_id,
             timeout=settings.navidrome.timeout_seconds,
+            socket=settings.navidrome.socket,
         )
         self._opened.append(navidrome.aclose)
         if settings.navidrome.library_path is None:

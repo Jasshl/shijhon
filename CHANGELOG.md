@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.5.0
+
+- Library lists and searches stay fast as a library grows, and one app's large request no
+  longer holds up the others. The artist list, album pages and searches of a library of
+  12,000 songs answer in a fraction of a second instead of tens of seconds, and they no
+  longer fail with "the view is being prepared" while another list is read.
+- After a change to the library a list answers as it stands if its refresh takes more than
+  3 seconds, with the new songs following once the refresh is done, instead of failing. A
+  removed song disappears at once.
+- A list that takes 3 seconds or more to read is read again from Navidrome less often than
+  every minute, in proportion to how long it takes, unless the library changed.
+- A refresh of the library index compares it without holding up anything else and writes
+  only the songs that changed. Reported plays, playlists, the Collection page and an import's
+  review do less work on a large library.
+- Database schema 33: new counters and an index. It upgrades on its own at startup.
+- New agent tools replace a playlist's songs under the same playlist ID, remove and
+  reorder songs, publish or discard previews, create and manage discovery mixes, and
+  import a pasted list with match review. Agents can list all of an account's Shijhon
+  playlists; reading their songs needs the matching permission.
+- **Playlists** starts with AI agents: the MCP address and the connected agents.
+  Administrators set the agent address under **Server → Agent access**, and can allow
+  plain HTTP on a home network. `setup.sh` asks for the address.
+- Administrators can allow server AI on the machine or its network from the dashboard. In
+  the Compose setup, `host.docker.internal` reaches the machine Shijhon runs on.
+- **Server AI** on **Playlists** is one section, with one form for the connection.
+- Use optional ISRCs and durations from playlist exports to distinguish recordings
+  during import, and show the supplied hints in the review.
+- The NixOS service sets up Navidrome from the system's Nixpkgs and creates Shijhon's
+  service account and the configured account at the first start. Navidrome listens on a Unix socket only Shijhon can open, and counts each app apart for
+  its login limits.
+- The NixOS options changed: `configDirectory` is gone (use `settings` and
+  `environmentFile`), `usageDirectory` is now `usageExport.directory`, and `port` is
+  4533 by default (was 8765). A self-managed Navidrome needs
+  `navidrome.manage = false`. The guide has the steps from the earlier service.
+- On NixOS, a Navidrome that already has accounts gets Shijhon's service account through
+  an admin account (`account`). The service can take over an existing `services.navidrome`
+  with its data, and a self-managed Navidrome no longer needs the service account made by
+  hand.
+- Fixed on NixOS: a Navidrome running as another user could not read the files Shijhon
+  wrote into the placeholder folder.
+- The NixOS service stops at build time with a Navidrome version Shijhon is not tested
+  with; `navidrome.allowUntestedVersion` tries it anyway, with a warning.
+- Local AI runners for playlists can run inside the NixOS service's sandbox
+  (`aiRunner`).
+- `[navidrome] socket` connects Shijhon to Navidrome through a Unix socket.
+- A shorter NixOS guide, with a reference page for the options and less common setups.
+
 ## 0.4.0
 
 - Rename add-ons under their **Settings** on the **Add-ons** page. Only the name changes:

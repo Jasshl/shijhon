@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from shijhon.cli import main
 from shijhon.config import load_settings
@@ -293,3 +294,19 @@ def test_core_settings_accept_boundaries() -> None:
         assert settings.server.max_parsed_body_bytes == 0
         assert settings.navidrome.library_id == 1
         assert settings.navidrome.timeout_seconds == 0.01
+
+
+@pytest.mark.parametrize(
+    ("navidrome", "problem"),
+    [
+        ({"socket": "relative/nd.sock"}, "absolute"),
+        ({"socket": "/run/nd.sock", "url": "https://navidrome.invalid"}, "http://"),
+    ],
+)
+def test_a_navidrome_socket_is_an_absolute_path_with_an_http_url(
+    navidrome: dict[str, str], problem: str
+) -> None:
+    with pytest.raises(ValidationError, match=problem):
+        load_settings(None, navidrome=navidrome)
+    settings = load_settings(None, navidrome={"socket": "/run/nd.sock", "url": "http://x.invalid"})
+    assert str(settings.navidrome.socket) == "/run/nd.sock"

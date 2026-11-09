@@ -35,8 +35,8 @@ from shijhon.playlists.requests import RequestError, digest
 from shijhon.playlists.service import Playlists
 
 SCOPES = {
-    "create": "Create playlists and manage refreshes",
-    "status": "Check playlist jobs and results",
+    "create": "Create playlists and change your Shijhon playlists",
+    "status": "List your Shijhon playlists and check their progress",
     "library": "Read your music library and playlists",
     "history": "Read your listening history",
     "settings": "Choose your playlist AI model from administrator-approved models",

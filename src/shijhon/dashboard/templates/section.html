@@ -107,6 +107,36 @@
   </div>
 </section>
 {% endif %}
+{% if page == "agent-access" %}
+<section class="group" aria-labelledby="status-title">
+  <div class="group-head"><h2 id="status-title">Status</h2><p class="group-help">Each person adds the MCP address in their agent app, signs in with their Navidrome account in the browser and approves. Their connected agents are listed on their Playlists page.</p></div>
+  <div class="rows">
+    <div class="row status-row">
+{% if extra.running and extra.running == extra.configured %}
+      <p class="status"><span class="led led-ok" aria-hidden="true"></span><span>On: agents connect to <code>{{ extra.running }}</code></span></p>
+{% elif extra.failed %}
+      <p class="status status-error"><span class="led led-error" aria-hidden="true"></span><span>Not running: agent access failed to start; the log on <a href="{{ prefix }}/diagnostics">Diagnostics</a> says why</span></p>
+{% elif extra.running %}
+      <p class="status"><span class="led" aria-hidden="true"></span><span>On at <code>{{ extra.running }}</code> until Shijhon restarts; then {% if extra.configured %}at <code>{{ extra.configured }}</code>, and connected agents sign in again{% else %}off{% endif %}</span></p>
+{% elif extra.configured %}
+      <p class="status"><span class="led" aria-hidden="true"></span><span>Not on yet: agents can connect to <code>{{ extra.configured }}</code> after Shijhon restarts</span></p>
+{% else %}
+      <p class="status"><span class="led led-off" aria-hidden="true"></span><span>Off: no agent address is set</span></p>
+{% endif %}
+{% if can_restart and (extra.failed or extra.running != extra.configured) %}
+      <form method="post" action="{{ prefix }}/restart">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="next" value="{{ prefix }}/agent-access">
+        <button class="btn-small" title="Songs that are playing may stop">Restart Shijhon</button>
+      </form>
+{% endif %}
+    </div>
+{% if extra.plain %}
+    <p class="row field-help">This address uses plain HTTP: sign-in passwords and agent tokens travel unencrypted on your network.</p>
+{% endif %}
+  </div>
+</section>
+{% endif %}
 {% if page == "playback" and extra.missing %}
 <div class="notice notice-warn" role="status">
 {% for line, variable, catalog_only in extra.missing %}

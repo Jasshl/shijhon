@@ -12,6 +12,7 @@ from mcp.server import MCPServer
 from mcp.server.auth.provider import AuthorizationParams
 from mcp.server.auth.routes import (
     build_metadata,
+    cors_middleware,
     create_auth_routes,
     create_protected_resource_routes,
 )
@@ -73,6 +74,7 @@ class Agents:
         self.oauth = OAuth(service, public_url)
         service.oauth = self.oauth
         self.ready = anyio.Event()
+        self.serving = False  # while run() serves MCP (the dashboard's status)
         self.login_attempts = Attempts()
         self.register_attempts = Attempts(limit=20)
         self.authorize_attempts = Attempts(limit=30)
@@ -97,13 +99,19 @@ class Agents:
             "client_secret_post",
             "client_secret_basic",
         ]
+        # The SDK takes an issuer over HTTPS or on loopback only, and its routes use it for
+        # their metadata alone: they get it in the HTTPS form, and the metadata route
+        # serves this installation's own (an http:// address on a private network is the
+        # administrator's choice, agents.private_http).
         auth_routes = create_auth_routes(
             self.oauth,
-            issuer,
+            AnyHttpUrl("https://" + self.oauth.issuer.split("://", 1)[1]),
             client_registration_options=registration,
             revocation_options=revocation,
         )
         for route in auth_routes:
+            if route.path == "/.well-known/oauth-authorization-server":
+                route.app = cors_middleware(self.discovery, ["GET", "OPTIONS"])
             if route.path in ("/token", "/register", "/revoke"):
                 route.app = CORSMiddleware(
                     route.app,
@@ -126,21 +134,25 @@ class Agents:
             "Shijhon",
             log_level="WARNING",
             instructions=(
-                "Call get_capabilities before choosing a playlist workflow. Use saved server AI "
-                "for descriptions and recurring playlists. Without server AI you can curate tracks "
-                "yourself. Read personal history/library only when the user asks to use it. "
+                "Call get_capabilities before choosing a playlist workflow. The main path is "
+                "your own curation: choose the songs and send them as ordered tracks to "
+                "create_playlist, with the user's wish as its prompt; later refresh or change "
+                "that playlist with replace_playlist_tracks, add_playlist_tracks or "
+                "edit_playlist_tracks. Shijhon's server AI is optional: described playlists and "
+                "their unattended refreshes. list_playlist_requests shows all the user's "
+                "Shijhon playlists, also those made on the dashboard or by other agents. "
+                "Read personal history/library only when the user asks to use it. "
                 "Missing setup blocks only affected features. Preserve all user constraints. "
-                "Creating a playlist authorizes publication; confirm success using request status. "
-                "Never create again under a new idempotency key after an uncertain result. "
-                "Recurrence runs on Shijhon and requires an explicit user request."
+                "Creating or changing a playlist authorizes publication; confirm success with "
+                "get_playlist_request. Never repeat a change under a new idempotency key after "
+                "an uncertain result. Recurrence on Shijhon requires an explicit user request."
                 " When a request relates to a playlist or songs the user has, find them with "
-                "get_native_playlists or search_library and pass their IDs as "
-                "reference_playlists or reference_songs of create_playlist instead of pasting "
-                "names. get_song_facts, get_playlist_profile and the sound tools "
-                "(find_similar_songs, search_by_sound, find_sound_path) give approximate, "
-                "optional hints; many songs have none and sound analysis may not be set up. "
-                "Your own musical knowledge comes first: never reject a song only for missing "
-                "facts, and say how many songs you could not check."
+                "get_native_playlists or search_library; a description takes their IDs as "
+                "reference_playlists or reference_songs. get_song_facts, get_playlist_profile "
+                "and the sound tools (find_similar_songs, search_by_sound, find_sound_path) "
+                "give approximate, optional hints; many songs have none and sound analysis "
+                "may not be set up. Your own musical knowledge comes first: never reject a "
+                "song only for missing facts, and say how many songs you could not check."
                 " Prepare playlist audio only on explicit request with downloads permission; "
                 "this saves audio on the server, separate from device copies."
             ),
@@ -193,9 +205,13 @@ class Agents:
         )
 
     async def run(self) -> None:
-        async with self.mcp.session_manager.run():
-            self.ready.set()
-            await anyio.sleep_forever()
+        try:
+            async with self.mcp.session_manager.run():
+                self.serving = True
+                self.ready.set()
+                await anyio.sleep_forever()
+        finally:
+            self.serving = False
 
     async def discovery(self, request: Request) -> Response:
         return JSONResponse(

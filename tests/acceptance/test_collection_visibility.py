@@ -576,6 +576,65 @@ def test_a_complete_search_answers_at_once_while_both_index_workers_are_busy(
         client.close()
 
 
+def test_a_broad_search_answers_from_a_first_page_with_what_it_asks_for(world: World) -> None:
+    """Typing the first letters on a large library matches thousands of songs. Only when
+    Navidrome's first page holds too few of the account's songs must the rest be read: what
+    is asked for is otherwise there, in Navidrome's order, and nothing else can come before
+    it. Both answers are the same list."""
+    index = world.app.index
+    budgets = index.budgets
+    originals = world.app.originals
+    client = world.nd.client("second", "fixture-password").with_base(world.proxy.base_url)
+    native = world.nd.client("second", "fixture-password")
+    query = "Invented"
+    built: list[str] = []
+    original_build = index._build
+
+    async def build(*args: Any, **kwargs: Any) -> None:
+        built.append(args[0])
+        await original_build(*args, **kwargs)
+
+    def search(count: int) -> list[str]:
+        params = {"query": query, "artistCount": 0, "albumCount": 0, "songCount": count}
+        answer = client.ok("search3", params)["searchResult3"]
+        return [song["id"] for song in answer.get("song", [])]
+
+    page_size = 6
+    listed = native.ok(
+        "search3", {"query": query, "artistCount": 0, "albumCount": 0, "songCount": 500}
+    )["searchResult3"]["song"]
+    assert len(listed) > page_size
+    first = [song["id"] for song in listed[:page_size] if song["id"] in originals]
+    every = [song["id"] for song in listed if song["id"] in originals]
+    assert first and len(every) > len(first)
+    index._build = build  # type: ignore[method-assign]
+    index.budgets = replace(budgets, page_size=page_size)
+    try:
+        assert search(len(first)) == first
+        assert built == []
+        assert search(len(every)) == every
+        assert len(built) == 1
+        # The account's choice changes between the look at the first page and the answer:
+        # the answer holds for its own snapshot, or the rest is read after all.
+        built.clear()
+        query = "Invented Artist"  # (a search not prepared yet)
+        shown = index.shown
+
+        async def stale(binding: Any, mode: Any, kind: str, idents: Any) -> frozenset[str]:
+            return frozenset(idents)
+
+        index.shown = stale  # type: ignore[method-assign]
+        assert len(first) < page_size
+        assert search(page_size) == every[:page_size]
+        index.shown = shown  # type: ignore[method-assign]
+        assert len(built) == 1
+    finally:
+        index._build = original_build  # type: ignore[method-assign]
+        index.budgets = budgets
+        client.close()
+        native.close()
+
+
 def test_a_prepared_search_waits_once_for_all_its_kinds(world: World) -> None:
     """A search whose albums and songs both need preparing (as results of 500 or more
     do) prepares them together and waits as long as one list would, not once per kind."""

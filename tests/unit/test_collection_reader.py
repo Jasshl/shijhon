@@ -22,7 +22,9 @@ OWNER = Principal("owner-a", "Listener", False, frozenset({1}))
 
 def reader():
     playlists = SimpleNamespace(
-        client=SimpleNamespace(native=SimpleNamespace(library_id=1, base_url="http://native")),
+        client=SimpleNamespace(
+            native=SimpleNamespace(library_id=1, socket=None, base_url="http://native")
+        ),
         connection=AsyncMock(side_effect=AssertionError("No stored credentials needed")),
     )
     result = CallerLibrary(playlists)

@@ -14,11 +14,14 @@ import hashlib
 import re
 import secrets
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import anyio
 import httpx
+
+from shijhon.navidrome import connect
 
 
 class NavidromeError(RuntimeError):
@@ -40,12 +43,14 @@ class NavidromeService:
         client_name: str = "shijhon",
         library_id: int = 1,
         timeout: float = 30.0,
+        socket: Path | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user, self._password = user, password
         self.client_name = client_name
         self.library_id = library_id
-        self.http = httpx.AsyncClient(timeout=timeout, trust_env=False)
+        self.socket = socket
+        self.http = connect.async_client(socket, timeout=timeout)
         self._jwt: str | None = None
         self._login_lock = anyio.Lock()
 

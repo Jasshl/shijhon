@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import anyio
 import pytest
@@ -40,9 +41,12 @@ async def discovery(tmp_path):
         changes=anyio.Lock(),
         notify=lambda: None,
         settings=SimpleNamespace(allow_cli=False, history_days=90),
+        oauth=None,
+        requests=SimpleNamespace(tokens=AsyncMock(return_value=[])),
     )
     dashboard = Dashboard(None)
     dashboard.services.playlists = service
+    dashboard.agent_access = lambda: ("", False)  # no agent address
     dashboard.env.filters.update(when=lambda value: "Today", day=lambda value: "Today")
     original_render = dashboard._render
 

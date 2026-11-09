@@ -219,7 +219,9 @@ class Repository:
         automatic: bool = False,
         enable_after: bool = False,
         review: bool | None = None,
+        actor: str | None = None,
     ) -> str:
+        """``actor``: the agent grant whose work the run is (``Requests.guard``)."""
         ident = secrets.token_hex(12)
         async with self.store.transaction() as db:
             cursor = await db.execute(
@@ -241,6 +243,7 @@ class Repository:
                     definition.review_before_publishing if review is None else review
                 ),
                 "enable_after": enable_after and bool(definition.interval),
+                **({} if actor is None else {"actor": actor}),
             }
             await db.execute(
                 "INSERT INTO playlist_runs(id,mix,created,state,automatic,data)"

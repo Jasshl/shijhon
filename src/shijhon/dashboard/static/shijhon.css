@@ -3207,3 +3207,69 @@ progress::-moz-progress-bar {
     padding: var(--space-3);
   }
 }
+
+/* AI agents (Playlists): the MCP address to add, with a copy button, and the steps. */
+.agent-address {
+  display: grid;
+  gap: var(--space-2);
+}
+.agent-address-label {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.agent-address-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.agent-address-line code {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-control);
+  background: var(--bg);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.agent-copied {
+  color: var(--ok-ink);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+}
+.agent-copied.is-shown {
+  opacity: 1;
+}
+.agent-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.agent-steps > li + li {
+  margin-top: var(--space-1);
+}
+.agent-note {
+  margin-top: var(--space-2);
+}
+.agent-access + * {
+  margin-top: var(--space-6);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-copied {
+    transition: none;
+  }
+}
+
+/* Server AI (Playlists): the administrator's connection, then the account's own choice. */
+.server-ai-for {
+  margin: 0 0 var(--space-2);
+}
+.server-ai > form + form,
+.server-ai > form + .form-more {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}

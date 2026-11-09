@@ -276,7 +276,14 @@ class Visibility:
                 if state.state == "indexing":
                     raise IndexPending(state.indexed)
                 raise SetupRequired
-            generations.append((library, state.generation))
+            generations.append(
+                (
+                    library,
+                    await self.index.usable_generation(library, state.generation)
+                    if libraries == {configured}
+                    else state.generation,
+                )
+            )
         authority = digest(
             (principal.user_id, principal.username, principal.is_admin, sorted(granted))
         )
@@ -668,12 +675,20 @@ class Visibility:
         return response(call, 200, root, total=page.total, original_songs=page.original_songs)
 
     async def _search(
-        self, call: RestCall, binding: Binding, mode: Selection | None, validate: Any
+        self,
+        call: RestCall,
+        binding: Binding,
+        mode: Selection | None,
+        validate: Any,
+        *,
+        first_pages: bool = True,
     ) -> LibraryAnswer:
+        """``first_pages``: a full first page that holds what is asked for may answer."""
         container = "searchResult3" if call.name == "search3" else "searchResult2"
         root: dict[str, Any] = {}
         results: dict[str, Any] = {}
         requests: list[tuple[str | SourcePage, str, int, int]] = []
+        partial: set[int] = set()  # those requests that are only a full first page
         failures: list[Exception] = []
 
         async def prepare(
@@ -740,16 +755,29 @@ class Visibility:
                             # required generation.
                             root = dict((first.envelope or {}).get("response") or {})
                             continue
-                        if len(first.rows) < self.index.budgets.page_size and first.total in (
+                        # Less than a page is the complete result too, and a first page
+                        # with all this request asks for of the selection is as good: the
+                        # rest could not come before it. The selection applies to it
+                        # directly, in this search's one snapshot. Nothing waits for a
+                        # background job or is kept, and the lane's previous build goes on
+                        # for the requests waiting for it (``QueryIndex.moved_on``).
+                        whole = len(first.rows) < self.index.budgets.page_size and first.total in (
                             None,
                             len(first.rows),
+                        )
+                        if whole or (
+                            first_pages
+                            and offset + count <= len(first.rows)
+                            and len(
+                                await self.index.shown(
+                                    binding, mode, kind, [str(row["id"]) for row in first.rows]
+                                )
+                            )
+                            >= offset + count
                         ):
-                            # Less than a page is the complete result too: the selection
-                            # applies to it directly, in this search's one snapshot.
-                            # Nothing waits for a background job or is kept, and the
-                            # lane's previous build goes on for the requests waiting
-                            # for it (``QueryIndex.moved_on``).
                             await self.index.moved_on(binding, query, lane)
+                            if not whole:
+                                partial.add(len(requests))
                             requests.append((replace(first, complete=True), kind, offset, count))
                             continue
                         original_fetch = fetch
@@ -777,6 +805,10 @@ class Visibility:
             artist_count_role=self.artist_count_role,
             whole_albums=self.whole_albums(call, mode),
         )
+        # The selection may have changed since the first pages were looked at: what holds
+        # for the answer is what its one snapshot says.
+        if any(pages[n].total < requests[n][2] + requests[n][3] for n in partial):
+            return await self._search(call, binding, mode, validate, first_pages=False)
         originals = None
         for (_, kind, _, _), page in zip(requests, pages, strict=True):
             root = dict(page.envelope.get("response") or {})

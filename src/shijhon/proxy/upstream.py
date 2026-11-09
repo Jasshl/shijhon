@@ -10,10 +10,13 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import anyio
 import httpx
+
+from shijhon.navidrome import connect
 
 if TYPE_CHECKING:
     from shijhon.proxy.auth import Caller
@@ -76,13 +79,13 @@ def _escape(raw: bytes) -> bytes:
 class Upstream:
     """Pooled HTTP client for Navidrome."""
 
-    def __init__(self, base_url: str, *, timeout: float = 30.0) -> None:
+    def __init__(self, base_url: str, *, timeout: float = 30.0, socket: Path | None = None) -> None:
         self.base = httpx.URL(base_url.rstrip("/"))
-        self.client = httpx.AsyncClient(
+        self.client = connect.async_client(
+            socket,
             timeout=httpx.Timeout(timeout, read=None),
             limits=httpx.Limits(max_connections=256, max_keepalive_connections=64),
             follow_redirects=False,
-            trust_env=False,
         )
         # Optional selected-library adapter. Only enumerations are intercepted; raw
         # forwarding and direct media access retain Navidrome's permission checks.

@@ -36,3 +36,24 @@ const reveal = () => {
 };
 addEventListener("hashchange", reveal);
 reveal();
+
+// The agent address: a button copies it, where the browser offers the clipboard (a page
+// over plain HTTP does not: a click selects the whole address instead).
+for (const button of document.querySelectorAll("[data-copy]")) {
+  const source = document.getElementById(button.dataset.copy);
+  const said = button.parentElement.querySelector(".agent-copied");
+  if (!source || !said || !navigator.clipboard) continue;
+  button.hidden = false;
+  let timer;
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(source.textContent.trim());
+      said.textContent = "Copied";
+    } catch {
+      said.textContent = "Select the address to copy it";
+    }
+    said.classList.add("is-shown");
+    clearTimeout(timer);
+    timer = setTimeout(() => said.classList.remove("is-shown"), 1800);
+  });
+}

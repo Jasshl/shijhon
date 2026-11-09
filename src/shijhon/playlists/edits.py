@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import aiosqlite
 import anyio
 
 from shijhon.playlists.model import Connection, PlaylistError, Track
@@ -167,32 +168,58 @@ async def remember(
         await db.execute(
             "DELETE FROM playlist_edits WHERE mix=? AND publication=?", [mix, publication]
         )
-        await db.executemany(
-            "INSERT INTO playlist_edits"
-            "(mix,song_key,song_id,kind,artist,title,album,publication,at)"
-            " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(mix,song_key) DO UPDATE SET"
-            " song_id=excluded.song_id,kind=excluded.kind,artist=excluded.artist,"
-            "title=excluded.title,album=excluded.album,publication=excluded.publication,"
-            "at=excluded.at",
-            [
-                (mix, t.key, t.id, kind, t.artist, t.title, t.album, publication, now)
-                for kind, songs in (("removed", removed), ("added", added))
-                for t in songs
-            ],
+        await keep(db, mix, publication, now, removed, added)
+
+
+async def keep(
+    db: aiosqlite.Connection,
+    mix: str,
+    publication: str,
+    now: float,
+    removed: list[Track],
+    added: list[Track],
+) -> None:
+    await db.executemany(
+        "INSERT INTO playlist_edits"
+        "(mix,song_key,song_id,kind,artist,title,album,publication,at)"
+        " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(mix,song_key) DO UPDATE SET"
+        " song_id=excluded.song_id,kind=excluded.kind,artist=excluded.artist,"
+        "title=excluded.title,album=excluded.album,publication=excluded.publication,"
+        "at=excluded.at",
+        [
+            (mix, t.key, t.id, kind, t.artist, t.title, t.album, publication, now)
+            for kind, songs in (("removed", removed), ("added", added))
+            for t in songs
+        ],
+    )
+    for kind in ("removed", "added"):
+        await db.execute(
+            "DELETE FROM playlist_edits WHERE mix=? AND kind=? AND rowid NOT IN"
+            " (SELECT rowid FROM playlist_edits WHERE mix=? AND kind=?"
+            " ORDER BY at DESC, rowid DESC LIMIT ?)",
+            [mix, kind, mix, kind, KEPT],
         )
-        for kind in ("removed", "added"):
-            await db.execute(
-                "DELETE FROM playlist_edits WHERE mix=? AND kind=? AND rowid NOT IN"
-                " (SELECT rowid FROM playlist_edits WHERE mix=? AND kind=?"
-                " ORDER BY at DESC, rowid DESC LIMIT ?)",
-                [mix, kind, mix, kind, KEPT],
-            )
 
 
-async def forget(store: Store, mix: str) -> int:
-    """Forget every edit remembered for one playlist; returns how many songs that was.
-    Changes still in the native playlist since its last publication are learned again at
-    the next refresh."""
+async def removed_by_agent(
+    db: aiosqlite.Connection, mix: str, run: str, removed: list[Track]
+) -> None:
+    """Songs an agent removed from the playlist for its owner, in the publication's own
+    transaction: remembered as the owner's removals are. Their publication mark is not a
+    run's, so a refresh learning from that publication again keeps them."""
+    await keep(db, mix, "agent:" + run, time.time(), removed, [])
+
+
+async def forget(store: Store, mix: str, songs: Sequence[str] | None = None) -> int:
+    """Forget every edit remembered for one playlist, or only those of ``songs`` (Navidrome
+    song IDs); returns how many songs that was. Changes still in the native playlist since
+    its last publication are learned again at the next refresh."""
     async with store.transaction() as db:
-        cursor = await db.execute("DELETE FROM playlist_edits WHERE mix=?", [mix])
+        if songs is None:
+            cursor = await db.execute("DELETE FROM playlist_edits WHERE mix=?", [mix])
+        else:
+            cursor = await db.executemany(
+                "DELETE FROM playlist_edits WHERE mix=? AND song_id=?",
+                [(mix, song) for song in dict.fromkeys(songs)],
+            )
         return cursor.rowcount

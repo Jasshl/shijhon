@@ -262,3 +262,53 @@ async def test_accepted_download_keeps_attribution_on_disconnect(
     with pytest.raises(ExceptionGroup):
         await reply(AsyncMock(), send)
     assert await recorder.store.fetchone("SELECT 1 FROM collection_pending")
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "found"),
+    [
+        ("id", "native-album", {"demo:track1", "demo:track2"}),  # an album by its native ID
+        ("albumId", "native-album", {"demo:track1", "demo:track2"}),
+        ("id", "native-1", {"demo:track1"}),
+        ("songId", "native-1", {"demo:track1"}),
+        ("songId", "native-album", set()),  # only id and albumId can name an album
+        ("id", "native-owned", set()),  # an owned recording behind a catalog song
+        ("id", "nothing-of-the-sort", set()),
+    ],
+)
+async def test_a_value_finds_its_catalog_songs_by_an_index(
+    recorder: CollectionRequests, key: str, value: str, found: set[str]
+) -> None:
+    """This runs for every play an app reports, and for each song of a playlist."""
+    release = CatalogRelease(
+        CatalogRef("demo", "release"),
+        "Cloud House",
+        "Glass Orchard",
+        ReleaseKind.ALBUM,
+        "2020",
+        tracks=(track(1), track(2), track(3)),
+    )
+    async with recorder.store.transaction() as db:
+        await db.execute(
+            "INSERT INTO releases(ref,folder,album_id,title,artist,album_tags,data,created_at)"
+            " VALUES ('demo:release','_shijhon/release','native-album',"
+            "'Cloud House','Glass Orchard','{}',?,1)",
+            [json.dumps(release_data(release))],
+        )
+        await db.executemany(
+            "INSERT INTO track_links VALUES (?,?,'demo:release',?)",
+            [
+                ("demo:track1", "native-1", 0),
+                ("demo:track2", "native-2", 0),
+                ("demo:track3", "native-owned", 1),
+            ],
+        )
+    statements: list[str] = []
+    await recorder.store.conn.set_trace_callback(statements.append)
+    tracks = await recorder._tracks([(key, value)])
+    await recorder.store.conn.set_trace_callback(None)
+    assert tracks is not None
+    assert {str(t.ref) for t in tracks} >= found and len(tracks) == len(found)
+    lookup = next(s for s in statements if "JOIN track_links" in s)
+    plan = await recorder.store.fetchall("EXPLAIN QUERY PLAN " + lookup)
+    assert not [row["detail"] for row in plan if row["detail"].startswith("SCAN")]

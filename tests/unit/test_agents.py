@@ -31,7 +31,7 @@ from shijhon.playlists.model import Definition, Track
 from shijhon.playlists.requests import RequestError
 from shijhon.proxy.forwarding import Forwarding
 from tests.harness.agents import callback_target
-from tests.unit.test_playlist_requests import service_at
+from tests.unit.test_playlist_requests import connected, service_at
 
 BASE = "https://test.invalid"
 ISSUER = BASE + "/shijhon/agents"
@@ -39,7 +39,7 @@ RESOURCE = BASE + "/shijhon/mcp"
 
 
 @asynccontextmanager
-async def app_at(path: Path):
+async def app_at(path: Path, base: str = BASE):
     async with service_at(path, ai=False) as service:
         service.client.login = AsyncMock(
             return_value={
@@ -57,11 +57,11 @@ async def app_at(path: Path):
                 )
             ),
         )
-        app = Agents(host, service, BASE)
+        app = Agents(host, service, base)
         async with anyio.create_task_group() as group:
             group.start_soon(app.run)
             await app.ready.wait()
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url=BASE) as http:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url=base) as http:
                 yield app, http
             group.cancel_scope.cancel()
 
@@ -70,10 +70,11 @@ async def begin(
     http: httpx.AsyncClient,
     scopes: str = "create status library",
     client_id: str = "",
+    base: str = BASE,
 ) -> dict[str, Any]:
     if not client_id:
         reply = await http.post(
-            ISSUER + "/register",
+            base + "/shijhon/agents/register",
             json={
                 "redirect_uris": ["http://127.0.0.1/callback"],
                 "token_endpoint_auth_method": "none",
@@ -92,13 +93,13 @@ async def begin(
         "client_id": client,
         "response_type": "code",
         "redirect_uri": "http://127.0.0.1/callback",
-        "resource": RESOURCE,
+        "resource": base + "/shijhon/mcp",
         "state": "state-123",
         "code_challenge": challenge,
         "code_challenge_method": "S256",
         "scope": scopes,
     }
-    authorized = await http.get(ISSUER + "/authorize", params=params)
+    authorized = await http.get(base + "/shijhon/agents/authorize", params=params)
     assert authorized.status_code == 302, authorized.text
     location = authorized.headers["location"]
     page = await http.get(location)
@@ -114,7 +115,9 @@ async def begin(
     }
 
 
-async def finish(http: httpx.AsyncClient, flow: dict[str, Any], scopes: str) -> dict[str, Any]:
+async def finish(
+    http: httpx.AsyncClient, flow: dict[str, Any], scopes: str, base: str = BASE
+) -> dict[str, Any]:
     approved = await http.post(
         flow["location"],
         data={
@@ -137,16 +140,16 @@ async def finish(http: httpx.AsyncClient, flow: dict[str, Any], scopes: str) -> 
         },
     )
     query = parse_qs(urlsplit(callback_target(approved)).query)
-    assert query["state"] == ["state-123"] and query["iss"] == [ISSUER]
+    assert query["state"] == ["state-123"] and query["iss"] == [base + "/shijhon/agents"]
     exchange = {
         "grant_type": "authorization_code",
         "client_id": flow["client_id"],
         "code": query["code"][0],
         "code_verifier": flow["verifier"],
         "redirect_uri": "http://127.0.0.1/callback",
-        "resource": RESOURCE,
+        "resource": base + "/shijhon/mcp",
     }
-    tokens = await http.post(ISSUER + "/token", data=exchange)
+    tokens = await http.post(base + "/shijhon/agents/token", data=exchange)
     assert tokens.status_code == 200, tokens.text
     return {**tokens.json(), "exchange": exchange, "client_id": flow["client_id"]}
 
@@ -674,10 +677,16 @@ def test_an_agent_forgets_learned_edits_of_its_own_request_with_create_permissio
                 return int(row["n"])
 
             forget = {"request_id": ident, "action": "forget_edits"}
-            # Another connection of the same account has no access to this request.
+            # Another connection of the same account sees it too, with what was learned.
             other = await finish(http, await begin(http, "create status"), "create status")
-            denied = await call(http, other["access_token"], "manage_playlist_refresh", forget)
-            assert denied["error"]["code"] == "not_found" and await remembered() == 3
+            seen = await call(
+                http, other["access_token"], "get_playlist_request", {"request_id": ident}
+            )
+            assert seen["request"]["made_by"] == "another_agent"
+            assert "user_edits" not in seen["request"]  # needs library permission
+            own = await call(http, token, "get_playlist_request", {"request_id": ident})
+            assert own["request"]["user_edits"]["remembered"] == {"removed": 2, "added": 1}
+            assert await remembered() == 3
             # It is a change, so read-only permission is not enough.
             grant = (await app.oauth.verify_token(token)).claims["grant_id"]
             scopes = "UPDATE playlist_agent_tokens SET scopes=? WHERE id=?"
@@ -922,8 +931,12 @@ def test_an_agent_adds_tracks_to_its_own_explicit_playlist(tmp_path: Path) -> No
                 "idempotency_key": "add-tracks-1",
                 "tracks": [{"artist": "Paper Sky", "title": "Night Light", "replaces": 2}],
             }
-            other = await finish(http, await begin(http, "create status"), "create status")
-            denied = await call(http, other["access_token"], "add_playlist_tracks", args)
+            # Another account's playlist is not found.
+            await app.service.repo.connect(connected("another-owner"))
+            elsewhere = await app.service.repo.create("another-owner", Definition())
+            denied = await call(
+                http, token, "add_playlist_tracks", {**args, "request_id": elsewhere}
+            )
             assert denied["error"]["code"] == "not_found"
             grant = (await app.oauth.verify_token(token)).claims["grant_id"]
             scopes = "UPDATE playlist_agent_tokens SET scopes=? WHERE id=?"

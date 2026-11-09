@@ -47,8 +47,23 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           package = self.packages.${system}.shijhon;
+          module = self.nixosModules.default;
         in
         {
+          service = import ./tests/nix/vm.nix {
+            inherit pkgs module;
+            # With the tests' made-up catalog, so that Shijhon writes a placeholder.
+            package = mkShijhon {
+              inherit pkgs;
+              extraPackages = [ "shijhon-demo-catalog" ];
+            };
+          };
+          navidrome-version-guard = import ./tests/nix/version-guard.nix {
+            inherit pkgs nixpkgs module;
+          };
+          module-options = import ./tests/nix/options.nix {
+            inherit pkgs nixpkgs module;
+          };
           package = pkgs.runCommand "shijhon-package-check" { } ''
             ${package}/bin/shijhon version
             ${package}/bin/shijhon --help > /dev/null

@@ -17,6 +17,7 @@ from pydantic import SecretStr
 from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
 from shijhon.collection.contracts import Actor, CollectionError, NativeAbsent
 from shijhon.music_imports.model import NativeFile
+from shijhon.navidrome import connect
 from shijhon.playlists.model import Connection, PlaylistError
 from shijhon.playlists.service import Playlists
 
@@ -52,7 +53,9 @@ class CallerLibrary:
         self.access = AccessService(playlists.client.native)
         self.library_id = playlists.client.native.library_id
         self.base_url = playlists.client.native.base_url
-        self.http = httpx.AsyncClient(timeout=10, trust_env=False, follow_redirects=False)
+        self.http = connect.async_client(
+            playlists.client.native.socket, timeout=10, follow_redirects=False
+        )
         self._bearers: OrderedDict[str, _Bearer] = OrderedDict()
         self._totals: dict[str, int] = {}
 

@@ -75,6 +75,7 @@ def dashboard(service: Playlists) -> SimpleNamespace:
         services=SimpleNamespace(playlists=service),
         _render=render,
         _see=lambda where: RedirectResponse(f"/shijhon{where}", 303),
+        agent_access=lambda: ("", False),  # no agent address
     )
 
 

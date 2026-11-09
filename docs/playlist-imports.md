@@ -21,12 +21,12 @@ with its `.csv` or `.tsv` filename.
 
 | Input | Supported entry data |
 | --- | --- |
-| M3U / M3U8 | Ordered file paths or file URIs; extended comments and `EXTINF` names |
-| PLS | Numbered `File1`, `File2`, … entries, optional titles; numeric entry order |
-| XSPF | Ordered tracks, alternate locations, creator/title/album, relative XML bases; `navidrome:` or `subsonic:` song identifiers |
-| JSPF | JSON playlist tracks, locations and creator/title/album |
+| M3U / M3U8 | Ordered file paths or file URIs; extended comments, `EXTINF` names and durations |
+| PLS | Numbered `File1`, `File2`, … entries, optional titles and lengths; numeric entry order |
+| XSPF | Ordered tracks, alternate locations, creator/title/album, duration, relative XML bases; native song IDs and ISRC identifiers |
+| JSPF | JSON playlist tracks, locations, creator/title/album, duration and recording identifiers |
 | XML ASX / WPL | Ordered ASX entries or WPL media locations, scoped bases and finite repeats |
-| CSV / TSV | Recording names, file locations or native song IDs; extra export columns are ignored |
+| CSV / TSV | Recording names, ISRC, duration, file locations or native song IDs; extra export columns are ignored |
 | Text | One artist/title pair per line |
 
 These are finite track-list imports. Streaming manifests, dynamic smart-playlist
@@ -57,9 +57,9 @@ assumed to contain Navidrome IDs.
 
 Use **File format, encoding and columns** when headers differ or several columns could
 supply the same field. Enter the exact header for artist, title, album, version,
-location or native song ID. For example, a generic `id` column can explicitly be
-mapped to native song ID. At least artist/title, a location or a native song ID is
-required for each row. Album and version can constrain metadata matching. Use quoted
+ISRC, duration, location or native song ID. For example, a generic `id` column can
+explicitly be mapped to native song ID. At least artist/title, a location or a native
+song ID is required for each row. Album and version can constrain metadata matching. Use quoted
 fields for commas inside names:
 
 ```csv
@@ -68,6 +68,33 @@ Glass Orchard,First Light,Paper Garden,,5
 Tideline,Harbor,Evening Rooms,Live,4
 Glass Orchard,First Light,Paper Garden,,5
 ```
+
+ISRC and duration are optional recording hints, not streaming-service connections.
+For example, an ordinary export can include:
+
+```csv
+artist,title,album,duration_ms,isrc
+Glass Orchard,First Light,Paper Garden,203500,ZZSHJ2600001
+```
+
+`ISRC` accepts the compact or hyphenated code in either letter case. `duration_ms`
+and `Duration (ms)` mean milliseconds; `duration`, `Duration (seconds)`, `Length` and
+`Time` mean seconds or `M:SS` / `H:MM:SS`, with fractional seconds allowed. Units never
+depend on how large the number is. Blank or zero duration means unknown. If both
+duration columns have values, they must agree. Invalid codes or lengths reject the
+submission with the entry number.
+
+XSPF and JSPF durations are milliseconds. Their recording identifiers can use
+`isrc:ZZSHJ2600001` or `urn:isrc:ZZSHJ2600001`; native song identifiers use `navidrome:`
+or `subsonic:`. Several ISRC identifiers are kept as alternatives for one track.
+M3U `EXTINF` and PLS `LengthN` durations are seconds; `-1` means unknown.
+
+For matching by names, a conflicting known ISRC or a known duration differing by more
+than five seconds rules out a candidate. Among otherwise eligible candidates, the
+requested ISRC is preferred over an unknown one. Unknown metadata can still match by
+names, and album and version requirements still apply. These hints stay saved for
+review, retries and missing-entry rechecks. Explicit native IDs and file paths keep
+their existing authority; choosing a native ID manually remains an explicit override.
 
 Only ambiguity among columns supplying an imported field needs mapping. Distinct
 unused headers that normalize alike, non-Latin headers and duplicated unused columns

@@ -158,6 +158,7 @@ GROUPS: dict[str, list[Group]] = {
         Group("advanced", "Library pass schedule", more=True),
     ],
     "cleanup": [Group("cleanup", "Cleanup settings")],
+    "agents": [Group("address", "Address")],
     "audiomuse": [
         Group("connection", "Connection"),
         Group("advanced", "Requests and reading the analysis", more=True),
@@ -638,6 +639,30 @@ META: dict[str, dict[str, Meta]] = {
             " album is still shown complete, and is filled again on its next use, not"
             " automatically.",
             "cleanup",
+        ),
+    },
+    "playlists": {
+        "allow_private_api": Meta(
+            "Allow AI on this machine or your network",
+            "Lets Shijhon connect to AI on this machine or your network.",
+        ),
+    },
+    "agents": {
+        "public_url": Meta(
+            "Agent address",
+            "The address agents reach this Shijhon at, without a path, such as"
+            " https://music.example.com. Agents connect to it with /shijhon/mcp added. Empty:"
+            " agent access is off. Changing it signs connected agents out: they connect again"
+            " at the new address.",
+            "address",
+            max_length=200,
+        ),
+        "private_http": Meta(
+            "Plain HTTP on a home network",
+            "Accept an http:// address on your own network, such as 192.168.x.x, a Tailscale"
+            " 100.x.x.x address or a name your network knows. Sign-in passwords and agent"
+            " tokens then travel unencrypted on that network.",
+            "address",
         ),
     },
     "audiomuse": {

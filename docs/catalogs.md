@@ -76,7 +76,7 @@ identity = "examplemusic.us"  # the declared key.region; key alone without a reg
 ```
 
 Confirm an identity only when the add-on uses that catalog's own item IDs with the same
-meaning. This lets you move from an adapter to an add-on, or between add-ons, while
+meaning. That allows moving from an adapter to an add-on, or between add-ons, while
 keeping the catalog key and region: saved matches and catalog lists continue under
 the same scope. While an adapter is still the configured catalog, an add-on declaring
 the same key gets no direct catalog IDs: it is looked up like any add-on.

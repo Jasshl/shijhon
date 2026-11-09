@@ -1557,3 +1557,40 @@ async def test_stopped_playback_checks_counts_for_the_forwarded_native_recording
         recorder.query_index.annotations_changed.assert_awaited_once_with("one")
     finally:
         await store.close()
+
+
+async def test_favorites_read_again_change_only_what_changed(tmp_path: Path) -> None:
+    """They are read every few minutes and decide the account's library: the same ones leave
+    its kept selection standing."""
+    store = await Store.open(tmp_path / "state.db")
+    try:
+        reasons = Reasons(store, "1", None, lambda _: False)  # type: ignore[arg-type]
+
+        async def favorites() -> list[tuple[str, str]]:
+            rows = await store.fetchall(
+                "SELECT kind,item_id FROM collection_favorites WHERE owner_id='one' ORDER BY 1,2"
+            )
+            return [(str(r["kind"]), str(r["item_id"])) for r in rows]
+
+        async def counted() -> int:
+            row = await store.fetchone(
+                "SELECT revision FROM collection_revisions WHERE scope='owner:one'"
+            )
+            return int(row["revision"]) if row else 0
+
+        def reading(*rows: tuple[str, str]) -> Any:
+            async def starred() -> set[tuple[str, str]]:
+                return set(rows)
+
+            return starred
+
+        await reasons._read("one", reading(("album", "a1"), ("song", "s1")))
+        before = await counted()
+        assert await favorites() == [("album", "a1"), ("song", "s1")]
+        await reasons._read("one", reading(("album", "a1"), ("song", "s1")))
+        assert await counted() == before
+        await reasons._read("one", reading(("album", "a1"), ("song", "s2")))
+        assert await favorites() == [("album", "a1"), ("song", "s2")]
+        assert await counted() == before + 2
+    finally:
+        await store.close()

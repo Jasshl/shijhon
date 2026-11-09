@@ -33,8 +33,8 @@ def world(
         Album(
             "Glass Orchard", "Paper Garden", (Track("First Light", 1), Track("Harbor (Live)", 2))
         ),
-        Album("Tideline", "First Room", (Track("Same Song", 1),)),
-        Album("Tideline", "Second Room", (Track("Same Song", 1),)),
+        Album("Tideline", "First Room", (Track("Same Song", 1, isrc="ZZSHJ2600001"),)),
+        Album("Tideline", "Second Room", (Track("Same Song", 1, seconds=12, isrc="ZZSHJ2600002"),)),
     ):
         write_album(nd.music, album)
     for path in write_album(
@@ -186,6 +186,58 @@ def test_partial_import_lists_every_row_and_requires_current_explicit_exclusions
     assert "5 entries · 3 found · 2 not found" in browser.get(f"playlists/import/{ident}").text
 
 
+def test_imported_isrc_and_duration_choose_native_recordings_and_show_saved_hints(
+    world: tuple[DeliveryWorld, Browser],
+) -> None:
+    w, browser = world
+    service = w.services.playlists
+    assert service
+    before = w.placeholder_rows()
+    ident, run = submit(
+        world,
+        csv=(
+            "artist,title,duration_ms,isrc\n"
+            "Tideline,Same Song,3000,zz-shj-26-00001\n"
+            "Tideline,Same Song,12000,\n"
+            "Tideline,Same Song,3000,ZZSHJ2600001\n"
+            "Tideline,Same Song,3000,ZZSHJ2600003\n"
+        ),
+    )
+    preview = w.server.call(lambda: service.repo.run(run))
+    rows = preview["data"]["rows"]
+    assert [r["state"] for r in rows] == ["matched", "matched", "matched", "unresolved"]
+    assert [s["album"] for s in preview["data"]["selected"]] == [
+        "First Room",
+        "Second Room",
+        "First Room",
+    ]
+    assert w.placeholder_rows() == before
+    page = browser.get(f"playlists/import/{ident}")
+    assert "ISRC: <code>ZZSHJ2600001</code>" in page.text
+    assert "Duration: 3.0 s" in page.text and "Duration: 12.0 s" in page.text
+    assert (
+        browser.submit(
+            f"playlists/import/{ident}", {"action": "publish", "excluded": "1"}
+        ).status_code
+        == 303
+    )
+    result = wait_state(w, run, ("published", "failed", "uncertain"))
+    assert result["state"] == "published", result["error"]
+
+    async def verify() -> None:
+        connection = await connected_admin(service)
+        mix = await service.repo.mix(ident, connection.user_id)
+        playlist = await service.client.playlist(connection, mix["playlist_id"])
+        assert [s["id"] for s in playlist["entry"]] == result["data"]["native_ids"]
+        assert [s["album"] for s in playlist["entry"]] == [
+            "First Room",
+            "Second Room",
+            "First Room",
+        ]
+
+    w.server.call(verify)
+
+
 def test_catalog_import_adds_only_after_review_and_recovers_lost_create_response(
     world: tuple[DeliveryWorld, Browser],
 ) -> None:
@@ -195,9 +247,10 @@ def test_catalog_import_adds_only_after_review_and_recovers_lost_create_response
     before = w.placeholder_rows()
     ident, run = submit(
         world,
-        csv="artist,title,album,version\n"
+        csv="artist,title,album,duration_ms,isrc\n"
         + "\n".join(
-            f"{s.artist},{s.title},{RELEASE.title}," for s in (SONGS[1], SONGS[0], SONGS[1])
+            f"{s.artist},{s.title},{RELEASE.title},{s.seconds * 1000},{s.isrc or ''}"
+            for s in (SONGS[1], SONGS[0], SONGS[1])
         ),
     )
     assert w.placeholder_rows() == before

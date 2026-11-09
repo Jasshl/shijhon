@@ -425,3 +425,18 @@ def test_export_request_identity_detects_atomic_replacement_in_same_timestamp_ti
     request.write_text("a-longer-request")
     os.utime(request, ns=(first[1], first[1]))
     assert export_module._asked(request) != second
+
+
+def test_a_request_is_never_read_through_a_link(tmp_path: Path) -> None:
+    """The exporter may read what Shijhon may not: a link Shijhon put in the request's
+    place is not followed, and the request reads as none."""
+    from shijhon.navidrome.export import _request
+
+    out = tmp_path / "usage.sqlite3"
+    secret = tmp_path / "navidrome-secret"
+    secret.write_text("not Shijhon's to read\n")
+    request_path(out).symlink_to(secret)
+    assert _request(out) == ""
+    request_path(out).unlink()
+    request_path(out).write_text("asker:3\n")
+    assert _request(out) == "asker:3"

@@ -431,3 +431,27 @@ async def test_a_song_navidrome_does_not_have_is_skipped_for_a_while(library: An
         with anyio.fail_after(5):
             await spawn.ended[-1].wait()
     assert len(missing.asked) == 1
+
+
+async def test_nothing_missing_stands_until_a_song_or_placeholder_changes(library: Any) -> None:
+    """Looking passes over every placeholder and comes round with an app's requests."""
+    store, service = library
+    await service.refresh("one", "1")
+    written = Written(store, service.index, "1", Navidrome({}), lambda work: False)  # type: ignore[arg-type]
+    opened: list[int] = []
+    snapshot = store.snapshot
+
+    def counting() -> Any:
+        opened.append(1)
+        return snapshot()
+
+    store.snapshot = counting
+    assert await written._missing() == []
+    assert await written._missing() == []
+    assert len(opened) == 1
+    await store.execute("UPDATE collection_index SET updated_at=updated_at+1")
+    assert await written._missing() == []
+    assert len(opened) == 1  # a scan that found nothing new moves nothing that counts
+    await store.execute("UPDATE collection_tracks SET present=present")
+    assert await written._missing() == []
+    assert len(opened) == 2

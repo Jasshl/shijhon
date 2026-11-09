@@ -10,6 +10,7 @@ import httpx
 from pydantic import SecretStr
 
 from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
+from shijhon.navidrome import connect
 from shijhon.navidrome.client import NavidromeService
 from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 
@@ -34,7 +35,7 @@ class OwnerClient:
     def __init__(self, native: NavidromeService) -> None:
         self.native = native
         self.access = AccessService(native)
-        self.http = httpx.AsyncClient(timeout=30, trust_env=False)
+        self.http = connect.async_client(native.socket, timeout=30)
 
     async def aclose(self) -> None:
         await self.http.aclose()

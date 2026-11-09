@@ -31,9 +31,57 @@ COLUMNS = {
     "title": ("title", "track", "trackname", "song", "songname", "name"),
     "album": ("album", "albumname"),
     "version": ("version", "trackversion"),
+    "isrc": ("isrc",),
+    "duration": ("duration", "durationseconds", "durationsec", "durations", "length", "time"),
+    "duration_ms": ("durationms", "durationmilliseconds", "lengthms"),
     "location": ("location", "path", "filepath", "filename", "file", "uri", "trackuri", "url"),
     "native_id": ("nativeid", "navidromeid", "songid"),
 }
+
+
+def _duration(value: Any, *, milliseconds: bool = False, unknown: bool = False) -> int:
+    """Explicit units, or a seconds field's M:SS / H:MM:SS; never guess from magnitude."""
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError("invalid duration")
+    text = str(value).strip()
+    if not text or (unknown and re.fullmatch(r"-1(?:\.0+)?", text)):
+        return 0
+    if len(text) > 30:
+        raise ValueError("invalid duration")
+    if milliseconds:
+        if not re.fullmatch(r"[0-9]+(?:\.0+)?", text):
+            raise ValueError("duration in milliseconds must be a nonnegative integer")
+        return int(Decimal(text))
+    parts = text.split(":")
+    if not 1 <= len(parts) <= 3 or not all(
+        re.fullmatch(
+            r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)" if i == len(parts) - 1 else r"[0-9]+", part
+        )
+        for i, part in enumerate(parts)
+    ):
+        raise ValueError("invalid duration")
+    if len(parts) > 1 and any(Decimal(p) >= 60 for p in parts[1:]):
+        raise ValueError("invalid clock duration")
+    seconds = Decimal(0)
+    for part in parts:
+        seconds = seconds * 60 + Decimal(part)
+    return int(seconds * 1000)
+
+
+def _identifier(row: dict[str, Any], text: str) -> None:
+    """Read known recording identifiers as data, without following their URIs."""
+    lower = text.casefold()
+    if lower.startswith(("navidrome:", "subsonic:")):
+        row["native_id"] = text.split(":", 1)[1]
+    elif lower.startswith(("isrc:", "urn:isrc:")):
+        code = Entry.normalize_isrc(text.rsplit(":", 1)[1])
+        if row.get("isrc") and row["isrc"] != code:
+            if code not in row.setdefault("isrcs", []):
+                row["isrcs"].append(code)
+        else:
+            row["isrc"] = code
 
 
 class Entry(Model):
@@ -43,8 +91,29 @@ class Entry(Model):
     title: str = Field(default="", max_length=300)
     album: str = Field(default="", max_length=300)
     version: str = Field(default="", max_length=100)
+    # Empty hints stay absent from older imports' evidence and idempotency hashes.
+    isrc: str = Field(default="", exclude_if=lambda value: not value)
+    isrcs: list[str] = Field(default_factory=list, exclude_if=lambda value: not value)
+    duration_ms: int = Field(default=0, ge=0, exclude_if=lambda value: not value)
     locations: list[str] = Field(default_factory=list, max_length=16)
     native_id: str = Field(default="", max_length=256)
+
+    @field_validator("isrc")
+    @classmethod
+    def normalize_isrc(cls, value: str) -> str:
+        code = re.sub(r"[-\s]", "", value).upper()
+        if code and not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{3}[0-9]{7}", code):
+            raise ValueError("invalid ISRC")
+        return code
+
+    @field_validator("isrcs")
+    @classmethod
+    def normalize_isrcs(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(code for value in values if (code := cls.normalize_isrc(value))))
+
+    @property
+    def recording_isrcs(self) -> list[str]:
+        return list(dict.fromkeys(code for code in [self.isrc, *self.isrcs] if code))
 
     @field_validator("artist", "title", "album", "version", "native_id")
     @classmethod
@@ -79,7 +148,12 @@ class Entry(Model):
         suggestion = self.suggestion()
         if suggestion is None:
             raise PlaylistError("This entry needs a native path or recording choice.")
-        return suggestion.wanted()
+        return {
+            **suggestion.wanted(),
+            "isrc": self.isrc,
+            "isrcs": self.isrcs,
+            "duration_ms": self.duration_ms,
+        }
 
 
 def _names(text: str) -> dict[str, str]:
@@ -146,13 +220,21 @@ def _csv(source: str, mapping: dict[str, str]) -> Iterable[dict[str, Any]]:
         if len(values) != len(headers):
             raise ValueError("incomplete CSV row")
         row: dict[str, Any] = {k: values[i] for k, i in chosen.items() if k != "location"}
+        if "duration" in row:
+            row["duration"] = _duration(row["duration"])
+        if "duration_ms" in row:
+            row["duration_ms"] = _duration(row["duration_ms"], milliseconds=True)
+        seconds = row.pop("duration", 0)
+        if seconds and row.get("duration_ms") and seconds != row["duration_ms"]:
+            raise ValueError("conflicting duration columns")
+        row["duration_ms"] = row.get("duration_ms") or seconds
         if "location" in chosen and (location := values[chosen["location"]].strip()):
             row["locations"] = [location]
         yield row
 
 
 def _m3u(source: str) -> Iterable[dict[str, Any]]:
-    names: dict[str, str] = {}
+    names: dict[str, Any] = {}
     for line in source.splitlines():
         line = line.strip()
         if not line:
@@ -176,7 +258,11 @@ def _m3u(source: str) -> Iterable[dict[str, Any]]:
         if line.startswith("#EXTINF:"):
             if "," not in line:
                 raise ValueError("invalid EXTINF")
-            names = _names(line.split(",", 1)[1])
+            length = line.split(",", 1)[0].split(":", 1)[1].split()
+            names = {
+                **_names(line.split(",", 1)[1]),
+                "duration_ms": _duration(length[0] if length else "", unknown=True),
+            }
         elif not line.startswith("#"):
             yield {**names, "locations": [line]}
             names = {}
@@ -195,7 +281,11 @@ def _pls(source: str) -> Iterable[dict[str, Any]]:
     if "numberofentries" in section and section.getint("numberofentries") != len(indexes):
         raise ValueError("PLS count mismatch")
     for i in indexes:
-        yield {**_names(section.get(f"title{i}", "")), "locations": [section[f"file{i}"]]}
+        yield {
+            **_names(section.get(f"title{i}", "")),
+            "locations": [section[f"file{i}"]],
+            "duration_ms": _duration(section.get(f"length{i}", ""), unknown=True),
+        }
 
 
 def _tag(element: Element) -> str:
@@ -337,8 +427,10 @@ def _xml(source: str, format: str, max_rows: int) -> Iterable[dict[str, Any]]:
                     row["artist" if tag == "creator" else tag] = text
                 elif tag == "location" and text:
                     row["locations"].append(_uri(bases[child], text))
-                elif tag == "identifier" and text.startswith(("navidrome:", "subsonic:")):
-                    row["native_id"] = text.split(":", 1)[1]
+                elif tag == "identifier":
+                    _identifier(row, text)
+                elif tag == "duration":
+                    row["duration_ms"] = _duration(text, milliseconds=True)
             yield row
     elif format == "asx":
         for child in root.iter():
@@ -369,12 +461,19 @@ def _jspf(source: str) -> Iterable[dict[str, Any]]:
         locations = track.get("location", [])
         if isinstance(locations, str):
             locations = [locations]
-        yield {
+        row = {
             "artist": track.get("creator", ""),
             "title": track.get("title", ""),
             "album": track.get("album", ""),
             "locations": locations,
+            "duration_ms": _duration(track.get("duration"), milliseconds=True),
         }
+        identifiers = track.get("identifier", [])
+        if isinstance(identifiers, str):
+            identifiers = [identifiers]
+        for identifier in identifiers:
+            _identifier(row, identifier)
+        yield row
 
 
 def detect(source: str, filename: str = "") -> str:

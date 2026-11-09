@@ -226,6 +226,11 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
             "library_pass.interval_seconds", lambda s: s.pass_interval_hours * 3600, optional=True
         ),
     ),
+    # [playlists]: the playlist services and their curator share one settings object, and
+    # read this at every API request.
+    ("playlists", "allow_private_api"): (
+        Target("playlists.settings.allow_private_api", _same("allow_private_api"), optional=True),
+    ),
 }
 
 

@@ -46,6 +46,9 @@ given as an option instead:
                          ("-": standard input)
   --port N               the port your apps connect to (default: $default_port)
   --adapters "SPEC ..."  catalog adapters to install (docs/catalogs.md)
+  --agent-url URL        the address AI agents connect to over MCP: an HTTPS origin
+                         such as https://music.example.com (optional; an http://
+                         address on a home network turns on plain HTTP for it)
   --no-questions         ask nothing: use the options, and the defaults for the rest
   -h, --help             this text
 
@@ -109,6 +112,8 @@ own_password_file=""
 port=""
 adapters=""
 adapters_given=false
+agent_url=""
+agent_private=false
 questions=true
 
 need_value() {
@@ -122,6 +127,7 @@ while [ "$#" -gt 0 ]; do
         --password-file) need_value "$@"; own_password_file=$2; shift 2 ;;
         --port) need_value "$@"; port=$2; shift 2 ;;
         --adapters) need_value "$@"; adapters=$2; adapters_given=true; shift 2 ;;
+        --agent-url) need_value "$@"; agent_url=$2; shift 2 ;;
         --no-questions) questions=false; shift ;;
         -h | --help) usage; exit 0 ;;
         *) fail "unknown option: $1 (./setup.sh --help)" ;;
@@ -497,6 +503,163 @@ password_problem() {
     fi
 }
 
+# The agent address (Shijhon's agents.public_url): a scheme and a host, with a port if
+# needed, and no path. Plain http:// only for this machine, or for a host on a private
+# network (Shijhon's agents.private_http). The check follows Shijhon's, and refuses
+# rather than guesses: an address Shijhon would rewrite (an IPv4 address with a leading
+# zero, a number for a host) or refuse at startup is never written.
+
+# agent_parts <address>: its host in $agent_name (an IPv6 address without its brackets),
+# its port in $agent_port ("" when none is given), and whether the two read cleanly in
+# $agent_shape (true or false).
+agent_parts() {
+    agent_rest=${1#*://}
+    agent_shape=true
+    agent_name=""
+    agent_port=""
+    case $agent_rest in
+        \[*)
+            agent_name=${agent_rest#\[}
+            agent_name=${agent_name%%\]*}
+            case $agent_rest in
+                "[$agent_name]") ;;
+                "[$agent_name]:"*) agent_port=${agent_rest#"[$agent_name]:"} ;;
+                *) agent_shape=false ;;
+            esac
+            ipv6_address "$agent_name" || agent_shape=false
+            ;;
+        *:*:*) agent_shape=false ;;
+        *:*)
+            agent_name=${agent_rest%%:*}
+            agent_port=${agent_rest#*:}
+            ;;
+        *) agent_name=$agent_rest ;;
+    esac
+    case $agent_rest in
+        \[*) ;;
+        *)
+            case $agent_name in
+                "" | *[!A-Za-z0-9.-]*) agent_shape=false ;;
+            esac
+            # A last label that is a number makes the host an IPv4 address (as browsers
+            # read it): only four plain numbers from 0 to 255 are taken.
+            agent_last=${agent_name%.}
+            agent_last=${agent_last##*.}
+            case $agent_last in
+                0[xX]*) agent_shape=false ;;
+                "" | *[!0-9]*) ;;
+                *) ipv4_address "${agent_name%.}" || agent_shape=false ;;
+            esac
+            ;;
+    esac
+    case $agent_rest in
+        *:) agent_shape=false ;; # a colon without a port
+    esac
+    case $agent_port in
+        "") ;;
+        *[!0-9]* | 0*) agent_shape=false ;;
+        *)
+            if [ "${#agent_port}" -gt 5 ] || [ "$agent_port" -gt 65535 ]; then
+                agent_shape=false
+            fi
+            ;;
+    esac
+}
+
+ipv4_address() {
+    printf '%s\n' "$1" | awk -F. '
+        NF != 4 { exit 1 }
+        { for (i = 1; i <= 4; i++) if ($i !~ /^(0|[1-9][0-9]?[0-9]?)$/ || $i + 0 > 255) exit 1 }'
+}
+
+ipv6_address() {
+    case $1 in "" | *[!0-9A-Fa-f:]*) return 1 ;; esac
+    printf '%s\n' "$1" | awk '
+        function groups(part,   n, found, i) {
+            if (part == "") return 0
+            n = split(part, found, ":")
+            for (i = 1; i <= n; i++)
+                if (found[i] !~ /^[0-9A-Fa-f][0-9A-Fa-f]?[0-9A-Fa-f]?[0-9A-Fa-f]?$/) return -1
+            return n
+        }
+        {
+            at = index($0, "::")
+            if (at == 0) exit (groups($0) == 8 ? 0 : 1)
+            left = substr($0, 1, at - 1)
+            right = substr($0, at + 2)
+            if (index(right, "::")) exit 1
+            l = groups(left)
+            r = groups(right)
+            exit (l >= 0 && r >= 0 && l + r <= 7 ? 0 : 1)
+        }'
+}
+
+agent_problem() {
+    if has_control "$1"; then
+        say "the agent address has a character that cannot be typed (a line break, a tab)"
+        return 0
+    fi
+    case $1 in
+        https://* | http://*) ;;
+        *)
+            say "the agent address starts with https://, such as https://music.example.com"
+            return 0
+            ;;
+    esac
+    agent_parts "$1"
+    if ! $agent_shape; then
+        say "the agent address is https:// and a host, with a port if needed, and no path"
+    elif agent_plain "$1" && ! private_host "$agent_name"; then
+        say "plain http:// is only for a home network: use https:// for this address"
+    else
+        return 1
+    fi
+}
+
+# Whether an address is plain http:// other than on this machine.
+agent_plain() {
+    case $1 in http://*) ;; *) return 1 ;; esac
+    agent_parts "$1"
+    case $agent_name in localhost | 127.0.0.1 | ::1) return 1 ;; esac
+    return 0
+}
+
+# Whether a host may be reached over plain HTTP, as Shijhon tells it: any name (your
+# network resolves it), and of addresses those of a private network - private and shared
+# (100.64.0.0/10) IPv4 addresses, IPv6 unique local addresses, and loopback.
+private_host() {
+    agent_lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case $agent_lower in
+        *:*)
+            case $agent_lower in f[cd]??:* | ::1) return 0 ;; esac
+            return 1
+            ;;
+        *[!0-9.]*) return 0 ;;
+        10.*.*.* | 192.168.*.* | 172.1[6-9].*.* | 172.2[0-9].*.* | 172.3[01].*.* | 127.*.*.* | \
+            100.6[4-9].*.* | 100.[7-9][0-9].*.* | 100.1[01][0-9].*.* | 100.12[0-7].*.*) return 0 ;;
+    esac
+    return 1
+}
+
+# The agent address in an existing configuration file ([agents] public_url), or nothing.
+configured_agent_url() {
+    awk '
+        /^[[:space:]]*\[/ {
+            section = $0
+            sub(/#.*/, "", section)
+            gsub(/[[:space:]]/, "", section)
+            next
+        }
+        section == "[agents]" && /^[[:space:]]*public_url[[:space:]]*=[[:space:]]*"/ {
+            value = $0
+            sub(/^[^"]*"/, "", value)
+            sub(/".*$/, "", value)
+            sub(/\/$/, "", value)
+            print value
+            exit
+        }' "$config_file"
+}
+
 read_password_file() {
     if [ "$own_password_file" = "-" ]; then
         IFS= read -r own_password || [ -n "$own_password" ] || fail "no password on the standard input"
@@ -613,6 +776,58 @@ else
     esac
 fi
 
+# The address AI agents connect to over MCP, written into a configuration made in this
+# run (an existing one is used as it is). Optional: without it agent access stays off.
+# A plain http:// address on a home network also turns on plain HTTP for agents.
+plain_words="Over plain HTTP, sign-in passwords and agent tokens travel unencrypted on your network."
+if [ -n "$agent_url" ]; then
+    agent_url=${agent_url%/}
+    problem=$(agent_problem "$agent_url") && fail "$problem"
+    if [ -f "$config_file" ]; then
+        configured=$(configured_agent_url) || configured=""
+        if [ "$configured" != "$agent_url" ]; then
+            say "packaging/config/shijhon.toml is kept as it is, with ${configured:-no agent address}. To use $agent_url, set it on the dashboard's Agent access page, or as public_url under [agents] in that file."
+            agent_url=""
+        fi
+    elif agent_plain "$agent_url"; then
+        agent_private=true
+        say "$plain_words"
+    fi
+elif $questions && [ ! -f "$config_file" ]; then
+    while :; do
+        ask "The address AI agents connect to, if any (such as https://music.example.com; blank: none)" ""
+        agent_url=${answer%/}
+        [ -n "$agent_url" ] || break
+        if problem=$(agent_problem "$agent_url"); then
+            say "  $problem."
+            continue
+        fi
+        agent_plain "$agent_url" || break
+        say "  $plain_words"
+        ask "  Use it all the same? (yes/no)" "no"
+        case $answer in
+            y | Y | yes | Yes | YES)
+                agent_private=true
+                break
+                ;;
+        esac
+        agent_url=""
+    done
+fi
+# Agents reach Shijhon at the port its apps use, unless a proxy in front forwards another.
+if [ -n "$agent_url" ] && [ ! -f "$config_file" ]; then
+    agent_parts "$agent_url"
+    case $agent_url:$agent_port in
+        http://*:)
+            say "Note: agents will connect to port 80 of $agent_name; Shijhon listens on port $port here, unless a proxy in front forwards it."
+            ;;
+        *:"$port" | *:) ;;
+        *)
+            say "Note: Shijhon listens on port $port here, not $agent_port; agents need that port unless a proxy in front forwards it."
+            ;;
+    esac
+fi
+
 # --- folders and files -------------------------------------------------------------------
 
 # The folders with the permissions this user's folders usually get (other programs may
@@ -653,9 +868,15 @@ if [ -f "$config_file" ]; then
     say "packaging/config/shijhon.toml exists: kept."
 else
     begin_new "$config_file"
-    cat "$packaging/shijhon.example.toml" >"$tmp_file"
+    {
+        cat "$packaging/shijhon.example.toml"
+        if [ -n "$agent_url" ]; then
+            printf '\n[agents]\npublic_url = "%s"\n' "$agent_url"
+            ! $agent_private || printf 'private_http = true\n'
+        fi
+    } >"$tmp_file"
     commit_new "$config_file"
-    did "packaging/config/shijhon.toml written, from the example"
+    did "packaging/config/shijhon.toml written, from the example${agent_url:+, with the agent address}"
 fi
 
 # The password of Shijhon's own Navidrome account, before Navidrome first starts: a
@@ -808,6 +1029,9 @@ case $bind in
         say "  the dashboard        http://$bind:$port/shijhon/"
         ;;
 esac
+if [ -n "$agent_url" ]; then
+    say "  AI agents (MCP)      $agent_url/shijhon/mcp"
+fi
 say ""
 say "Sign in with your Navidrome account${own_user:+ ($own_user)}."
 if $open; then

@@ -81,6 +81,8 @@ services:
     networks:
       default:
         ipv4_address: 172.30.99.10  # the address Navidrome trusts (above)
+    # http://host.docker.internal:<port> reaches this machine, on Linux too.
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       # The port apps connect to, on every address of this machine, unencrypted.
       # SHIJHON_BIND=127.0.0.1: this machine alone (with a TLS reverse proxy in front).

@@ -55,6 +55,10 @@ trust. For access from outside, put a TLS reverse proxy in front
 
 ## What to add next
 
+AI agents connect to Shijhon over MCP ([agent access](agent-access.md)). The script asks
+for the agent address, which is Shijhon's HTTPS address, and it can also be entered later
+on the dashboard. **Playlists** then shows the address to add in an agent app.
+
 Add add-ons, which supply the audio for catalog tracks, on the dashboard's **Add-ons**
 page ([add-ons.md](add-ons.md)).
 

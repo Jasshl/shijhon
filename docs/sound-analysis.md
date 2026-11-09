@@ -34,7 +34,7 @@ playlists are made without it.
   [facts as hints](playlists.md#facts-as-hints).
 - **Agents** with the library permission can read the facts of songs and playlists and ask
   for similar songs, songs matching a description, or a path between two songs. See
-  [connect an agent](agent-access.md#features-with-partial-configuration).
+  [agent tools](reference/agent-tools.md#what-the-tools-do).
 
 ## Set it up
 

@@ -280,7 +280,10 @@ def rows(
                 shown = ("Set" if value else "Not set") if f.kind == "secret" else f.describe(value)
                 row.update(
                     kind="locked",
-                    text=shown[0].upper() + shown[1:] if shown else shown,
+                    # Words start with a capital; an address or a path stays as written.
+                    text=shown[0].upper() + shown[1:]
+                    if shown and f.kind in ("secret", "mapping", "numbers", "select")
+                    else shown,
                     default="",
                     modified=False,
                     hidden=f.key in saved_section,

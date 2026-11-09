@@ -20,9 +20,13 @@ To run from source: `uv run shijhon --config /path/to/shijhon.toml serve`, with 
 configuration kept outside the repository.
 
 For native Linux packaging, `nix build .#shijhon` uses `uv.lock` and `flake.lock`.
-`nix flake check` checks the installed versions, CLI, assets and adapter discovery;
-[Nix and NixOS](nixos.md) covers the service and adapter composition. Keep `uv.lock`
-unchanged unless application dependencies change; update Nix inputs deliberately.
+`nix flake check` checks the installed versions, CLI, assets and adapter discovery, the
+refusal of an untested Navidrome version, what the module makes of a Navidrome people
+bring (`tests/nix/options.nix`), and runs the NixOS service with its Navidrome in virtual
+machines, one of them with an admin account there before Shijhon's (`tests/nix/vm.nix`;
+slow without KVM). [NixOS](nixos.md) covers the service, and
+[its reference](reference/nixos.md#catalog-adapters) covers adapter composition. Keep
+`uv.lock` unchanged unless application dependencies change; update Nix inputs deliberately.
 
 ## Checks
 

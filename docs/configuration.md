@@ -9,8 +9,9 @@ Lowest first:
 
 1. the built-in default;
 2. the configuration file;
-3. a value saved on the dashboard (the `[delivery]`, `[catalog]`, `[fill]`, `[cleanup]`
-   and `[audiomuse]` settings, `[search] budget_seconds`, and the add-ons);
+3. a value saved on the dashboard (the `[delivery]`, `[catalog]`, `[fill]`, `[cleanup]`,
+   `[audiomuse]` and `[agents]` settings, `[search] budget_seconds`,
+   `[playlists] allow_private_api`, and the add-ons);
 4. an environment variable. The dashboard shows such a setting locked, with the variable's
    name.
 
@@ -35,15 +36,15 @@ is refused at startup, with a message that names the setting.
 The ones most people change, with defaults in brackets.
 [The settings reference](reference/settings.md) has all the others.
 
-For OAuth/MCP agent access, set `[agents] public_url` to the public HTTPS origin
-without a path and restart. Empty disables the interface. See [agent setup](agent-access.md)
-for reverse-proxy routes, permissions and features that work without AI.
+Agent access is on once `[agents] public_url` has Shijhon's address, set here or on the
+dashboard ([agent access](agent-access.md)).
 
 ### Navidrome and the library
 
 | Setting | What it sets |
 |---|---|
 | `[navidrome] url` | Navidrome's address, as Shijhon reaches it |
+| `[navidrome] socket` | Navidrome's Unix socket (its `Address = "unix:<path>"`), an absolute path, when Shijhon reaches it there. `url` must then be an `http://` address that names no machine to reach, such as `"http://navidrome.invalid"`: it gives the `Host` header of Shijhon's own requests (apps' requests keep theirs). With `ExtAuth.TrustedSources = "@"`, Navidrome trusts only that socket |
 | `[navidrome] user`, `password` or `password_file` | The service account: a Navidrome admin account used only by Shijhon |
 | `[navidrome] library_id` (1), `library_path` | The library that holds your music (ID at least 1), and where Shijhon sees it on disk |
 | `[navidrome] artist_participations` (`false`) | Match Navidrome's `Subsonic.ArtistParticipations` setting for artist album counts in personal library views. Set both to `true` if artists should include albums on which they perform as a track artist. Artist indexes still list album artists, as Navidrome does |
@@ -200,6 +201,15 @@ which is set in the file or the environment only.
   `--apply` undoes those nobody used, with Shijhon stopped
   ([advanced deployment](reference/advanced-deployment.md#undoing-automatic-fills)).
 - `shijhon usage-export`: writes the usage export (the Compose file runs it as a service).
+- `shijhon navidrome-accounts`: in a new Navidrome, creates Shijhon's service account
+  (`[navidrome] user`, with a random password written to `password_file` when that file is
+  missing) and, with `--account <name> --account-password-file <file>`, your own, both
+  admins. In a Navidrome that has accounts, it signs in with that account, which must be
+  an admin there, to create the service account. Accounts Navidrome has already are kept,
+  with their passwords. What goes wrong
+  for a moment (Navidrome starting, refusing logins briefly) is tried again for `--wait`
+  seconds; it then exits with status 1, and with 2 for what needs changing first. The
+  NixOS service runs it before Shijhon.
 - `shijhon carry-over`: shows the catalog albums carried over at the upgrade to schema 24
   and who has them; `--account <name>` gives them to that Navidrome account's Shijhon
   library, once - again for the same account changes nothing, another account needs

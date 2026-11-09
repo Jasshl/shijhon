@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import learned_edits, playlist_tabs, chevron %}
+{% from "_macros.html" import learned_edits, playlist_tabs, chevron, setting %}
 {% set title = "Playlists" %}
 {% macro rules(spec, refresh_enabled=false) %}
 <input type="hidden" name="publication_mode" value="direct">
@@ -25,21 +25,21 @@
 <p class="field-help">Publishing can add whole releases as placeholders or missing tracks to a matched album. It does not download audio.</p>
 {% endmacro %}
 
-{# Your connection, AI preferences and, for administrators, the shared AI service. #}
+{# The account's connection, then server AI: for administrators its connection, for
+   everyone with a usable service their own choice. #}
 {% macro settings() %}
 <div class="playlist-settings-body">
 <section class="group" aria-labelledby="connection-title">
-  <div class="group-head"><h2 id="connection-title">Your connection</h2><p class="group-help">{% if connected %}Connected as {{ user }}.{% else %}Connect {{ user }} so Shijhon can write playlists for you, also while you are away.{% endif %} Credentials stay in Shijhon's private state.</p></div>
+  <div class="group-head"><h2 id="connection-title">Your connection</h2><p class="group-help">{% if connected %}Connected as {{ user }}.{% else %}Shijhon writes playlists through this account's authorization.{% endif %}</p></div>
   <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/connection">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="mix-fields">
-      <label>Your Navidrome password<input type="password" name="password" autocomplete="current-password"{% if not connected %} required{% endif %}><span class="field-help">{% if connected %}Leave blank to keep the current authorization.{% else %}Used once to get a reusable authorization.{% endif %}</span></label>
-      <label>Last.fm username (optional)<input name="history_user" value="{{ history_user }}" maxlength="100"><span class="field-help">Only for discovery mixes and listening history. The first read covers {{ history_days }} days; later refreshes add new listens.</span></label>
-      <label>Last.fm API key source<select name="history_source">{% for key, label in [('navidrome', "Use Navidrome's key"),('manual','Enter an API key')] %}<option value="{{ key }}"{% if history_source == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <p class="field-help" data-show-for="history_source" data-values="navidrome">{% if saved_history_source == 'navidrome' %}A blank password keeps the saved Navidrome key. Enter your password to read it again.{% else %}Enter your Navidrome password to read its configured Last.fm key.{% endif %} Your Last.fm username is entered separately.</p>
-      <label data-show-for="history_source" data-values="manual">Last.fm API key<input type="password" name="history_key" autocomplete="off"><span class="field-help">{% if saved_history_source == 'manual' %}Leave blank to keep your saved key.{% else %}Enter a key if Navidrome's is unavailable.{% endif %}</span></label>
+      <label>Navidrome password<input type="password" name="password" autocomplete="current-password"{% if not connected %} required{% endif %}><span class="field-help">{% if connected %}Blank keeps the current authorization.{% else %}Used once to get a reusable authorization.{% endif %}</span></label>
+      <label>Last.fm username (optional)<input name="history_user" value="{{ history_user }}" maxlength="100"><span class="field-help">Used for discovery mixes and listening history. The first read covers {{ history_days }} days.</span></label>
+      <label>Last.fm API key source<select name="history_source">{% for key, label in [('navidrome', "Navidrome's key"),('manual','An API key')] %}<option value="{{ key }}"{% if history_source == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <p class="field-help" data-show-for="history_source" data-values="navidrome">{% if saved_history_source == 'navidrome' %}A blank password keeps the saved Navidrome key.{% else %}Reading Navidrome's Last.fm key needs the password.{% endif %}</p>
+      <label data-show-for="history_source" data-values="manual">Last.fm API key<input type="password" name="history_key" autocomplete="off">{% if saved_history_source == 'manual' %}<span class="field-help">Blank keeps the saved key.</span>{% endif %}</label>
     </div>
-    <p class="field-help">When you use AI, it receives the brief and resolved candidate music, including familiarity and similarity evidence.</p>
     <div class="form-actions"><button{% if not connected %} class="btn-primary"{% endif %}>Save connection</button></div>
   </form>
 {% if connected %}
@@ -52,54 +52,103 @@
   </details>
 {% endif %}
 </section>
-{% if connected %}
-<section class="group" aria-labelledby="ai-title">
-  <div class="group-head"><h2 id="ai-title">Your AI preferences</h2><p class="group-help">Only for your account, on all your devices. The administrator runs the shared service: its connection, credentials and spending limits.</p></div>
-{% if ai_mode == 'keep' %}<p class="notice notice-info">A previously saved private host connection is retained. It can run only while you are an administrator. Select the shared service to use personal model choices.</p>{% endif %}
-  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/ai-preferences">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <div class="mix-fields">
-      <label>AI service<select name="ai_mode"><option value="shared"{% if ai_mode != 'none' %} selected{% endif %}>Shared service (default)</option><option value="none"{% if ai_mode == 'none' %} selected{% endif %}>No AI</option></select></label>
-      <label data-show-for="ai_mode" data-values="shared">Your model<select name="preferred_model"><option value=""{% if not ai_choices.model %} selected{% endif %}>Administrator's default{% if ai_choices.default_model %} ({{ ai_choices.default_model }}){% endif %}</option>{% for name in ai_choices.allowed_models %}<option value="{{ name }}"{% if ai_choices.model == name %} selected{% endif %}>{{ name }}</option>{% endfor %}{% if ai_choices.model and ai_choices.model not in ai_choices.allowed_models %}<option value="{{ ai_choices.model }}" selected>{{ ai_choices.model }} (no longer approved)</option>{% endif %}</select></label>
-    </div>
-    <p class="field-help">{% if shared_ai_available %}Your model must still be approved when a playlist runs.{% else %}An administrator must set up the shared service before you can use it.{% endif %} Your history and mix instructions stay your own.</p>
-    <div class="form-actions"><button>Save your AI preferences</button></div>
-  </form>
-</section>
-{% endif %}
+{% set choosing = connected and (shared_ai_available or ai_mode == 'keep') %}
+{% if is_admin or connected %}
+<section class="group server-ai" id="server-ai" aria-labelledby="server-ai-title">
+  <div class="group-head"><h2 id="server-ai-title">Server AI</h2><p class="group-help">Described playlists and AI curation of discovery mixes run on it. Connected agents use their own model.</p></div>
+{% if ai_mode == 'keep' %}<p class="notice notice-info">This account still uses an older private connection, which only runs while the account is an administrator. Choosing server AI below replaces it.</p>{% endif %}
 {% if is_admin %}
-<section class="group playlist-admin" aria-labelledby="shared-ai-title">
-  <div class="group-head"><h2 id="shared-ai-title">Shared AI service</h2><p class="group-meta"><span class="tag tag-restart">Administrator · affects everyone</span></p><p class="group-help">Saving changes the service every account can use. No AI turns the shared service off. Your own preferences and private administrator connection are saved separately.</p></div>
   <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/host-ai">
     <input type="hidden" name="csrf" value="{{ csrf }}">
+    <p class="server-ai-for"><span class="tag tag-restart">Administrator · for all accounts</span></p>
     <div class="mix-fields">
-      <label>Shared host AI connection<select name="backend">{% for key, label in [('none','No AI'),('api','API compatible with Chat Completions'),('codex','Codex CLI on this host'),('claude','Claude Code on this host')] %}<option value="{{ key }}"{% if backend == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>Connection<select name="backend">{% for key, label in [('none','No AI'),('api','API (Chat Completions)'),('codex','Codex CLI on this host'),('claude','Claude Code on this host')] %}<option value="{{ key }}"{% if backend == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <label data-show-for="backend" data-values="api">API base URL<input type="url" name="endpoint" value="{{ endpoint }}" placeholder="https://your-endpoint.example/v1" data-required-for="backend" data-required-values="api"></label>
-      <label data-show-for="backend" data-values="api codex claude">Default AI model<input name="model" value="{{ model }}" maxlength="100" data-required-for="backend" data-required-values="api"><span class="field-help" data-show-for="backend" data-values="api">Required for API.</span><span class="field-help" data-show-for="backend" data-values="codex claude">Optional. Blank uses the runner's default model.</span></label>
-      <label data-show-for="backend" data-values="api">API key (optional)<input type="password" name="api_key" autocomplete="off"><span class="field-help">Blank keeps a key at the same API URL. Changing the URL clears it. Choosing another connection removes it.</span></label>
-      <label class="mix-wide" data-show-for="backend" data-values="api codex claude">Additional approved models<textarea name="allowed_models" rows="3" maxlength="5050" placeholder="One model name per line">{{ allowed_models }}</textarea><span class="field-help">The default model is always approved; people can choose only these others. Approve models whose cost and access you accept.</span></label>
+      <label data-show-for="backend" data-values="api codex claude">Default model<input name="model" value="{{ model }}" maxlength="100" data-required-for="backend" data-required-values="api"><span class="field-help" data-show-for="backend" data-values="codex claude">Blank uses the runner's default.</span></label>
+      <label data-show-for="backend" data-values="api">API key (optional)<input type="password" name="api_key" autocomplete="off"><span class="field-help">Blank keeps the saved key.</span></label>
+{% if local_ai %}
+{% if local_ai.kind == 'locked' %}
+      <p class="field-help mix-wide" data-show-for="backend" data-values="api">{{ local_ai.label }}: {{ local_ai.text }}. Set by <code>{{ local_ai.locked }}</code>.</p>
+{% else %}
+      <div class="mix-wide" data-show-for="backend" data-values="api"><input type="hidden" name="{{ local_ai.name }}" value="false"><label class="mix-check"><input name="{{ local_ai.name }}" type="checkbox" value="true"{% if local_ai.checked %} checked{% endif %}> {{ local_ai.label }}</label></div>
+{% endif %}
+{% endif %}
+      <label class="mix-wide" data-show-for="backend" data-values="api codex claude">Other models people can choose<textarea name="allowed_models" rows="3" maxlength="5050" placeholder="One model name per line">{{ allowed_models }}</textarea></label>
+      <p class="field-help mix-wide" data-show-for="backend" data-values="codex claude">{% if not cli_enabled %}Local runners are turned off in the configuration. {% endif %}The runner has to be installed and signed in where Shijhon runs.</p>
     </div>
-    <p class="field-help" data-show-for="backend" data-values="codex claude">{% if not cli_enabled %}Local runners are disabled in this installation. Enable them after setup.{% endif %} The selected runner must be installed and signed in where Shijhon runs. No API URL or key is needed.</p>
-    <div class="form-actions"><button>Save shared AI service</button></div>
+    <div class="form-actions"><button>Save connection</button></div>
   </form>
-</section>
-{% if private_ai %}
-<details class="more-settings more-nested"><summary><span class="more-title">Existing private administrator AI connection</span></summary>
-  <p class="group-help">This retained connection serves only your account. Editing it leaves the shared service and approved models unchanged.</p>
-  <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/private-ai">
+{% elif not choosing %}
+  <p class="row">An administrator hasn't set up server AI.</p>
+{% endif %}
+{% if choosing %}
+  <form class="rows playlist-form server-ai-mine" method="post" action="{{ prefix }}/playlists/ai-preferences">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <div class="mix-fields">
-      <label>Connection<select name="backend">{% for key, label in [('none','No AI'),('api','API compatible with Chat Completions'),('codex','Codex CLI on this host'),('claude','Claude Code on this host')] %}<option value="{{ key }}"{% if private_ai.backend == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <label data-show-for="backend" data-values="api">API base URL<input type="url" name="endpoint" value="{{ private_ai.endpoint }}" data-required-for="backend" data-required-values="api"></label>
-      <label data-show-for="backend" data-values="api codex claude">Model<input name="model" value="{{ private_ai.model }}" maxlength="100" data-required-for="backend" data-required-values="api"></label>
-      <label data-show-for="backend" data-values="api">API key<input type="password" name="api_key" autocomplete="off"><span class="field-help">Blank keeps the key at the same API URL.</span></label>
+      <label>This account uses<select name="ai_mode"><option value="shared"{% if ai_mode != 'none' %} selected{% endif %}>Server AI</option><option value="none"{% if ai_mode == 'none' %} selected{% endif %}>No AI</option></select></label>
+      <label data-show-for="ai_mode" data-values="shared">Model<select name="preferred_model"><option value=""{% if not ai_choices.model %} selected{% endif %}>Default{% if ai_choices.default_model %} ({{ ai_choices.default_model }}){% endif %}</option>{% for name in ai_choices.allowed_models %}<option value="{{ name }}"{% if ai_choices.model == name %} selected{% endif %}>{{ name }}</option>{% endfor %}{% if ai_choices.model and ai_choices.model not in ai_choices.allowed_models %}<option value="{{ ai_choices.model }}" selected>{{ ai_choices.model }} (no longer approved)</option>{% endif %}</select></label>
     </div>
-    <div class="form-actions"><button>Save private administrator connection</button></div>
+    <p class="field-help">The model receives the brief and the candidate songs, with how familiar and similar they are.</p>
+    <div class="form-actions"><button>Save for this account</button></div>
   </form>
-</details>
 {% endif %}
+{% if is_admin and private_ai %}
+  <details class="form-more"><summary>Older private connection</summary>
+    <p class="group-help">It serves only this account. Saving it leaves server AI unchanged.</p>
+    <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists/private-ai">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="mix-fields">
+        <label>Connection<select name="backend">{% for key, label in [('none','No AI'),('api','API (Chat Completions)'),('codex','Codex CLI on this host'),('claude','Claude Code on this host')] %}<option value="{{ key }}"{% if private_ai.backend == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label data-show-for="backend" data-values="api">API base URL<input type="url" name="endpoint" value="{{ private_ai.endpoint }}" data-required-for="backend" data-required-values="api"></label>
+        <label data-show-for="backend" data-values="api codex claude">Model<input name="model" value="{{ private_ai.model }}" maxlength="100" data-required-for="backend" data-required-values="api"></label>
+        <label data-show-for="backend" data-values="api">API key<input type="password" name="api_key" autocomplete="off"><span class="field-help">Blank keeps the saved key.</span></label>
+      </div>
+      <div class="form-actions"><button>Save private connection</button></div>
+    </form>
+  </details>
+{% endif %}
+</section>
 {% endif %}
 </div>
+{% endmacro %}
+
+{# Agent access: the address to add to an agent app, and the account's connected agents. #}
+{% macro agent_access() %}
+<section class="group agent-access" id="agents" aria-labelledby="agents-title">
+  <div class="group-head"><h2 id="agents-title">AI agents</h2><p class="group-meta"><span class="status"><span class="led {{ 'led-ok' if agent.on else 'led-error' if agent.failed else 'led-off' }}" aria-hidden="true"></span>{{ 'On' if agent.on else 'Not running' if agent.failed else 'Off' }}</span></p><p class="group-help">Agents connect over MCP. What an agent can do depends on the permissions chosen at sign-in.</p></div>
+  <div class="rows">
+{% if agent.on %}
+    <div class="row agent-address">
+      <p class="agent-address-label" id="agent-address-label">MCP server address</p>
+      <div class="agent-address-line"><code id="agent-address">{{ agent.address }}</code><button type="button" class="btn-small agent-copy" data-copy="agent-address" hidden>Copy</button><span class="agent-copied" role="status"></span></div>
+      <ol class="agent-steps">
+{% if agent.plain %}
+        <li>Add the address as an MCP server in an agent app on this network. Agent apps that run in the cloud can't reach it.</li>
+{% else %}
+        <li>Add the address as a remote MCP server (a custom connector) in the agent app.</li>
+{% endif %}
+        <li>When it opens the browser, sign in with a Navidrome account.</li>
+        <li>Choose what the agent may do, and approve.</li>
+      </ol>
+{% if agent.plain %}<p class="field-help">This address uses plain HTTP: the password and the agent's access travel unencrypted on this network.</p>{% endif %}
+    </div>
+{% else %}
+{% if agent.failed %}
+    <p class="row">Agent access isn't running right now. {% if is_admin %}It failed to start: <a href="{{ prefix }}/agent-access">Agent access</a> says more.{% else %}An administrator can look into it.{% endif %}</p>
+{% else %}
+    <p class="row">Agent access is off in this installation. {% if is_admin %}Set an agent address on <a href="{{ prefix }}/agent-access">Agent access</a> to turn it on.{% else %}An administrator can turn it on.{% endif %}</p>
+{% endif %}
+{% endif %}
+{% if agent.agents %}
+    <ul class="playlist-list agent-list" aria-label="Connected agents">{% for item in agent.agents %}<li><span class="playlist-agent">{{ item.name }}</span><span>{{ item.can }}</span>{% if item.signed_in %}<span>Connected {{ item.since|day }}</span>{% else %}<span class="tag">Signed out: connect it again</span>{% endif %}<form method="post" action="{{ prefix }}/playlists/agents"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="agent" value="{{ item.id }}"><button class="btn-danger btn-small" name="action" value="revoke">Revoke</button></form></li>{% endfor %}</ul>
+{% elif agent.on %}
+    <p class="row field-help">No agents connected yet.</p>
+{% endif %}
+  </div>
+{% if agent.agents or agent.revoked or (is_admin and agent.on) %}
+  <p class="field-help agent-note">{% if agent.agents %}Revoking an agent signs it out and stops its unfinished work and future refreshes. {% endif %}{% if agent.revoked %}{{ agent.revoked }} revoked earlier. {% endif %}{% if is_admin and agent.on %}The address is set on <a href="{{ prefix }}/agent-access">Agent access</a>.{% endif %}</p>
+{% endif %}
+</section>
 {% endmacro %}
 
 {% block main %}
@@ -172,16 +221,17 @@
 <div class="page-head">
   <div class="page-title">
     <h1>Playlists</h1>
-    <p class="page-summary">Make playlists for your music app: describe one, import one, or build a discovery mix from your Last.fm history.</p>
+    <p class="page-summary">Playlists are published to Navidrome and show in music apps. AI agents, descriptions, imports and discovery mixes can make them.</p>
   </div>
   <details class="page-about"><summary>How playlists work</summary>
     <p>Each playlist is published to your Navidrome account, so it shows up in your music app. Songs it needs that are not in your library yet can be added from the catalog as placeholders or as missing tracks of an album you have; publishing does not download audio. Audio is fetched when you play or download a song, through your add-ons.</p>
-    <p>Describing a playlist uses the AI service. Discovery mixes use your Last.fm listening history and can use AI too. Imports match a list you already have.</p>
+    <p>A connected AI agent makes playlists with its own model. Described playlists use server AI. Discovery mixes use Last.fm listening history and can also use server AI. Imports match an existing list.</p>
   </details>
 </div>
 {% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
+{{ agent_access() }}
 {% if not connected %}
-<div class="notice notice-info"><p class="notice-title">Connect your account first</p><p>Enter your Navidrome password below so Shijhon can write playlists for you. Last.fm is optional.</p></div>
+<div class="notice notice-info"><p class="notice-title">Connect this account to make playlists here</p><p>Shijhon needs the Navidrome password once to write playlists. Last.fm is optional. An agent's sign-in also connects the account.</p></div>
 <section class="playlist-settings is-first" id="settings" aria-label="Connection and AI">
 {{ settings() }}
 </section>
@@ -189,19 +239,19 @@
 <section aria-labelledby="make-title">
   <div class="group-head"><h2 id="make-title">Make a playlist</h2></div>
   <ul class="playlist-ways">
-    <li><a href="{{ prefix }}/playlists/describe"><span class="playlist-way-title">Describe a playlist</span><span>Write what you want to hear. The AI picks the songs; you can refresh it later.</span></a></li>
-    <li><a href="{{ prefix }}/playlists/import"><span class="playlist-way-title">Import a playlist</span><span>Upload a playlist file or paste a track list, then review the matches.</span></a></li>
-    <li><a href="{% if connected %}#new-mix{% else %}#settings{% endif %}"><span class="playlist-way-title">New discovery mix</span><span>Unfamiliar music picked from your Last.fm listening history, refreshed on a schedule if you like.</span></a></li>
+    <li><a href="{{ prefix }}/playlists/describe"><span class="playlist-way-title">Describe a playlist</span><span>Server AI picks the songs from a written description.</span></a></li>
+    <li><a href="{{ prefix }}/playlists/import"><span class="playlist-way-title">Import a playlist</span><span>A playlist file or a pasted track list, with a review of the matches.</span></a></li>
+    <li><a href="{% if connected %}#new-mix{% else %}#settings{% endif %}"><span class="playlist-way-title">New discovery mix</span><span>Unfamiliar music picked from Last.fm listening history, with optional scheduled refreshes.</span></a></li>
   </ul>
 </section>
 {% if connected %}
 <section class="group" aria-labelledby="mixes-title"><div class="group-head"><h2 id="mixes-title">Your discovery mixes</h2>{% if mixes %}<p class="group-meta">{{ mixes|length }}</p>{% endif %}</div>
 {% if mixes %}<ul class="rows playlist-list">{% for item in mixes %}<li><a href="{{ prefix }}/playlists/{{ item.id }}">{{ item.definition.name }}</a><span>{{ item.definition.count }} tracks</span><span class="tag{{ ' tag-set' if item.enabled }}">{{ 'Refreshing' if item.enabled else 'Paused' }}</span></li>{% endfor %}</ul>{% else %}<p class="empty">No discovery mixes yet. Make one below.</p>{% endif %}
 </section>
-<section class="group" id="new-mix" aria-labelledby="new-mix-title"><div class="group-head"><h2 id="new-mix-title">New discovery mix</h2><p class="group-help">Publishes a playlist you can listen to in your music app. Refreshing it on a schedule is optional.{% if not history_user %} It needs your Last.fm username: add it under <a href="#settings">Connection and AI settings</a>.{% endif %}</p></div>
+<section class="group" id="new-mix" aria-labelledby="new-mix-title"><div class="group-head"><h2 id="new-mix-title">New discovery mix</h2><p class="group-help">Publishes a playlist to music apps, with optional scheduled refreshes.{% if not history_user %} It needs your Last.fm username: add it under <a href="#settings">Connection and AI settings</a>.{% endif %}</p></div>
   <form class="rows playlist-form" method="post" action="{{ prefix }}/playlists"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="request_key" value="{{ request_key }}">{{ rules(rules_definition, rules_enabled) }}<div class="form-actions"><button class="btn-primary" data-direct-label="Create and publish" data-review-label="Create preview">Create and publish</button></div></form>
 </section>
-<details class="more-settings playlist-settings" id="settings"><summary><span class="more-title">Connection and AI settings</span><span class="more-changed">Connected as {{ user }}{% if history_user %} · Last.fm {{ history_user }}{% endif %} · {{ 'No AI' if ai_mode == 'none' else 'Shared AI' if ai_mode == 'shared' else 'Private AI' }}</span></summary>
+<details class="more-settings playlist-settings" id="settings"><summary><span class="more-title">Connection and AI settings</span><span class="more-changed">Connected as {{ user }}{% if history_user %} · Last.fm {{ history_user }}{% endif %} · {{ 'No AI' if ai_mode == 'none' else 'Server AI' if ai_mode == 'shared' else 'Private AI' }}</span></summary>
 {{ settings() }}
 </details>
 {% endif %}

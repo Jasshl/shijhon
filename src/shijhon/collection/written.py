@@ -82,6 +82,8 @@ class Written:
         self._added = -float("inf")  # when the last addition began
         self._running = False
         self._skipped: dict[str, float] = {}  # song -> until when it is not asked for
+        # What the songs' and placeholders' counters said when nothing was missing.
+        self._nothing_at: list[tuple[str, int]] | None = None
         self.additions = 0  # observable in tests: additions that changed the index
 
     async def due(self, principal: Principal, call: RestCall) -> None:
@@ -124,13 +126,27 @@ class Written:
             return []  # no snapshot yet: the first one is prepared at a sign-in
         now = time.monotonic()
         self._skipped = {s: t for s, t in self._skipped.items() if t > now}
-        rows = await self.store.fetchall(
-            "SELECT p.song_id FROM placeholders p WHERE p.song_id<>''"
-            " AND p.song_id NOT IN (SELECT value FROM json_each(?))"
-            " AND NOT EXISTS (SELECT 1 FROM collection_tracks t WHERE t.library_id=?"
-            " AND t.song_id=p.song_id AND t.present=1) ORDER BY p.song_id LIMIT ?",
-            [json.dumps(sorted(self._skipped)), self.library_id, BATCH],
+        # This comes round with an app's requests and passes over all placeholders. Their
+        # changes and the library's are counted: an answer of none stands until they move.
+        stamp = await self.store.fetchall(
+            "SELECT scope,revision FROM collection_revisions WHERE scope IN ('','placeholders')"
+            " ORDER BY scope"
         )
+        counted = [(str(row["scope"]), int(row["revision"])) for row in stamp]
+        if not self._skipped and counted == self._nothing_at:
+            return []
+        async with (
+            self.store.snapshot() as db,
+            db.execute(
+                "SELECT p.song_id FROM placeholders p WHERE p.song_id<>''"
+                " AND p.song_id NOT IN (SELECT value FROM json_each(?))"
+                " AND NOT EXISTS (SELECT 1 FROM collection_tracks t WHERE t.library_id=?"
+                " AND t.song_id=p.song_id AND t.present=1) ORDER BY p.song_id LIMIT ?",
+                [json.dumps(sorted(self._skipped)), self.library_id, BATCH],
+            ) as cursor,
+        ):
+            rows = list(await cursor.fetchall())
+        self._nothing_at = counted if not rows and not self._skipped else None
         return [str(r["song_id"]) for r in rows]
 
     async def _add(self, missing: list[str], call: RestCall) -> None:

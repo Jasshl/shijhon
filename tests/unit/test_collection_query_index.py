@@ -245,8 +245,13 @@ async def test_full_raw_proof_checks_actual_ids_and_current_selection(tmp_path: 
         ).all_selected
         with sqlite3.connect(collection) as conn:
             conn.execute("UPDATE collection_index SET generation='new-source'")
+        # The snapshot before stays readable while the new one's facts are written, by the
+        # current selection; one that has no facts here is not.
+        assert not (await index.page(key, binding, "song", None, 0, 2)).all_selected
         with pytest.raises(IndexPending):
-            await index.page(key, binding, "song", None, 0, 2)
+            await index.page(
+                key, replace(binding, generations=(("1", "unknown"),)), "song", None, 0, 2
+            )
 
 
 @pytest.mark.anyio

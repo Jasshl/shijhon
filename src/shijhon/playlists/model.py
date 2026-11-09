@@ -247,7 +247,8 @@ class Definition(Model):
             raise ValueError("imports are one-off reviewed selections without AI or context")
         if self.auto_name and self.mode != "prompt":
             raise ValueError("automatic naming needs prompt curation")
-        if self.brief.strip() and not self.ai:
+        # An agent-curated playlist keeps its brief as a note of what it is for.
+        if self.brief.strip() and not self.ai and self.mode != "tracks":
             raise ValueError("a brief needs AI curation")
         if self.mode == "prompt" and (not self.brief.strip() or not self.ai):
             raise ValueError("a prompt needs instructions and saved AI")
@@ -287,12 +288,15 @@ class Track(Model):
     album: str = Field(default="", max_length=300)
     duration: int = Field(default=0, ge=0)
     isrc: str = ""
+    isrcs: list[str] = Field(default_factory=list, exclude_if=lambda value: not value)
     explicit: bool = False
     clean: bool = False
     release: str = ""
     # Explicit caller constraints survive general same-recording normalization.
     required_title: str = Field(default="", max_length=500)
     required_album: str = Field(default="", max_length=300)
+    required_isrcs: list[str] = Field(default_factory=list, exclude_if=lambda value: not value)
+    required_duration_ms: int = Field(default=0, ge=0, exclude_if=lambda value: not value)
     unfamiliar: bool = False
     score: float = 0
     reason: str = Field(default="", max_length=500)

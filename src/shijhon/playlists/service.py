@@ -24,7 +24,7 @@ from shijhon.navidrome.client import NavidromeError, NavidromeService
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.ai import Curator, validate
 from shijhon.playlists.client import OwnerClient
-from shijhon.playlists.edits import Edits
+from shijhon.playlists.edits import Edits, removed_by_agent
 from shijhon.playlists.edits import learn as learn_edits
 from shijhon.playlists.edits import remembered as remembered_edits
 from shijhon.playlists.facts import Tags
@@ -43,6 +43,7 @@ from shijhon.playlists.model import (
 )
 from shijhon.playlists.prompt import Unresolved
 from shijhon.playlists.prompt import generate as generate_prompt
+from shijhon.playlists.references import entries
 from shijhon.playlists.repository import AI_FIELDS, Repository
 from shijhon.playlists.requests import Busy, Requests, SetupRequired
 from shijhon.playlists.resolve import Resolver, listed, native_track, same_recording
@@ -304,9 +305,7 @@ class Playlists:
             return
         choices = await self.ai_choices(owner)
         if not connection.use_shared_ai or not choices["available"]:
-            raise SetupRequired(
-                "server_ai", "Select the shared AI service before choosing a personal model."
-            )
+            raise SetupRequired("server_ai", "Select server AI before choosing a personal model.")
         if model and model not in choices["allowed_models"]:
             raise PlaylistError("Choose a model approved by the administrator or use the default.")
         if change_service:
@@ -331,7 +330,7 @@ class Playlists:
         if current.use_shared_ai:
             choices = await self.ai_choices(current.user_id)
             if not choices["available"]:
-                raise PlaylistError("The administrator has disabled the shared AI service.")
+                raise PlaylistError("An administrator has turned server AI off.")
             if choices["model"] and choices["model"] not in choices["allowed_models"]:
                 raise PlaylistError(
                     "Your selected AI model is no longer approved. Choose another model "
@@ -343,7 +342,7 @@ class Playlists:
         elif current.backend != "none" and not principal.is_admin:
             raise PlaylistError(
                 "Only administrators can use a private host AI connection. "
-                "Select the shared AI service in Playlists."
+                "Select server AI in Playlists."
             )
         self.curator.require_connection(current)
         return current
@@ -425,7 +424,7 @@ class Playlists:
         try:
             with anyio.fail_after(self.settings.run_seconds):
                 connection = await self.connection(mix["owner"])
-                await self.requests.guard(mix)
+                await self.requests.guard(mix, data)
                 if run["state"] == "queued":
                     async with self.changes:
                         # Authorization can wait while a dashboard action pauses or
@@ -458,6 +457,10 @@ class Playlists:
                                     "The connection changed. Generate the playlist again.",
                                 )
                             return
+                        # Who asked for the run (``Requests.guard``) stays known with it.
+                        for key in ("actor", "agent"):
+                            if key in current["data"] and key not in data:
+                                data[key] = current["data"][key]
                         # Also the grants the new selection relied on, before it is saved.
                         await self.requests.guard(mix, data)
                         mix = await self.repo.mix(mix["id"], connection.user_id)
@@ -529,30 +532,60 @@ class Playlists:
                     else "The run could not finish. Check the connections and retry."
                 )
                 await self.repo.update(ident, "uncertain" if uncertain else "failed", data, error)
-                if run["automatic"] or data.get("publish_after_generation"):
+                # An agent's tracks that failed leave the playlist's own refreshes as they are.
+                if run["automatic"] or (
+                    data.get("publish_after_generation") and not data.get("agent")
+                ):
                     await self.repo.store.execute(
                         "UPDATE playlist_mixes SET enabled=0 WHERE id=?", [mix["id"]]
                     )
 
+    @staticmethod
+    def rules(definition: Definition, data: dict[str, Any]) -> Definition:
+        """What a run's selection is chosen and checked by: the mix's definition, or for
+        tracks an agent chose for a described playlist or a discovery mix, those tracks."""
+        agent = data.get("agent") or {}
+        return Definition.model_validate(agent["rules"]) if "rules" in agent else definition
+
     async def generate(self, connection: Connection, mix: dict[str, Any]) -> dict[str, Any]:
+        """A selection for the mix's run at work. That run's own data can carry an agent's
+        tracks (``agent``): they replace the playlist's songs or edit them, whatever kind of
+        playlist it is."""
+        working = await self.repo.store.fetchone(
+            "SELECT data FROM playlist_runs WHERE mix=? AND state='generating'"
+            " ORDER BY created DESC LIMIT 1",
+            [mix["id"]],
+        )
+        run: dict[str, Any] = json.loads(working["data"]) if working else {}
         definition = Definition.model_validate_json(mix["definition"])
+        agent = run.get("agent")
+        rules = self.rules(definition, run)
         baseline = ""
         original_name = ""
         edits: Edits | None = None  # a refresh: the owner's edits of its playlist
+        playlist: dict[str, Any] = {}
         if mix["playlist_id"]:
             playlist = await self.client.playlist(connection, mix["playlist_id"])
             baseline = fingerprint(playlist)
             original_name = playlist["name"]
             learned: tuple[list[Track], list[Track]] = ([], [])
-            if definition.mode == "tracks" and mix["published"] and baseline != mix["published"]:
+            if agent and agent.get("baseline", baseline) != baseline:
+                raise PlaylistError(
+                    "The playlist changed after this edit was asked for. Read it again and "
+                    "send the edit again."
+                )
+            changed = bool(mix["published"]) and baseline != mix["published"]
+            if definition.mode == "tracks" and changed and not agent:
                 # Added tracks republish the whole list; never over the owner's edits.
                 raise PlaylistError(EDITED)
-            if mix["published"] and baseline != mix["published"]:
+            if changed:
                 learned = await learn_edits(self, connection, mix, playlist)
             edits = await remembered_edits(self.repo.store, mix["id"])
             edits.learned_removed, edits.learned_added = learned
-        if definition.mode != "discovery":
-            if definition.mode == "prompt":
+        if agent and agent["kind"] == "edit":
+            return await self.edited(connection, mix, run, playlist, baseline, edits)
+        if agent or definition.mode != "discovery":
+            if rules.mode == "prompt":
                 self.requests.usable_ai(connection)
 
             async def authorize() -> None:
@@ -560,24 +593,26 @@ class Playlists:
                     raise PlaylistError(
                         "The connection changed. Retry with the current connection."
                     )
-                await self.requests.guard(mix)
+                await self.requests.guard(mix, run)
 
             async def library() -> bool:
+                if "actor" in run:  # what the one who asked for this run may read
+                    return await self.requests.grants_library(run["actor"])
                 return await self.requests.reads_library(mix["id"])
 
             curated = await generate_prompt(
                 self,
                 connection,
-                definition,
+                rules,
                 authorize=authorize,
                 own=mix["playlist_id"] or "",
                 edits=edits,
                 library=library,
                 kept=await self.published_tracks(mix["id"], definition)
-                if definition.mode == "tracks"
+                if definition.mode == "tracks" and not agent
                 else None,
             )
-            if definition.auto_name:
+            if definition.auto_name and not agent:
                 definition = definition.model_copy(
                     update={"name": curated.name, "auto_name": False}
                 )
@@ -686,6 +721,52 @@ class Playlists:
                 )
                 kept[position] = (track, entry)
         return kept
+
+    async def edited(
+        self,
+        connection: Connection,
+        mix: dict[str, Any],
+        run: dict[str, Any],
+        playlist: dict[str, Any],
+        baseline: str,
+        edits: Edits | None,
+    ) -> dict[str, Any]:
+        """An agent's edit of the published playlist: the songs it keeps, in its order, as
+        Navidrome has them now. The songs it removed are remembered at publication, as the
+        owner's own removals are."""
+        definition = Definition.model_validate_json(mix["definition"])
+        agent = dict(run["agent"])
+        selected = []
+        for ident in agent["order"]:
+            await self.requests.guard(mix, run)
+            selected.append(await self.native_track(connection, ident, library_bound=True))
+        gone = set(agent["removed"])
+        removed = {t.id: t for t in entries(playlist.get("entry")) if t.id in gone}
+        tracks = self.rules(definition, run).tracks
+        data = await self.freeze(
+            definition,
+            selected,
+            baseline,
+            str(playlist.get("name", "")),
+            history_from=0,
+            history_count=0,
+            skipped=0,
+        )
+        data["curation"] = {
+            "tracks": [
+                {
+                    "position": n,
+                    "input": wanted.model_dump(),
+                    "outcome": "resolved",
+                    "song": {"artist": s.artist, "title": s.title, "album": s.album},
+                }
+                for n, (wanted, s) in enumerate(zip(tracks, selected, strict=True), 1)
+            ]
+        }
+        data["agent"] = agent | {"removed_tracks": [t.model_dump() for t in removed.values()]}
+        if edits is not None:
+            data["edits"] = edits.summary()
+        return data
 
     async def freeze(
         self,
@@ -963,7 +1044,9 @@ class Playlists:
         if definition.mode == "import":
             await self.imports.publish(connection, mix, ident, data)
             return
-        validate(selected, definition)
+        rules = self.rules(definition, data)
+        edit = (data.get("agent") or {}).get("kind") == "edit"
+        validate(selected, rules, repeats=edit)
         target = data.get("created_id") or mix["playlist_id"]
         current: dict[str, Any] | None = None
         if target:
@@ -1020,13 +1103,13 @@ class Playlists:
                     )
                 await self.requests.guard(mix, data)
 
-            partial = definition.mode == "tracks" and not definition.require_all
+            partial = rules.mode == "tracks" and not rules.require_all
             refused: dict[str, str] = {}
             ids = await self.check_tracks(
                 connection,
                 selected,
                 approved,
-                library_bound=definition.mode != "discovery",
+                library_bound=rules.mode != "discovery",
                 authorize=authorize,
                 leave_out=refused if partial else None,
             )
@@ -1039,7 +1122,7 @@ class Playlists:
             # Previously prepared IDs can disappear between a stop and its recovery.
             for song, native_id in zip(selected, ids, strict=True):
                 native = await self.native_track(
-                    connection, native_id, library_bound=definition.mode != "discovery"
+                    connection, native_id, library_bound=rules.mode != "discovery"
                 )
                 if not same_recording(song.model_dump(), native):
                     raise PlaylistError("A prepared track is no longer the selected recording.")
@@ -1083,10 +1166,11 @@ class Playlists:
     ) -> None:
         # Reconciliation of matching IDs must still confirm the frozen recordings.
         definition = Definition.model_validate(data["definition"])
+        rules = self.rules(definition, data)
         selected = [Track.model_validate(s) for s in data["selected"]]
         for song, native_id in zip(selected, data["native_ids"], strict=True):
             native = await self.native_track(
-                connection, native_id, library_bound=definition.mode != "discovery"
+                connection, native_id, library_bound=rules.mode != "discovery"
             )
             if not same_recording(song.model_dump(), native):
                 raise PlaylistError("A saved playlist track is no longer the selected recording.")
@@ -1115,6 +1199,19 @@ class Playlists:
         async with self.repo.store.transaction() as db:
             if principal is not None and self.published is not None:
                 await self.published(principal, selected, data["native_ids"], db)
+            agent = data.get("agent", {})
+            if removed := agent.get("removed_tracks"):
+                await removed_by_agent(
+                    db, mix["id"], ident, [Track.model_validate(t) for t in removed]
+                )
+            if "definition" in agent:
+                # An agent-curated playlist's new tracks become its own once published; a
+                # discarded or failed change leaves the published list's definition.
+                data["definition"] = agent["definition"]
+                await db.execute(
+                    "UPDATE playlist_mixes SET definition=? WHERE id=?",
+                    [json.dumps(agent["definition"]), mix["id"]],
+                )
             await db.execute(
                 "UPDATE playlist_mixes SET playlist_id=?,published=?,due=?,"
                 "enabled=CASE WHEN ? THEN 1 ELSE enabled END WHERE id=?",

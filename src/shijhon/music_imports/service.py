@@ -1134,26 +1134,35 @@ class MusicImports:
         found: list[LibrarySong] = []
         after = 0
         while names:
+            # The names alone: a song's metadata is read only if its album is among them.
             rows = await self.store.fetchall(
-                "SELECT rowid,song_id,track_key,album_id,title,album,artist,year,duration,"
-                "original,metadata FROM collection_tracks WHERE library_id=? AND present=1"
-                " AND rowid>? ORDER BY rowid LIMIT 5000",
+                "SELECT rowid,album,track_key FROM collection_tracks WHERE library_id=?"
+                " AND present=1 AND rowid>? ORDER BY rowid LIMIT 5000",
                 [self.library_id, after],
             )
             if not rows:
                 break
             after = rows[-1]["rowid"]
 
-            def named(page: Sequence[Any]) -> list[dict[str, Any]]:
+            def named(page: Sequence[Any]) -> list[int]:
                 return [
-                    dict(r)
+                    int(r["rowid"])
                     for r in page
                     if fold(r["album"]) in names and r["track_key"] not in without
                 ]
 
-            kept = await anyio.to_thread.run_sync(named, rows)
-            if not kept:
+            wanted = await anyio.to_thread.run_sync(named, rows)
+            if not wanted:
                 continue
+            kept = [
+                dict(row)
+                for row in await self.store.fetchall(
+                    "SELECT rowid,song_id,track_key,album_id,title,album,artist,year,duration,"
+                    "original,metadata FROM collection_tracks WHERE rowid IN"
+                    " (SELECT value FROM json_each(?)) AND present=1 ORDER BY rowid",
+                    [json.dumps(wanted)],
+                )
+            ]
             placeholders = {
                 r["song_id"]
                 for r in await self.store.fetchall(

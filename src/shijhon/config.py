@@ -24,6 +24,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     SecretStr,
+    ValidationInfo,
     create_model,
     field_validator,
     model_validator,
@@ -76,13 +77,44 @@ class ServerSettings(BaseModel):
         return value
 
 
+# Plain HTTP for the agent address (``agents.private_http``): any host name (the owner's
+# network resolves it), and of addresses only those of a private network.
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(network)
+    for network in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",  # carrier-grade NAT, also Tailscale's addresses
+        "fc00::/7",  # unique local
+        "127.0.0.0/8",
+        "::1/128",
+    )
+)
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def private_host(host: str) -> bool:
+    """Whether ``host`` may be reached over plain HTTP with ``agents.private_http``: a name,
+    or an address in :data:`PRIVATE_NETWORKS` (a public address is refused)."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return bool(host.rstrip("."))
+    return any(address in network for network in PRIVATE_NETWORKS)
+
+
 class AgentSettings(BaseModel):
+    # Accept an http:// public_url whose host is a name or a private address (``private_host``):
+    # sign-in passwords and agent tokens then travel unencrypted on that network. Off: HTTP
+    # only on loopback. (Before public_url: its check reads it.)
+    private_http: bool = False
     # Canonical public origin (scheme/host/port), without a path. Empty disables MCP.
     public_url: str = ""
 
     @field_validator("public_url")
     @classmethod
-    def canonical_url(cls, value: str) -> str:
+    def canonical_url(cls, value: str, info: ValidationInfo) -> str:
         if not value:
             return ""
         url = urlsplit(value)
@@ -94,17 +126,32 @@ class AgentSettings(BaseModel):
             or url.fragment
             or url.path not in ("", "/")
             or url.scheme not in ("https", "http")
-            or (url.scheme == "http" and url.hostname not in ("localhost", "127.0.0.1", "::1"))
-            or any(part in (".", "..") for part in url.path.split("/"))
         ):
             raise ValueError(
-                "Agent URL needs an HTTPS origin without a path (loopback may use HTTP)."
+                "Enter an HTTPS address without a path, such as https://music.example.com"
             )
-        return str(AnyHttpUrl(value)).rstrip("/")
+        canonical = str(AnyHttpUrl(value)).rstrip("/")
+        host = urlsplit(canonical).hostname or ""
+        if url.scheme == "http" and host not in LOOPBACK_HOSTS:
+            if not private_host(host):
+                raise ValueError(
+                    "Plain HTTP is only for this machine or a home network: use HTTPS for this"
+                    " address"
+                )
+            if not info.data.get("private_http"):
+                raise ValueError(
+                    "Plain HTTP on a home network is off (agents.private_http): turn it on to"
+                    " use this address, or use HTTPS"
+                )
+        return canonical
 
 
 class NavidromeSettings(BaseModel):
     url: str = "http://127.0.0.1:4533"
+    # Navidrome's Unix socket (its Address "unix:<path>"): Shijhon connects there instead
+    # of to url's host and port. url (http://, a name that resolves nowhere, e.g.
+    # "http://navidrome.invalid") then gives only the Host header of Shijhon's own calls.
+    socket: Path | None = None
     # Service account (Navidrome admin) used for scans and verification.
     user: str = ""
     password: SecretStr | None = None
@@ -132,6 +179,15 @@ class NavidromeSettings(BaseModel):
     # With both set the export is read (said at startup): a deployment moving from the
     # one to the other is not kept from starting by it.
     database_path: Path | None = None
+
+    @model_validator(mode="after")
+    def _socket(self) -> NavidromeSettings:
+        if self.socket is not None:
+            if not self.socket.is_absolute():
+                raise ValueError("navidrome.socket must be an absolute path")
+            if urlsplit(self.url).scheme != "http":
+                raise ValueError("with navidrome.socket, navidrome.url must be an http:// address")
+        return self
 
     def service_password(self) -> str:
         if self.password is not None:

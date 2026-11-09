@@ -205,13 +205,16 @@ class Reasons:
                 [("albumId" if kind == "album" else "songId", item) for kind, item in learned],
                 limit=None,  # every one: the next read no longer sees them as new
             )
-            await db.execute(
-                "DELETE FROM collection_favorites WHERE owner_id=? AND library_id=?",
-                [owner, self.library_id],
+            # What changed only: the albums of favorites decide the account's selection,
+            # and this read comes round every few minutes, mostly finding the same ones.
+            await db.executemany(
+                "DELETE FROM collection_favorites WHERE owner_id=? AND library_id=?"
+                " AND kind=? AND item_id=?",
+                [(owner, self.library_id, kind, item) for kind, item in sorted(known - rows)],
             )
             await db.executemany(
                 "INSERT OR IGNORE INTO collection_favorites VALUES (?,?,?,?)",
-                [(owner, self.library_id, kind, item) for kind, item in sorted(rows)],
+                [(owner, self.library_id, kind, item) for kind, item in learned],
             )
             await db.execute(
                 "INSERT INTO collection_favorites_read VALUES (?,?,?)"

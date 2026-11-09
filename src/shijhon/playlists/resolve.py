@@ -52,10 +52,27 @@ def same_recording(wanted: dict[str, Any], found: Track) -> bool:
         return False
     if marker == "explicit" and not (found.explicit or version_marker(found.title) == "explicit"):
         return False
-    if wanted.get("isrc") and found.isrc and wanted["isrc"] != found.isrc:
+    codes = wanted_isrcs(wanted)
+    if codes and (known := recording_isrcs(found)) and not codes & known:
+        return False
+    duration_ms = wanted.get("required_duration_ms") or wanted.get("duration_ms", 0)
+    if duration_ms and found.duration and abs(duration_ms - found.duration * 1000) > 5000:
         return False
     duration = wanted.get("duration", 0)
     return not duration or not found.duration or abs(duration - found.duration) <= 5
+
+
+def isrc_key(value: str) -> str:
+    return re.sub(r"[-\s]", "", value).upper()
+
+
+def recording_isrcs(track: Track) -> set[str]:
+    return {isrc_key(code) for code in [track.isrc, *track.isrcs] if code}
+
+
+def wanted_isrcs(wanted: dict[str, Any]) -> set[str]:
+    codes = wanted.get("required_isrcs") or [wanted.get("isrc", ""), *wanted.get("isrcs", [])]
+    return {isrc_key(code) for code in codes if code}
 
 
 def originals(matches: list[Track], artist: str = "") -> list[Track]:
@@ -80,6 +97,10 @@ def originals(matches: list[Track], artist: str = "") -> list[Track]:
 
 def matching(wanted: dict[str, Any], options: list[Track]) -> list[Track]:
     matches = [s for s in options if same_recording(wanted, s)]
+    if (codes := wanted_isrcs(wanted)) and (
+        exact := [s for s in matches if codes & recording_isrcs(s)]
+    ):
+        matches = exact
     album = wanted.get("album", "")
     if album and wanted.get("strict_album"):
         matches = [s for s in matches if fold(s.album) == fold(album)]
@@ -112,8 +133,9 @@ def choose(wanted: dict[str, Any], options: list[Track]) -> Track | None:
         return originals(matches, wanted["artist"])[0]
     # The same corroborated recording on several releases can be reused. Unknown ISRCs
     # or clean/explicit differences never become interchangeable through title alone.
-    groups = {(s.isrc, s.explicit, s.clean) for s in matches}
-    if matches and all(s.isrc for s in matches) and len(groups) == 1:
+    shared = set.intersection(*(recording_isrcs(s) for s in matches)) if matches else set()
+    groups = {(s.explicit, s.clean) for s in matches}
+    if shared and len(groups) == 1:
         return sorted(matches, key=lambda s: (bool(s.release), s.album, s.id))[0]
     return None
 
@@ -138,8 +160,10 @@ def year_of(value: Any) -> int:
 
 def native_track(data: dict[str, Any]) -> Track:
     isrc = data.get("isrc", "")
+    isrcs = []
     if isinstance(isrc, list):
-        isrc = isrc[0] if len(isrc) == 1 else ""
+        isrcs = [code for code in isrc if isinstance(code, str) and code]
+        isrc = isrcs[0] if len(isrcs) == 1 else ""
     return Track(
         id=str(data["id"]),
         artist=str(data.get("artist", "")),
@@ -147,6 +171,7 @@ def native_track(data: dict[str, Any]) -> Track:
         album=str(data.get("album", "")),
         duration=int(data.get("duration", 0)),
         isrc=str(isrc or ""),
+        isrcs=isrcs if len(isrcs) > 1 else [],
         explicit=data.get("explicitStatus") == "explicit",
         clean=data.get("explicitStatus") == "clean",
         year=year_of(data.get("year")),

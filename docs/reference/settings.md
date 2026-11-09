@@ -14,7 +14,10 @@ nothing.
     and `dash_cache_mb`;
   - `[fill] enabled`, `complete_lists`, `pass_start_seconds` and
     `pass_requests_per_second`, and switching `library_pass` to or from `off`;
-  - every `[audiomuse]` setting.
+  - every `[audiomuse]` setting;
+  - `[agents] public_url` and `private_http`.
+- Of `[playlists]`, only `allow_private_api` can be saved on the dashboard. It applies at
+  once. The runner commands are set only in the file.
 - A saved section that no longer fits the configuration, or with which Shijhon could not
   start (a saved file path whose file is gone, say), is not applied as a whole. Shijhon
   starts with the configuration's values for that section and says so: a warning at

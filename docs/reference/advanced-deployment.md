@@ -48,7 +48,9 @@ one: a device with an old password locks that user's other devices.
   Shijhon's address as a network, `172.30.99.10/32` in the Compose file (a bare address
   matches nothing; no space after a comma). With both on one host over loopback it is
   `127.0.0.1/32`, and every local process is then trusted, so keep Navidrome's port to
-  yourself.
+  yourself. Or put Navidrome on a Unix socket that only Shijhon can open (Navidrome's
+  `Address = "unix:<path>"`, Shijhon's `[navidrome] socket`) and trust only it with
+  `"@"`, as the NixOS service does.
 - **Shijhon names the client** in `X-Forwarded-For` and `X-Real-IP`, and drops what a
   client sent itself (`X-Forwarded-For`, `X-Real-IP`, `True-Client-IP`, `Forwarded`). The
   client's address is the connection's or, from a trusted proxy, the last address in

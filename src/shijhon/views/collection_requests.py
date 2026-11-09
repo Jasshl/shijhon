@@ -122,26 +122,25 @@ class CollectionRequests:
             cid = CatalogId.parse(value)
             if cid and cid.kind == "ar":
                 continue
-            song_ref = str(cid.ref) if cid and cid.kind == "tr" else ""
-            album_ref = str(cid.ref) if cid and cid.kind == "al" else ""
-            native = value if cid is None else ""
-            sql = (
-                "SELECT r.ref,t.track_ref FROM releases r JOIN track_links t"
-                " ON t.release_ref=r.ref WHERE"
-                " (?<>'' AND t.track_ref=?) OR (?<>'' AND r.ref=?) OR"
-                " (?<>'' AND t.owned=0 AND (t.song_id=? OR (? AND r.album_id=?)))"
-                " ORDER BY t.release_ref,t.track_ref LIMIT ? OFFSET ?"
+            links = (
+                "SELECT r.ref AS ref,t.track_ref AS track_ref FROM releases r JOIN track_links t"
+                " ON t.release_ref=r.ref WHERE "
             )
-            params = [
-                song_ref,
-                song_ref,
-                album_ref,
-                album_ref,
-                native,
-                native,
-                key in ("id", "albumId"),
-                native,
-            ]
+            # One index for what the value can name: this runs for every play an app reports,
+            # and once per song of a playlist.
+            if cid and cid.kind == "tr":
+                sql, params = links + "t.track_ref=?", [str(cid.ref)]
+            elif cid and cid.kind == "al":
+                sql, params = links + "r.ref=?", [str(cid.ref)]
+            elif cid is not None:
+                continue
+            elif key in ("id", "albumId"):
+                sql = links + "t.owned=0 AND t.song_id=? UNION " + links
+                sql += "t.owned=0 AND r.album_id=?"
+                params = [value, value]
+            else:
+                sql, params = links + "t.owned=0 AND t.song_id=?", [value]
+            sql += " ORDER BY 1,2 LIMIT ? OFFSET ?"
             offset = 0
             page_size = _MAX_TRACKS + 1 if cap is not None else _MAX_TRACKS
             while True:

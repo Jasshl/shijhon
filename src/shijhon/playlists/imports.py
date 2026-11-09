@@ -230,20 +230,32 @@ class Imports:
         format: str = "auto",
         filename: str = "",
         mapping: dict[str, str] | None = None,
+        entries: list[Entry] | None = None,
     ) -> str:
-        """Called under changes; enqueue only, with no catalog or library mutation."""
+        """Called under changes; enqueue only, with no catalog or library mutation.
+        ``entries``: entries given one by one (an agent's) instead of a document."""
         await self.service.connection(owner)
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
             raise PlaylistError("Reload the import form before submitting.")
-        rows = parse(
-            source,
-            csv_file=csv_file,
-            format=format,
-            filename=filename,
-            mapping=mapping,
-            max_bytes=getattr(self.service.settings, "import_max_bytes", MAX_BYTES),
-            max_rows=getattr(self.service.settings, "import_max_entries", MAX_ROWS),
-        )
+        most = getattr(self.service.settings, "import_max_entries", MAX_ROWS)
+        if entries is not None:
+            if not entries:
+                raise PlaylistError("Supply at least one playlist entry.")
+            if len(entries) > most:
+                raise PlaylistError(
+                    f"This import exceeds the administrator's {most:,}-entry budget."
+                )
+            rows, format = entries, "entries"
+        else:
+            rows = parse(
+                source,
+                csv_file=csv_file,
+                format=format,
+                filename=filename,
+                mapping=mapping,
+                max_bytes=getattr(self.service.settings, "import_max_bytes", MAX_BYTES),
+                max_rows=most,
+            )
         definition = Definition(
             name=name,
             mode="import",
@@ -258,7 +270,11 @@ class Imports:
                 "name": name,
                 "format": "csv" if csv_file else format,
                 "filename": filename,
-                "mapping": mapping or {},
+                "mapping": {
+                    k: v
+                    for k, v in (mapping or {}).items()
+                    if k not in ("isrc", "duration", "duration_ms") or v
+                },
                 "source": source,
                 "rows": [s.model_dump() for s in rows],
             },
@@ -492,7 +508,7 @@ class Imports:
                 "track": None,
                 "note": "No accessible native file matched. Choose a recording by native ID.",
             }
-        wanted = suggestion.wanted()
+        wanted = entry.wanted()
         ambiguous: list[Track] = []
         # Add-ons that did not answer are skipped for the rest of this matching attempt.
         unanswered = set(data.get("unanswered", []))
@@ -518,6 +534,8 @@ class Imports:
                     update={
                         "required_title": wanted["required_title"],
                         "required_album": wanted["required_album"],
+                        "required_isrcs": entry.recording_isrcs,
+                        "required_duration_ms": entry.duration_ms,
                     }
                 )
         # Where a recording of an add-on's catalog was found is said.
@@ -838,14 +856,20 @@ class Imports:
                         track = native
                     evidence = await self.evidence(owner, ident)
                     requested = Entry.model_validate(json.loads(evidence["input"])["rows"][index])
-                    if not requested.locations and (suggestion := requested.suggestion()):
-                        wanted = suggestion.wanted()
+                    if (
+                        not requested.native_id
+                        and not any(local_path(v) for v in requested.locations)
+                        and requested.suggestion() is not None
+                    ):
+                        wanted = requested.wanted()
                         if not same_recording(wanted, track):
                             raise ValueError
                         track = track.model_copy(
                             update={
                                 "required_title": wanted["required_title"],
                                 "required_album": wanted["required_album"],
+                                "required_isrcs": requested.recording_isrcs,
+                                "required_duration_ms": requested.duration_ms,
                             }
                         )
                 else:

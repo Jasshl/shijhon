@@ -39,7 +39,7 @@ async def service_at(path: Path, *, ai: bool = True) -> AsyncIterator[Playlists]
     store = await Store.open(path)
     service = Playlists(
         store,
-        SimpleNamespace(base_url="", library_id=1),
+        SimpleNamespace(socket=None, base_url="", library_id=1),
         None,
         None,
         PlaylistSettings(candidate_limit=30),

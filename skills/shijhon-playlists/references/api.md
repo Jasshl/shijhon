@@ -24,7 +24,7 @@ OAuth login and refresh. The MCP interface handles this through its client.
 | Field | Default | Accepted input |
 | --- | --- | --- |
 | `name` | `"Described playlist"` | Printable nonblank text, at most 100 characters; `""` chooses automatically in prompt mode |
-| `prompt` | `""` | Text, at most 2000 characters; retain user constraints |
+| `prompt` | `""` | Text, at most 2000 characters; retain user constraints (with `tracks`: saved as the playlist's brief) |
 | `count` | `30` | Integer 1..100 |
 | `max_per_artist` | `2` | Integer 1..10 |
 | `use_history` | `false` | Boolean; explicit user opt-in and token history grant |
@@ -32,7 +32,7 @@ OAuth login and refresh. The MCP interface handles this through its client.
 | `tracks` | `[]` | Ordered artist/title objects; optional album/version text |
 | `save_instructions` | `false` | Boolean; retain instructions on the server |
 | `cadence` | `"manual"` | `"manual"`, `"daily"` or `"weekly"` |
-| `preview` | `false` | Boolean; advanced dashboard approval before publication |
+| `preview` | `false` | Boolean; wait for review before publication (dashboard, or MCP `review_playlist_preview`) |
 | `reference_playlists` | `[]` | Up to 3 distinct Navidrome playlist IDs the account can read; prompt mode; token library grant |
 | `reference_songs` | `[]` | Up to 50 distinct Navidrome song IDs the account can read; prompt mode; token library grant |
 | `exclude_reference` | `true` | Boolean; leave the chosen references' songs out of the result |
@@ -168,8 +168,8 @@ status. Changed input for the same owner/key returns `409`.
   are reused; selection may regenerate if not frozen. It does not create a new
   request. The client never retries automatically.
 
-`published` means verified native publication; `preview` awaits authenticated
-dashboard publication. `failed` and `uncertain` need inspection/recovery. Other
+`published` means verified native publication; `preview` awaits review (the dashboard,
+or MCP `review_playlist_preview`). `failed` and `uncertain` need inspection/recovery. Other
 states can indicate work in progress. Status polling makes 1..30 GET attempts
 (`--attempts`, default 1), separated by 1..30 seconds (`--interval`, default 2),
 and stops on terminal or unrecognized states. Each HTTP operation has a 15-second
@@ -189,8 +189,76 @@ than HTTP response bodies or exception details; it redacts the bearer token from
 decoded successful responses too. It exits 1 on client/HTTP failures, 2 on invalid
 CLI arguments, and 0 when a JSON status or context was read successfully. Exit 0
 alone does not mean publication succeeded. A missing request ID or an uncertain
-result never warrants creation under a fresh key. Preview publication requires
-the authenticated dashboard; no approval or external scheduling API is provided.
+result never warrants creation under a fresh key. Over HTTP, preview publication
+requires the authenticated dashboard; no approval or external scheduling API is provided.
+
+## Managing playlists (MCP)
+
+These tools act on any of the user's Shijhon playlists in this library, whoever made it
+(the dashboard, this agent or another one); never on another account's. They take the
+playlist's `request_id`. Changes need `create` permission. A replacement, edit,
+addition, retry, one-off refresh or preview publication runs with the calling agent's
+own grant: revoking it stops that work before it runs, and the owner can still retry or
+publish it on the dashboard under their own authority. Scheduled refreshes keep the
+authority the playlist was made with.
+
+- `list_playlist_requests` (`limit` 1..100, `offset`, `kind`: `all`, `agent_curated`,
+  `described`, `discovery`, `import`) lists `id`, `kind`, `name`, `state`,
+  `playlist_id`, `cadence`, `refreshes` and `made_by` (`this_agent`, `another_agent`,
+  `dashboard`, or `account` for discovery mixes and imports), newest first.
+- `get_playlist_request` adds `kind`, `made_by`, `brief` and `cadence`. `selected` is
+  the latest run's songs; `published_songs` the last published ones, each with its
+  `song_id`, also while a later preview waits or after a later change failed.
+  `user_edits` lists up to 100 songs the user removed from the playlist and up to 100
+  they added, each `song_id`, `artist`, `title`, `album`, with `remembered` counts. On a
+  playlist this agent did not make, each run's songs (`selected`, `published_songs`)
+  need `library` permission, plus `history` when listening history chose them (a
+  discovery mix, or a description using history). The one exception is a run whose
+  songs this agent chose itself: its own replacement. Additions, edits, retries,
+  refreshes and preview publications keep or bring songs others chose, so they show
+  none. Without the permissions, hidden songs leave `selected` empty, leave out
+  `published_songs`, and `songs_hidden` says what is missing. Without library permission, outcomes read `resolved` and there is no
+  `source`, references or edits. An import shows its counts (`entries`, `matched`,
+  `missing`, `removed`), `review_key` and recheck state.
+- `replace_playlist_tracks` (`tracks` 1..100, optional `max_per_artist`, `require_all`,
+  `preview`, `brief`, a new `idempotency_key`) replaces every song of a playlist that is
+  not an import, keeping its Navidrome ID. Tracks resolve as explicit tracks; a song the
+  user removed is left out with reason `removed_by_user`. Edits the user made in an app
+  since the last publication are learned first. A described playlist or discovery mix
+  keeps its instructions, rules and schedule; only an agent-curated playlist takes
+  `brief`, and its tracks and brief change only when the replacement is published.
+  Refused (`409`) while a run is unfinished or a preview waits. Replaying the key with
+  the same input changes nothing (`replaced: false`); other input conflicts.
+- `edit_playlist_tracks` (`remove`: song IDs, each taking out one copy of that song,
+  and/or `order`: every remaining song in its new place, as often as it stays; a new
+  `idempotency_key`) edits a published playlist as Navidrome has it now. A song the user
+  put in the playlist more than once may stay so; an edit adds no copy. On a playlist this
+  agent did not make, an edit needs the permissions that read its songs. Songs no longer
+  in the playlist are remembered as the user's removals. The edit is not applied if the
+  playlist changes again before it runs.
+- `review_playlist_preview` (`run_id`, `action`: `publish` or `discard`) acts on the
+  current preview only. Publishing needs `history` for a discovery mix or a description
+  using history, and `library` for one using the library. For a discovery mix,
+  `enable_refreshes` true or false turns refreshes on or off; left out, it keeps what was
+  asked when the mix was made.
+- `manage_playlist_refresh` actions `pause`, `resume`, `refresh`, `preview` (refresh
+  for review) and `forget_edits` apply to described playlists (server AI) and discovery
+  mixes (history permission, Last.fm). An agent-curated playlist takes only `pause` and
+  `forget_edits`. `forget_edits` with `song_ids` forgets only those songs' edits, for
+  example to let one removed song back.
+- `create_discovery_mix` (`mix`: `name`, `count` 1..100, `unfamiliar_percent`,
+  `max_per_artist`, `exclude_days`, `repeat_days`, `cadence`, `instructions` (server AI),
+  `preview`, `enable_refreshes`; an `idempotency_key`) and `update_discovery_mix`
+  (`request_id`, `mix`) need `create` and `history` permission and a connected Last.fm
+  profile.
+- `import_playlist` (`name`, `idempotency_key`, and either `lines`, up to 100,000
+  characters, or `entries` of `artist`, `title`, `album`, `version`, `isrc`, `song_id`)
+  needs `create` and `library` permission and uses the dashboard's import matching.
+  `get_playlist_import` (`offset`, `limit` 1..100, `only_missing`) lists entries with
+  `state`, `note`, `song` and up to 10 `choices`. `review_playlist_import` (`run_id`,
+  `review_key`, `action`: `choose` with `entry` and `choice`, `publish` with
+  `missing_count`, `discard`, `retry`, `recheck`, `stop`, `resume`, `keep`) acts as the
+  import page does.
 
 ## Song facts and sound analysis (MCP)
 

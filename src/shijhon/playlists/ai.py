@@ -39,7 +39,9 @@ class Selection(Model):
     selections: list[Choice] = Field(min_length=1, max_length=100)
 
 
-def validate(selected: list[Track], definition: Definition) -> None:
+def validate(selected: list[Track], definition: Definition, *, repeats: bool = False) -> None:
+    """``repeats``: an edit of a published playlist keeps the recordings the playlist
+    already repeats; every new selection repeats none."""
     if definition.mode == "import":
         if len(selected) != definition.count:
             raise PlaylistError("The import selection differs from the reviewed entry count.")
@@ -48,7 +50,7 @@ def validate(selected: list[Track], definition: Definition) -> None:
     short = definition.mode == "tracks" and not definition.require_all
     if not (
         0 < len(selected) <= definition.count if short else len(selected) == definition.count
-    ) or len({s.key for s in selected}) != len(selected):
+    ) or (not repeats and len({s.key for s in selected}) != len(selected)):
         raise PlaylistError("The selection has the wrong length or repeats a recording.")
     if sum(s.unfamiliar for s in selected) < definition.unfamiliar:
         raise PlaylistError("The selection does not meet the requested unfamiliar share.")
@@ -253,11 +255,23 @@ class Curator:
         if not self.settings.allow_cli or not command:
             raise PlaylistError("This installation has not enabled the selected local AI runner.")
         # No dashboard-controlled executable, flag or shell command. Saved CLI auth stays
-        # available; Shijhon's environment secrets are not inherited by the child.
+        # available, and so do CA certificates kept where the system puts them (NixOS);
+        # Shijhon's environment secrets are not inherited by the child.
         environment = {
             k: v
             for k, v in os.environ.items()
-            if k in {"PATH", "HOME", "USER", "LANG", "LC_ALL", "CODEX_HOME", "CLAUDE_CONFIG_DIR"}
+            if k
+            in {
+                "PATH",
+                "HOME",
+                "USER",
+                "LANG",
+                "LC_ALL",
+                "CODEX_HOME",
+                "CLAUDE_CONFIG_DIR",
+                "SSL_CERT_FILE",
+                "NIX_SSL_CERT_FILE",
+            }
         }
         with tempfile.TemporaryDirectory(prefix="shijhon-curation-") as folder:
             root = Path(folder)

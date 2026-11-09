@@ -289,6 +289,10 @@ REASONS = {
     "catalog_unavailable": "The catalog did not answer: add this track again later.",
     "duplicate": "An earlier track of this playlist is the same recording.",
     "not_checked": "Not looked up within the run's time: add this track again.",
+    "removed_by_user": (
+        "The user removed this song from the playlist, so it stays out. Choose another, or "
+        "forget the playlist's edits first if the user asks for it back."
+    ),
     # A library refusal, as a requester without the library permission sees it.
     "not_added": "This recording could not be added to the playlist: choose another.",
 }
@@ -362,6 +366,7 @@ async def explicit_tracks(
     *,
     library: bool = True,
     kept: dict[int, tuple[Track, dict[str, Any]]] | None = None,
+    edits: Edits | None = None,
 ) -> Curated:
     """The caller's tracks in their order: each the library's recording, else the
     catalog's - the original when several versions match. What resolves is published and
@@ -371,7 +376,8 @@ async def explicit_tracks(
     ``library``: whether the requester may read the library; else the report does not
     say which songs the library has, nor shows its songs as candidates. ``kept``: tracks
     already published at these positions (added tracks), with their report entries:
-    taken as they are, not looked up again."""
+    taken as they are, not looked up again. ``edits``: the owner's edits of the playlist;
+    a song the owner removed from it is left out, as refreshes leave it out."""
     selected: list[Track] = []
     positions: dict[str, int] = {}  # recording -> the position that has it
     report: list[dict[str, Any]] = []
@@ -437,7 +443,15 @@ async def explicit_tracks(
                 entry["candidates"] = candidates
         else:
             assert found is not None
-            if found.key in positions:
+            if not (kept and position in kept) and edits and edits.leaves_out(found.key, found.id):
+                entry = {
+                    "position": position,
+                    "input": entry["input"],
+                    "outcome": "unresolved",
+                    "reason": "removed_by_user",
+                    "detail": REASONS["removed_by_user"],
+                }
+            elif found.key in positions:
                 entry = {
                     "position": position,
                     "input": entry["input"],
@@ -510,6 +524,7 @@ async def generate(
             check,
             library=library is None or await library(),
             kept=kept,
+            edits=edits,
         )
     influences = await context(
         service,

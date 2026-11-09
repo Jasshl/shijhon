@@ -79,7 +79,7 @@ def test_publication_reports_preparation_failures_without_adapter_details(
 
         service = Playlists(
             store,
-            SimpleNamespace(base_url="", library_id=1),
+            SimpleNamespace(socket=None, base_url="", library_id=1),
             SimpleNamespace(key="demo", song=song),
             SimpleNamespace(
                 engine=SimpleNamespace(guard_materializations=lambda check: nullcontext()),
@@ -149,7 +149,7 @@ def test_matched_edition_requires_one_unchanged_corroborated_recording(
 
         service = Playlists(
             store,
-            SimpleNamespace(base_url="", library_id=1),
+            SimpleNamespace(socket=None, base_url="", library_id=1),
             SimpleNamespace(key="demo", album=album),
             SimpleNamespace(owned=SimpleNamespace(matched_release=matched)),
             PlaylistSettings(),
@@ -175,7 +175,7 @@ def test_matched_edition_requires_one_unchanged_corroborated_recording(
 )
 def test_native_history_key_refuses_unavailable_responses(code: int, body: Any) -> None:
     async def check() -> None:
-        client = OwnerClient(SimpleNamespace(base_url="http://native.invalid"))
+        client = OwnerClient(SimpleNamespace(socket=None, base_url="http://native.invalid"))
         await client.http.aclose()
         seen = []
 
@@ -445,6 +445,7 @@ def test_cli_receives_no_service_credentials_and_uses_bounded_contract(
     async def fake_process(args: list[str], prompt: str, root: Path, env: dict[str, str]) -> bytes:
         captured.append(args)
         assert "SHIJHON_NAVIDROME__PASSWORD" not in env
+        assert env["SSL_CERT_FILE"] == "/invented/ca-bundle.crt"  # (HTTPS on NixOS)
         assert "invented-token" not in prompt
         answer = {"selections": [{"id": "one", "reason": "Matches your taste"}]}
         if args[0] == "codex":
@@ -455,6 +456,7 @@ def test_cli_receives_no_service_credentials_and_uses_bounded_contract(
 
     monkeypatch.setattr(ai, "run_process", fake_process)
     monkeypatch.setenv("SHIJHON_NAVIDROME__PASSWORD", "synthetic-service-secret")
+    monkeypatch.setenv("SSL_CERT_FILE", "/invented/ca-bundle.crt")
 
     async def run() -> None:
         curator = Curator(
@@ -664,7 +666,11 @@ def test_interrupted_selection_pauses_publication_but_keeps_opt_in_review(
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         await service.repo.connect(connection())
         mix = await service.repo.create(
@@ -698,7 +704,11 @@ def test_connection_change_during_automatic_selection_pauses_mix(tmp_path: Path)
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         await service.repo.connect(connection())
         mix = await service.repo.create(connection().user_id, Definition())
@@ -732,7 +742,11 @@ def test_legacy_queued_and_preview_runs_never_gain_publication_permission(
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         await service.repo.connect(owner)
@@ -783,7 +797,11 @@ def test_scheduled_review_waits_for_publication_without_adding_more_runs(tmp_pat
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         await service.repo.connect(owner)
@@ -822,7 +840,11 @@ def test_pause_during_scheduled_selection_prevents_publication(tmp_path: Path) -
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         await service.repo.connect(owner)
@@ -860,7 +882,11 @@ def test_new_direct_publication_recovers_frozen_selection_after_restart(tmp_path
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         await service.repo.connect(owner)
@@ -890,7 +916,11 @@ def test_new_direct_publication_recovers_frozen_selection_after_restart(tmp_path
             await store.close()
             store = await Store.open(tmp_path / "db")
             service = Playlists(
-                store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+                store,
+                SimpleNamespace(socket=None, base_url="", library_id=1),
+                None,
+                None,
+                PlaylistSettings(),
             )
 
             async def no_selection(*args: Any) -> dict[str, Any]:
@@ -946,7 +976,11 @@ def test_pause_during_manual_selection_keeps_publication_but_revokes_refreshes(
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         await service.repo.connect(owner)
@@ -986,7 +1020,11 @@ def test_pause_during_initial_validation_survives_publication_and_finish(
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         spec = Definition(count=1, exclude_days=0, repeat_days=0)
@@ -1069,7 +1107,11 @@ def test_pause_during_publication_failure_survives_uncertain_create_recovery(
     async def run() -> None:
         store = await Store.open(tmp_path / "db")
         service = Playlists(
-            store, SimpleNamespace(base_url="", library_id=1), None, None, PlaylistSettings()
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
         )
         owner = connection()
         spec = Definition(count=1, exclude_days=0, repeat_days=0)

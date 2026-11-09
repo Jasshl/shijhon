@@ -90,8 +90,8 @@ shares its limits ([every limit](reference/add-on-protocol.md#limits)).
 ### Downloads and playlist preparation
 
 An app's standard `download` request uses the download scheduler for each missing song.
-On the dashboard's **Downloads** page you can also choose a native playlist and prepare
-its audio in the server library. Neither workflow needs a playlist batch detector or a
+The dashboard's **Downloads** page also prepares a chosen native playlist's
+audio in the server library. Neither workflow needs a playlist batch detector or a
 special add-on. This prepares server files; the app still needs to save its own device
 copies. Showing catalog tracks and adding library placeholders do not download audio.
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
@@ -174,6 +175,104 @@ async def test_unchanged_refresh_keeps_generation_but_structural_change_replaces
         assert (await store.fetchone("SELECT generation FROM collection_index"))[
             "generation"
         ] != before
+    finally:
+        await store.close()
+
+
+async def test_a_refresh_writes_only_the_songs_that_changed(tmp_path):
+    """A scan compares the whole library. What it finds the same stays untouched, in its row:
+    a changed library of any size costs what changed (the selection reads these rows)."""
+    store = await Store.open(tmp_path / "state.db")
+    try:
+        access = FakeAccess([song(1), song(2), song(3)])
+        index = Index(store, access, "_shijhon")
+        await index.scan("owner", "1")
+
+        async def rows():
+            found = await store.fetchall(
+                "SELECT song_id,present,generation,title FROM collection_tracks ORDER BY song_id"
+            )
+            return {row["song_id"]: dict(row) for row in found}
+
+        async def counted():
+            found = await store.fetchone("SELECT revision FROM collection_revisions WHERE scope=''")
+            return found["revision"]
+
+        before, revision = await rows(), await counted()
+        await index.scan("owner", "1")
+        assert await rows() == before and await counted() == revision
+
+        access.rows = [song(1), song(2, title="A corrected title"), song(4)]
+        await index.scan("owner", "1")
+        after = await rows()
+        generation = (await store.fetchone("SELECT generation FROM collection_index"))["generation"]
+        assert generation != before[song(1)["id"]]["generation"]
+        assert after[song(1)["id"]] == before[song(1)["id"]]
+        assert after[song(2)["id"]]["title"] == "A corrected title"
+        assert after[song(2)["id"]]["generation"] == generation
+        assert after[song(3)["id"]]["present"] == 0
+        assert after[song(4)["id"]]["present"] == 1
+        assert await counted() > revision
+
+        # Back again: the song comes back in its row.
+        access.rows = [song(1), song(2, title="A corrected title"), song(3)]
+        await index.scan("owner", "1")
+        assert (await rows())[song(3)["id"]]["present"] == 1
+    finally:
+        await store.close()
+
+
+async def test_a_song_written_while_a_refresh_compares_is_compared_again(tmp_path):
+    """Comparing takes no lock: a song written before the refresh's write is not missed."""
+    store = await Store.open(tmp_path / "state.db")
+    try:
+        access = FakeAccess([song(1), song(2)])
+        index = Index(store, access, "_shijhon")
+        await index.scan("owner", "1")
+        compare = index._differences
+        compared = []
+
+        async def racing(conn, library, generation):
+            found = await compare(conn, library, generation)
+            if not compared:
+                # After this read, before the write: a song taken away meanwhile.
+                await store.execute(
+                    "UPDATE collection_tracks SET present=0 WHERE song_id=?", [song(1)["id"]]
+                )
+            compared.append(found)
+            return found
+
+        index._differences = racing
+        await index.scan("owner", "1")
+        assert len(compared) == 2
+        assert compared[0][1:] == ([], []) and compared[1][2]
+        again = await store.fetchone(
+            "SELECT present FROM collection_tracks WHERE song_id=?", [song(1)["id"]]
+        )
+        assert again["present"] == 1
+    finally:
+        await store.close()
+
+
+async def test_the_store_answers_while_a_snapshot_reads(tmp_path):
+    import anyio
+
+    store = await Store.open(tmp_path / "state.db")
+    try:
+        await store.execute("INSERT INTO collection_favorites VALUES ('one','1','album','first')")
+        async with store.snapshot() as reader:
+            cursor = await reader.execute("SELECT count(*) FROM collection_favorites")
+            assert (await cursor.fetchone())[0] == 1
+            with anyio.fail_after(2):
+                await store.execute(
+                    "INSERT INTO collection_favorites VALUES ('one','1','album','second')"
+                )
+            # The snapshot's view stays as it began; what comes after sees the rest.
+            cursor = await reader.execute("SELECT count(*) FROM collection_favorites")
+            assert (await cursor.fetchone())[0] == 1
+            with pytest.raises(sqlite3.OperationalError):
+                await reader.execute("DELETE FROM collection_favorites")
+        assert (await store.fetchone("SELECT count(*) n FROM collection_favorites"))["n"] == 2
     finally:
         await store.close()
 

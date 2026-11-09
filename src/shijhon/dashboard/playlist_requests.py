@@ -244,7 +244,6 @@ class Pages:
         page = self.dashboard._personal_page
         return [
             Route("/playlists/describe", page(self.index), methods=["GET", "POST"]),
-            Route("/playlists/agents", page(self.agents), methods=["POST"]),
             Route("/playlists/describe/{ident}", page(self.detail), methods=["GET", "POST"]),
             *API(lambda: self.service).routes(),
         ]
@@ -322,7 +321,7 @@ class Pages:
             learning=learning,
             run=run,
             spec=spec,
-            agents=await service.requests.tokens(session.user_id),
+            agents_on=service.oauth is not None,
             request_key=secrets.token_hex(16),
             form=form or {},
             references=references,
@@ -367,17 +366,6 @@ class Pages:
             )
             return await self.render(session, error=error, form=request.state.form)
 
-    async def agents(self, request: Request, session: Session) -> Response:
-        try:
-            async with self.service.changes:
-                form = request.state.form
-                if form.get("action") == "revoke":
-                    await self.service.requests.revoke(session.user_id, form.get("agent", ""))
-                    return self.dashboard._see("/playlists/describe")
-                raise PlaylistError("Connect agents through OAuth at /shijhon/mcp.")
-        except PlaylistError as exc:
-            return await self.render(session, error=str(exc))
-
     async def detail(self, request: Request, session: Session) -> Response:
         ident = request.path_params["ident"]
         if request.method != "POST":
@@ -392,9 +380,13 @@ class Pages:
                     await service.requests.forget_edits(session.user_id, ident)
                     return self.dashboard._see(f"/playlists/describe/{ident}")
                 action = request.state.form.get("action", "")
-                if action not in ("pause", "discard"):
-                    await service.requests.guard(mix)
                 run = (await service.repo.runs(ident))[0]
+                # The owner takes over a run an agent asked for, under their own authority.
+                taken = "actor" in run["data"] and action in ("publish", "retry")
+                if taken:
+                    run["data"]["actor"] = ""
+                if action not in ("pause", "discard"):
+                    await service.requests.guard(mix, {"actor": ""} if taken else None)
                 spec = Definition.model_validate_json(mix["definition"])
                 action = request.state.form.get("action", "")
                 if action in ("publish", "discard", "retry") and (

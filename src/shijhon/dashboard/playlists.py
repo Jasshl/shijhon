@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import time
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from pydantic import SecretStr, ValidationError
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
+from shijhon.config import LOOPBACK_HOSTS
+from shijhon.dashboard import sections
 from shijhon.dashboard.auth import Session
 from shijhon.dashboard.playlist_imports import Pages as ImportPages
 from shijhon.dashboard.playlist_requests import Pages as RequestPages
 from shijhon.dashboard.playlist_requests import edits_view
+from shijhon.dashboard.saved import PLAYLIST_KEYS
 from shijhon.playlists.edits import forget, remembered
 from shijhon.playlists.model import Connection, Definition, PlaylistError
 from shijhon.playlists.repository import AI_FIELDS
@@ -25,8 +30,29 @@ if TYPE_CHECKING:
     from shijhon.dashboard.app import Dashboard
 
 
+# What a connected agent may do, by its permissions, in the words of its row.
+AGENT_CAN = {
+    "create": "make playlists",
+    "status": "check playlist jobs",
+    "library": "read your library",
+    "history": "read your listening history",
+    "settings": "choose your AI model",
+    "downloads": "prepare playlist audio",
+}
+
+
 def version(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def allowed(scopes: str) -> str:
+    """A grant's permissions (JSON) as a short sentence: "Can make playlists, ..."."""
+    try:
+        granted = json.loads(scopes)
+    except ValueError:
+        granted = []
+    words = [AGENT_CAN[s] for s in AGENT_CAN if isinstance(granted, list) and s in granted]
+    return "Can " + ", ".join(words) if words else "No permissions"
 
 
 def definition(form: dict[str, str]) -> Definition:
@@ -65,6 +91,7 @@ class Pages:
             Route("/playlists/host-ai", page(self.host_ai), methods=["POST"]),
             Route("/playlists/private-ai", page(self.private_ai), methods=["POST"]),
             Route("/playlists/forget", page(self.forget), methods=["POST"]),
+            Route("/playlists/agents", page(self.agents), methods=["POST"]),
             *RequestPages(self.dashboard).routes(),
             *ImportPages(self.dashboard).routes(),
             Route("/playlists/{mix}", page(self.detail), methods=["GET", "POST"]),
@@ -86,6 +113,76 @@ class Pages:
                 " Forget them before reconnecting."
             )
         return connection
+
+    async def agent_access(self, session: Session) -> dict[str, Any]:
+        """Agent access as the Playlists page shows it: whether it serves in this run, the
+        address to add to an agent app, and the account's agents - connected, or signed out
+        (no credential for the address in use: it changed, or they lapsed)."""
+        service = self.service
+        address, failed = self.dashboard.agent_access()
+        grants = await service.requests.tokens(session.user_id)
+        active = [grant for grant in grants if not grant["revoked"]]
+        live: set[str] = set()
+        if address and active:
+            rows = await service.repo.store.fetchall(
+                "SELECT DISTINCT grant_id FROM agent_oauth_tokens"
+                " WHERE resource=? AND expires>? AND used=0",
+                [address, time.time()],
+            )
+            live = {row["grant_id"] for row in rows}
+        host = urlsplit(address).hostname
+        return {
+            "on": bool(address),
+            "failed": failed,
+            "address": address,
+            "plain": address.startswith("http://") and host not in LOOPBACK_HOSTS,
+            "agents": [
+                {
+                    "id": grant["id"],
+                    "name": grant["name"],
+                    "since": grant["created"],
+                    "can": allowed(grant["scopes"]),
+                    "signed_in": grant["id"] in live,
+                }
+                for grant in active
+            ],
+            "revoked": len(grants) - len(active),
+        }
+
+    async def agents(self, request: Request, session: Session) -> Response:
+        """Revoke one of the account's agents (agents connect themselves). The signed-in
+        session is the authority: no Navidrome check, so an agent can be revoked while
+        Navidrome is down or the saved playlist password is stale."""
+        try:
+            async with self.service.changes:
+                form = request.state.form
+                if form.get("action") != "revoke":
+                    raise PlaylistError("Agents connect themselves at the MCP address.")
+                await self.service.repo.store.execute(
+                    "UPDATE playlist_agent_tokens SET revoked=?"
+                    " WHERE id=? AND owner=? AND revoked=0",
+                    [time.time(), form.get("agent", ""), session.user_id],
+                )
+            return self.dashboard._see("/playlists#agents")
+        except PlaylistError as exc:
+            return await self.render(session, error=str(exc))
+
+    async def local_ai_row(self) -> dict[str, Any] | None:
+        """The row of ``playlists.allow_private_api`` (a saved setting, as on the settings
+        pages: the environment locks it), shown with server AI's API connection."""
+        dashboard = self.dashboard
+        if dashboard.saved is None:
+            return None
+        groups = sections.rows(
+            "playlists",
+            dashboard.host.configured,
+            await dashboard.saved.all(),
+            addon_names=[],
+            locked=dashboard.host.locked,
+        )
+        return next(
+            (row for _, rows in groups for row in rows if row["name"] in PLAYLIST_KEYS), None
+        )
 
     async def render(
         self,
@@ -193,6 +290,8 @@ class Pages:
                 and r["state"] in ("queued", "generating", "preview", "publishing", "uncertain")
                 for r in runs
             ),
+            agent=await self.agent_access(session) if mix is None else None,
+            local_ai=(await self.local_ai_row() if session.is_admin and mix is None else None),
             cli_enabled=service.settings.allow_cli,
             history_days=service.settings.history_days,
         )
@@ -229,7 +328,7 @@ class Pages:
             if not session.is_admin and (
                 any(key in form for key in (*AI_FIELDS, "allowed_models")) or "share_ai" in form
             ):
-                raise PlaylistError("Only administrators can configure the host AI service.")
+                raise PlaylistError("Only administrators can configure server AI.")
             async with service.changes:
                 old = await service.repo.connection(session.user_id)
                 password = form.get("password", "")
@@ -342,16 +441,21 @@ class Pages:
 
     async def private_ai(self, request: Request, session: Session) -> Response:
         if not session.is_admin:
-            return await self.render(
-                session, error="Only administrators can configure the host AI service."
-            )
+            return await self.render(session, error="Only administrators can configure server AI.")
         return await self.connect(request, session)
 
     async def host_ai(self, request: Request, session: Session) -> Response:
         form = request.state.form
         try:
             if not session.is_admin:
-                raise PlaylistError("Only administrators can configure the host AI service.")
+                raise PlaylistError("Only administrators can configure server AI.")
+            # Only this setting of [playlists] is taken from a form (never a runner's command).
+            # First, so that the connection saved with it may use a private address.
+            local = {key: value for key, value in form.items() if key in PLAYLIST_KEYS}
+            if local and self.dashboard.saved is not None:
+                _, written, _ = await self.dashboard._save(session, "playlists", local, whole=False)
+                if written is None:
+                    raise PlaylistError("The setting for AI on this network was not saved.")
             async with self.service.changes:
                 old = await self.owned_connection(session)
                 shared = await self.service.repo.shared_ai()
@@ -399,7 +503,7 @@ class Pages:
                 raise PlaylistError("Personal AI preferences accept a service and approved model.")
             mode = form.get("ai_mode", "shared")
             if mode not in ("shared", "none"):
-                raise PlaylistError("Choose the shared AI service or no AI.")
+                raise PlaylistError("Choose server AI or no AI.")
             async with self.service.changes:
                 await self.service.choose_ai_model(
                     session.user_id,
@@ -509,6 +613,10 @@ class Pages:
                     run = await service.repo.run(form.get("run", ""))
                     if run["mix"] != mix["id"]:
                         raise PlaylistError("That run does not belong to this mix.")
+                    if "actor" in run["data"]:
+                        # The owner takes over a run an agent asked for, with their own
+                        # authority (also when that agent was disconnected since).
+                        run["data"]["actor"] = ""
                     if action == "publish" and run["state"] == "preview":
                         run["data"]["enable_after"] = form.get("enable") == "true"
                         if not run["data"]["enable_after"]:

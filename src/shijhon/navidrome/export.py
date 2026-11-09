@@ -28,6 +28,7 @@ import logging
 import os
 import signal
 import sqlite3
+import stat
 import sys
 import tempfile
 import time
@@ -264,11 +265,20 @@ def _identity(navidrome_db: Path) -> str:
 
 
 def _request(out: Path) -> str:
-    """Shijhon's request as it is now ("" when there is none)."""
+    """Shijhon's request as it is now ("" when there is none). Never read through a link:
+    the exporter may read what Shijhon may not (it runs as Navidrome's user)."""
     try:
-        return request_path(out).read_text(errors="replace").strip()[:200]
+        fd = os.open(request_path(out), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        return os.read(fd, 200).decode(errors="replace").strip()
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
 
 
 def _never_over(navidrome_db: Path, out: Path) -> None:
@@ -368,8 +378,8 @@ def _sync(path: Path) -> None:
 def _asked(request: Path) -> tuple[int, int, int] | None:
     """The request file Shijhon last published (None: never)."""
     try:
-        stat = request.stat()
-        return stat.st_ino, stat.st_mtime_ns, stat.st_size
+        info = request.stat()
+        return info.st_ino, info.st_mtime_ns, info.st_size
     except OSError:
         return None
 

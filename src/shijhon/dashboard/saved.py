@@ -46,8 +46,20 @@ from shijhon.delivery.pacing import origin
 from shijhon.store import Store
 
 # The configuration sections the dashboard edits (of [search]: the wait for the catalog,
-# on the Catalog page).
-SECTIONS: Final = ("delivery", "catalog", "fill", "cleanup", "search", "audiomuse")
+# on the Catalog page; of [playlists]: local and network AI APIs, on the Playlists page).
+SECTIONS: Final = (
+    "delivery",
+    "catalog",
+    "fill",
+    "cleanup",
+    "search",
+    "audiomuse",
+    "agents",
+    "playlists",
+)
+# Of [playlists], the settings the dashboard saves (the others stay the configuration's:
+# a runner's command among them).
+PLAYLIST_KEYS: Final = ("allow_private_api",)
 APPEARANCE: Final = "appearance"  # dashboard only: not in the configuration file
 ADDONS: Final = "addons"  # the add-on list's owner (see above)
 # In the saved catalog section: the kind whose adapter's settings are saved there (written
@@ -409,6 +421,8 @@ def effective(
             kind = saved_kind(configured.catalog, items, locked)
             env = catalog_locks(locked, configured.catalog, kind)
             items = saved_for(items, kind)
+        if section == "playlists":
+            items = {key: item for key, item in items.items() if key in PLAYLIST_KEYS}
         values = {key: item.value for key, item in items.items() if key not in env}
         if not values:
             continue

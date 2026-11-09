@@ -14,8 +14,8 @@ of its own; the music files stay shared:
   made and published for you (discovery mixes, described playlists, agent requests).
 
 Albums in a library are always whole: all of the album's songs, also those Shijhon added
-to complete it, with or without downloaded audio. You can add and remove albums and
-songs in each library on this page. A song you add brings its whole album; what you
+to complete it, with or without downloaded audio. Albums and songs can be added to and
+removed from each library on this page. A song you add brings its whole album; what you
 remove stays out of that library, whatever would bring it in - so an album you removed
 songs from can stay partial. All holds Original imported library and Shijhon library as
 you left them, plus or minus what you add to or remove from All itself. Use **Create
@@ -110,8 +110,8 @@ Choose **Add my files anyway** to add your own files
 
 After approval, progress distinguishes placing files from making them available in the
 library. A song counts as imported only after its native identity and personal import
-membership are verified. You can leave the page and reopen the job under **Your
-imports** on the Import music page. Completed music has links to Original imported library and All. Importing
+membership are verified. The job keeps running after leaving the page, and reopens under
+**Your imports** on the Import music page. Completed music has links to Original imported library and All. Importing
 preserves the library your apps use, including an active custom library.
 
 If upload is interrupted or the browser reloads, open that import and choose the same
@@ -171,8 +171,8 @@ last page while earlier matches remain, browsing moves to the last valid page an
 the library and filters.
 
 A partly included album shows how many of its songs are in the library, and how many are
-imported and from the catalog. **Choose songs** opens the named album or artist's songs so
-you can make individual choices; it keeps Show, so switch to **Not in this library** to
+imported and from the catalog. **Choose songs** opens the named album or artist's songs for
+individual choices; it keeps Show, so switch to **Not in this library** to
 see the songs a library lacks. Song rows include the album name to distinguish versions.
 Return to albums/artists or choose **All songs** to leave the drilldown. Switching Browse
 to Albums or Artists clears the song scope. Applied filters remain visible on mobile;
@@ -227,7 +227,7 @@ is always shown below the rows.
 The review freezes the actual matching songs and shows their exact count, group count,
 and how many will change visibility. Bulk actions respect the current source and search
 filters. Confirm to start the background change. Progress remains available under Recent
-changes; you can leave the page and return. Retry resumes an approved change safely;
+changes, also after leaving the page. Retry resumes an approved change safely;
 an unapproved change always returns to review.
 
 **Undo this change** restores its earlier choices where they have not been changed again.
@@ -238,7 +238,7 @@ Songs with newer choices are skipped and counted, so Undo cannot overwrite later
 Choose **Create custom library** beside the library picker. Start with a copy of Original
 imported library, an empty selection, or a copy of an existing library. Rename it,
 choose its songs, and activate it with **Use in my apps** when ready. A library started
-empty opens **Not in this library**, so you can choose its music immediately; this leaves
+empty opens **Not in this library**, ready for choosing its music; this leaves
 the library your apps use unchanged.
 
 A copy holds what its source held when you made it, as choices of its own: later

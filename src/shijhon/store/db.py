@@ -108,17 +108,25 @@ def prepare_database(path: Path) -> None:
         setup.close()
 
 
+# Reads of the whole library at once (``Store.snapshot``): the rest wait their turn.
+READERS = 2
+
+
 class Store:
     """One aiosqlite connection (a single writer thread) shared by the whole process.
 
     Statements and transactions are serialized by a lock, so a transaction never picks up
     another coroutine's statements. Inside :meth:`transaction`, use the yielded connection
-    (calling the store's own methods there would wait for the lock forever).
+    (calling the store's own methods there would wait for the lock forever). A read that
+    passes over much of the library goes through :meth:`snapshot`, so that streams and
+    everything else asking the store do not wait for it.
     """
 
-    def __init__(self, conn: aiosqlite.Connection) -> None:
+    def __init__(self, conn: aiosqlite.Connection, path: Path | None = None) -> None:
         self.conn = conn
+        self.path = path
         self._lock = anyio.Lock()
+        self._readers = anyio.CapacityLimiter(READERS)
 
     @classmethod
     async def open(cls, path: Path) -> Store:
@@ -131,7 +139,28 @@ class Store:
         # writes rely on it - a pending record before its files, a row before its backup
         # goes).
         await conn.execute("PRAGMA synchronous = FULL")
-        return cls(conn)
+        return cls(conn, path)
+
+    @asynccontextmanager
+    async def snapshot(self) -> AsyncIterator[aiosqlite.Connection]:
+        """A read-only connection of its own, in one read transaction: it takes no lock and
+        sees the last commit before its first statement, whatever is written meanwhile."""
+        if self.path is None:  # a store on someone else's connection
+            async with self._lock:
+                yield self.conn
+            return
+        async with self._readers:
+            conn = await aiosqlite.connect(
+                self.path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None
+            )
+            try:
+                conn.row_factory = aiosqlite.Row
+                await conn.execute("PRAGMA busy_timeout = 5000")
+                await conn.execute("BEGIN")
+                yield conn
+            finally:
+                with anyio.CancelScope(shield=True):
+                    await conn.close()
 
     async def close(self) -> None:
         await self.conn.close()

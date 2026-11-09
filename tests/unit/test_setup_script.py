@@ -825,6 +825,7 @@ def test_at_a_terminal_it_asks_and_never_shows_the_password(setup: Setup) -> Non
         ("The password again", OWN_PASSWORD),
         ("The port your apps connect to", str(setup.port)),
         ("Catalog adapters to install", ""),
+        ("The address AI agents connect to", ""),
     ]
     master, slave = pty.openpty()
     process = subprocess.Popen(
@@ -906,6 +907,266 @@ def test_an_interrupt_at_the_password_question_leaves_nothing(setup: Setup) -> N
     assert setup.written() == {}
     assert not (setup.music / "_shijhon").exists() and setup.state["volumes"] == []
     assert [c for c in setup.state["calls"] if c["args"][:2] == ["compose", "up"]] == []
+
+
+def agents_section(setup: Setup) -> dict[str, object] | None:
+    """The configuration's [agents], read as Shijhon reads it (or None)."""
+    import tomllib
+
+    from shijhon.config import AgentSettings
+
+    config = (setup.packaging / "config" / "shijhon.toml").read_text()
+    section = tomllib.loads(config).get("agents")
+    if section is None:
+        return None
+    AgentSettings.model_validate(section)  # Shijhon starts with it
+    return dict(section)
+
+
+@pytest.mark.parametrize("shell", shells())
+def test_the_agent_address_goes_into_the_new_configuration(setup: Setup, shell: str) -> None:
+    done = setup.run(*setup.answers(), "--agent-url", "https://music.example.com/", shell=shell)
+    assert done.returncode == 0, done.stderr
+    assert agents_section(setup) == {"public_url": "https://music.example.com"}
+    config = (setup.packaging / "config" / "shijhon.toml").read_text()
+    example = (REPO / "packaging" / "shijhon.example.toml").read_text()
+    assert config.startswith(example)  # the example, then the agent address
+    assert "AI agents (MCP)      https://music.example.com/shijhon/mcp" in done.stdout
+    assert "unencrypted on your network" not in done.stdout
+
+
+def test_without_an_agent_address_the_configuration_is_the_example(setup: Setup) -> None:
+    assert setup.run(*setup.answers()).returncode == 0
+    assert agents_section(setup) is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://192.168.1.20:4533",
+        "http://musicbox.local:4533",
+        "http://music.example.com:4533",  # any name: the owner's network resolves it
+        "http://[fd12:3456::1]:4533",
+    ],
+)
+def test_a_home_network_http_address_turns_on_plain_http(tmp_path: Path, url: str) -> None:
+    for shell in shells():
+        (tmp_path / shell).mkdir()
+        setup = Setup(tmp_path / shell)
+        done = setup.run(*setup.answers(), "--agent-url", url, shell=shell)
+        assert done.returncode == 0, done.stderr
+        assert agents_section(setup) == {"public_url": url, "private_http": True}
+        assert "sign-in passwords and agent tokens travel unencrypted" in done.stdout
+
+
+def test_loopback_http_needs_no_plain_http_setting(setup: Setup) -> None:
+    done = setup.run(*setup.answers(), "--agent-url", "http://127.0.0.1:4533")
+    assert done.returncode == 0, done.stderr
+    assert agents_section(setup) == {"public_url": "http://127.0.0.1:4533"}
+
+
+SHAPE = "is https:// and a host, with a port if needed, and no path"
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("music.example.com", "starts with https://"),
+        ("ftp://music.example.com", "starts with https://"),
+        ("https://music.example.com\nhttps://other.example", "cannot be typed"),
+        ("https://music.example.com\t", "cannot be typed"),
+        ("https://music.example.com/shijhon", SHAPE),
+        ("https://user@music.example.com", SHAPE),
+        ("https://music.example.com?x=1", SHAPE),
+        ("https://music.example.com:99999", SHAPE),
+        ("https://music.example.com:x", SHAPE),
+        ("https://music.example.com:", SHAPE),
+        ("https://a[b]c", SHAPE),
+        ("https://[fd12::1", SHAPE),
+        ("https://[fd12::1]x", SHAPE),
+        ("https://[zz::1]", SHAPE),
+        ("https://[1:2:3:4:5:6:7:8:9]", SHAPE),
+        ("https://[fd12::1::2]", SHAPE),
+        ("http://fd12::1", SHAPE),  # an IPv6 address needs its brackets
+        ("http://10.0.0.0.5", SHAPE),
+        ("https://256.1.1.1", SHAPE),
+        ("https://010.1.1.1", SHAPE),  # Shijhon would read 8.1.1.1
+        ("https://1.2.3", SHAPE),
+        ("http://0x7f.1", SHAPE),
+        ("http://1234", SHAPE),
+        ("http://8.8.8.8:4533", "plain http:// is only for a home network"),
+        ("http://172.32.0.1", "plain http:// is only for a home network"),
+        ("http://169.254.10.1", "plain http:// is only for a home network"),
+        ("http://[fe80::1]:4533", "plain http:// is only for a home network"),
+    ],
+)
+def test_an_agent_address_shijhon_would_refuse_stops_the_run_first(
+    setup: Setup, url: str, message: str
+) -> None:
+    from pydantic import ValidationError
+
+    from shijhon.config import AgentSettings
+
+    # Shijhon would refuse it at startup, or would use another address than the one given.
+    try:
+        taken = AgentSettings(public_url=url, private_http=True).public_url
+    except ValidationError:
+        taken = None
+    assert taken != url
+    stopped = setup.run(*setup.answers(), "--agent-url", url)
+    assert stopped.returncode == 1
+    assert message in stopped.stderr
+    assert setup.written() == {}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://music.example.com",
+        "https://music.example.com:8443",
+        "https://203.0.113.9",
+        "https://[2001:db8::1]:8443",
+        "http://10.0.0.7:4533",
+        "http://172.31.255.1:4533",
+        "http://100.101.102.103:4533",
+        "http://[fd12:3456:789a::1]:4533",
+        "http://[::1]:4533",
+        "http://localhost:4533",
+        "http://musicbox:4533",
+        "http://musicbox.home.arpa:4533",
+        "http://musicbox.internal:4533",
+    ],
+)
+def test_an_address_setup_takes_is_one_shijhon_starts_with_as_written(
+    setup: Setup, url: str
+) -> None:
+    done = setup.run(*setup.answers(), "--agent-url", url)
+    assert done.returncode == 0, done.stderr
+    section = agents_section(setup)
+    assert section is not None and section["public_url"] == url
+    from shijhon.config import AgentSettings
+
+    assert AgentSettings.model_validate(section).public_url == url
+
+
+@pytest.mark.parametrize(
+    ("url", "note"),
+    [
+        ("http://192.168.1.20", "agents will connect to port 80 of 192.168.1.20"),
+        ("http://192.168.1.20:8080", "not 8080; agents need that port"),
+        ("https://music.example.com:8443", "not 8443; agents need that port"),
+        ("http://192.168.1.20:{port}", ""),
+        ("https://music.example.com", ""),
+    ],
+)
+def test_an_agent_address_on_another_port_is_noted_not_refused(
+    setup: Setup, url: str, note: str
+) -> None:
+    done = setup.run(*setup.answers(), "--agent-url", url.format(port=setup.port))
+    assert done.returncode == 0, done.stderr
+    noted = [line for line in done.stdout.splitlines() if line.startswith("Note: ")]
+    if note:
+        assert len(noted) == 1 and note in noted[0]
+        assert f"Shijhon listens on port {setup.port} here" in noted[0]
+        assert "unless a proxy in front forwards" in noted[0]
+    else:
+        assert noted == []
+
+
+def test_a_rerun_with_the_configured_agent_address_goes_on_quietly(setup: Setup) -> None:
+    url = "https://music.example.com"
+    assert setup.run(*setup.answers(), "--agent-url", url).returncode == 0
+    before = setup.written()
+    again = setup.run("--agent-url", url + "/")
+    assert again.returncode == 0, again.stderr
+    assert "kept as it is, with" not in again.stdout
+    assert f"AI agents (MCP)      {url}/shijhon/mcp" in again.stdout
+    assert setup.written() == before
+
+
+@pytest.mark.parametrize("first", ["", "https://music.example.com"])
+def test_a_rerun_with_another_agent_address_says_where_to_change_it(
+    setup: Setup, first: str
+) -> None:
+    more = ["--agent-url", first] if first else []
+    assert setup.run(*setup.answers(), *more).returncode == 0
+    before = setup.written()
+    again = setup.run("--agent-url", "https://other.example.com")
+    assert again.returncode == 0, again.stderr
+    said = f"with {first or 'no agent address'}. To use https://other.example.com, set it on"
+    assert said in again.stdout
+    assert "Agent access page, or as public_url under [agents] in that file" in again.stdout
+    assert "AI agents (MCP)" not in again.stdout
+    assert setup.written() == before
+
+
+def converse(setup: Setup, answers: list[tuple[str, str]]) -> bytes:
+    """Run the script at a pseudo-terminal, answering each question as it comes; what it
+    showed."""
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [shutil.which("sh") or "sh", str(setup.root / "setup.sh")],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=setup.env(),
+        cwd=setup.root,
+        start_new_session=True,
+    )
+    os.close(slave)
+    seen = b""
+
+    def read_until(text: str, start: int) -> None:
+        nonlocal seen
+        deadline = time.monotonic() + 60
+        while text.encode() not in seen[start:]:
+            assert time.monotonic() < deadline, f"no {text!r} in {seen[start:]!r}"
+            if select.select([master], [], [], 0.2)[0]:
+                try:
+                    seen += os.read(master, 4096)
+                except OSError:
+                    assert text.encode() in seen[start:], seen
+                    return
+
+    try:
+        for question, reply in answers:
+            start = len(seen)
+            read_until(question, start)
+            read_until(": ", seen.index(question.encode(), start))
+            os.write(master, (reply + "\n").encode())
+        read_until("Sign in with your Navidrome account", 0)
+        assert process.wait(timeout=30) == 0, seen
+    finally:
+        process.kill()
+        os.close(master)
+    return seen
+
+
+def test_at_a_terminal_a_home_network_address_is_asked_about_first(setup: Setup) -> None:
+    """A public http:// address is asked again; a home network's is explained in one line
+    and taken only when confirmed."""
+    seen = converse(
+        setup,
+        [
+            ("Where is your music?", str(setup.music)),
+            ("A username for your own account", "yourname"),
+            ("A password for it", OWN_PASSWORD),
+            ("The password again", OWN_PASSWORD),
+            ("The port your apps connect to", str(setup.port)),
+            ("Catalog adapters to install", ""),
+            ("The address AI agents connect to", "http://8.8.8.8:4533"),
+            ("The address AI agents connect to", "http://192.168.1.20:4533"),
+            ("Use it all the same?", "no"),
+            ("The address AI agents connect to", "http://musicbox.lan:4533/"),
+            ("Use it all the same?", "yes"),
+        ],
+    )
+    assert b"plain http:// is only for a home network" in seen
+    assert seen.count(b"travel unencrypted on your network") == 2
+    assert agents_section(setup) == {
+        "public_url": "http://musicbox.lan:4533",
+        "private_http": True,
+    }
 
 
 def test_the_script_is_clean_under_shellcheck() -> None:
