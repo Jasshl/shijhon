@@ -308,6 +308,44 @@ def test_audio_below_the_minimum_is_passed_over_for_the_next_addon(
         plan(gated, False)
 
 
+def test_a_racer_refused_after_the_winner_answered_leaves_the_winner_s_file(
+    gated: Gated,
+) -> None:
+    """Racing: the second's FLAC answers first but its first bytes come late; meanwhile the
+    first's MP3 answers, and is refused (below the minimum). The FLAC plays - and the song's
+    file is the FLAC's, so a later range stays on it and is never the MP3's bytes."""
+    title = "Hazy Ember"
+    song, isrc = gated.songs[title], gated.isrcs[title]
+    mp3, flac = gated.addon.tracks[isrc], gated.second.tracks[isrc]
+    mp3.first_byte_delay, flac.body_delay = 0.3, 0.8
+    plan(gated, True)
+    try:
+        client = gated.world.client()
+        answer = client.request("stream", {"id": song})
+        assert answer.status_code == 200
+        assert digest(answer.content) == digest(gated.seconds[title])
+        assert asked(gated.addon, isrc) == 1  # (its MP3 answered, and was refused)
+        # The race noted its winner's file as the play's: the FLAC's source, size, ETag,
+        # format and bitrate.
+        deliverer = gated.world.services.deliverer
+        enabled = gated.world.server.call(gated.world.services.sources.enabled)
+        winner = next(s.id for s in enabled if s.name == gated.second.name)
+        known, link = deliverer.known(song), deliverer.pinned(song)
+        assert known is not None and link is not None and link.source.id == winner
+        assert (known.source_id, known.size, known.etag) == (
+            winner,
+            len(gated.seconds[title]),
+            answer.headers.get("etag"),
+        )
+        assert (known.kind, known.kbps) == ("flac", link.kbps)
+        part = client.request("stream", {"id": song}, headers={"range": "bytes=10-99"})
+        assert part.status_code == 206 and part.content == gated.seconds[title][10:100]
+        assert asked(gated.addon, isrc) == 1
+    finally:
+        mp3.first_byte_delay = flac.body_delay = 0.0
+        plan(gated, False)
+
+
 def test_only_a_play_the_addons_served_may_upgrade_an_import(gated: Gated) -> None:
     """After a play from the start that the add-ons served, a person's own imported song
     may be upgraded (``upgrade_after``) - and the upgrade's fetch passes audio below their

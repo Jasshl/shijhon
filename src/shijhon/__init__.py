@@ -13,7 +13,7 @@ import sys
 if importlib.util.find_spec("sniffio") is None:
     sys.modules["sniffio"] = None  # type: ignore[assignment]
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 # The author attribution and the license the dashboard's footer shows on every page, with a
 # link to the source (``delivery.netpolicy.PROJECT_URL``). They are the program's legal
 # notices: a modified version keeps them (NOTICE, the additional term under section 7(b)).

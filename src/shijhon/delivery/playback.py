@@ -83,6 +83,9 @@ _KEEPS: ContextVar[bool] = ContextVar("shijhon_keeps", default=False)
 # The request is for a listener waiting for the audio (not a download, nor a fetch for the
 # library): its add-ons may race.
 _WAITED: ContextVar[bool] = ContextVar("shijhon_waited", default=False)
+# An attempt in a play's race: its answer is not yet the play's file (``_learned``) - the
+# race's winner's is, once it has won; a loser's answer, refused or stopped, never is.
+_RACING: ContextVar[bool] = ContextVar("shijhon_racing", default=False)
 
 log = logging.getLogger(__name__)
 
@@ -552,6 +555,7 @@ class Pin:
     # (``gone``) - another add-on's audio came first, or it failed.
     watchers: list[anyio.CancelScope] | None = field(default=None, repr=False, compare=False)
     gone: bool = False
+    won: bool = False  # its race chose it: its audio came first
 
 
 @dataclass
@@ -2338,6 +2342,7 @@ class Deliverer:
             capped = cap is not None and started + self._seconds(source) - cap > CUT_SECONDS
             hint = (checks.hints() if checks is not None else {}).get(source.id)
             relinked = False
+            _RACING.set(True)  # (this task's own context: not the caller's)
             # In a play an app waits on, its requests for the song may take until the app
             # stops waiting, beyond its client's timeout: it tries many in parallel, and its
             # own time is a download's. Only until the song starts: then (its DASH join's
@@ -2434,6 +2439,7 @@ class Deliverer:
                         self._delivered(pin, opened, asked)
                         took = self.clock() - started - opened.waited
                         self._record(source, answer, True, took)
+                        pin.won = True
                         first.append((source, pin, opened))
                         for other, scope in scopes.items():
                             if other != source.id:
@@ -2598,6 +2604,11 @@ class Deliverer:
         _, pin, opened = winner
         pin.by = _TRACE.get()
         self._remember(track.song_id, pin)
+        # The play's file is the winner's - never a racer's that answered before it and was
+        # refused or stopped: its later ranges stay on it.
+        self._learned(
+            pin.song_id, Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps)
+        )
         return opened
 
     def _let_go(self, pin: Pin) -> None:
@@ -3393,10 +3404,14 @@ class Deliverer:
                 pin.kind, pin.kbps = expect.kind, expect.kbps
         if pin.content_type is None:
             pin.content_type = _content_type(response.headers.get("content-type"), pin.info)
-        self._learned(
-            pin.song_id,
-            Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps),
-        )
+        # A racer's file is the play's only once it has won - so is that of a link a race
+        # published before its audio, for another request on it (``watchers``): the race
+        # notes its winner's.
+        if not _RACING.get() and (pin.watchers is None or pin.won):
+            self._learned(
+                pin.song_id,
+                Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps),
+            )
         content_type = pin.content_type or "application/octet-stream"
         common = [(b"content-type", content_type.encode()), (b"accept-ranges", b"bytes")]
         if pin.etag:

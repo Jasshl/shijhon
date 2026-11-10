@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1
+
+- A seek or a resume after add-ons raced for a song stays on the add-on that played it.
+  Before, it could get the file of an add-on that lost the race.
+
 ## 0.6.0
 
 - The routing modes are replaced by a plan on the Add-ons page: a timeline of steps, with

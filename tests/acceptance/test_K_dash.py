@@ -706,10 +706,14 @@ def test_a_join_nobody_waits_for_ends_at_the_wait_cap_and_leaves_nothing(
         assert 3.5 < ended < 4.8  # a wait after the play gave up at the cap
         assert not [p for p in dash.folder.iterdir() if p.name.startswith(".")]  # no part
         assert len(dash._files) == kept
-        assert any(
-            line.startswith("DASH join from A ended after 4.") and "no request waiting" in line
+        # (Its own time counts from the join's start, a moment after the play's.)
+        ended_after = [
+            float(found[1])
             for line in lines
-        ), lines
+            if "no request waiting" in line
+            and (found := re.match(r"DASH join from A ended after (\d+(?:\.\d+)?)s", line))
+        ]
+        assert ended_after and all(3.5 < seconds < 4.8 for seconds in ended_after), lines
         asked = len(a.requests("segment"))
         time.sleep(0.5)
         assert len(a.requests("segment")) == asked  # nothing more asked of the add-on
