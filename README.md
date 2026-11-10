@@ -25,9 +25,12 @@ Shijhon sits in front of an unmodified [Navidrome](https://www.navidrome.org/) a
 music catalog to what your Subsonic apps see.
 
 <p>
-  <a href="docs/images/dashboard-addons-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-addons-dark.png"><img width="32%" src="docs/images/dashboard-addons-light.png" alt="The dashboard's Add-ons page: three add-ons in order, two on and one off, and the form for adding another"></picture></a>
-  <a href="docs/images/dashboard-library-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-library-dark.png"><img width="32%" src="docs/images/dashboard-library-light.png" alt="The Library page: the fill policy, the library pass's counts and an album in the review list"></picture></a>
-  <a href="docs/images/dashboard-diagnostics-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-diagnostics-dark.png"><img width="32%" src="docs/images/dashboard-diagnostics-light.png" alt="The Diagnostics page: Navidrome's status and address, and each add-on's health"></picture></a>
+  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-plan-dark.gif"><img width="100%" src="docs/images/dashboard-plan-light.gif" alt="The add-ons' plan on the dashboard: a preset arranges the add-ons in steps on a timeline, an add-on is pulled into another step, a step's time is pulled out, and a run shows which add-on usually plays"></picture>
+</p>
+
+<p>
+  <a href="docs/images/dashboard-library-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-library-dark.png"><img width="49%" src="docs/images/dashboard-library-light.png" alt="The Library page: the fill policy, the library pass's counts and an album in the review list"></picture></a>
+  <a href="docs/images/dashboard-diagnostics-light.png"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-diagnostics-dark.png"><img width="49%" src="docs/images/dashboard-diagnostics-light.png" alt="The Diagnostics page: Navidrome's status and address, and each add-on's health"></picture></a>
 </p>
 
 ## What it is
@@ -107,7 +110,7 @@ what it shows, and that API shows your library without the catalog.
 
 ## Status
 
-Shijhon is in beta (0.5.1), tested with Navidrome 0.64.2. The configuration and the
+Shijhon is in beta (0.6.0), tested with Navidrome 0.64.2. The configuration and the
 database can change between beta versions; the database migrates itself at startup, so
 keep a backup from before an upgrade. What changed is in [CHANGELOG.md](CHANGELOG.md).
 

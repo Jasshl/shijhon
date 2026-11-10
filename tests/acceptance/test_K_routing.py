@@ -1,9 +1,10 @@
-"""Suite K (continued) — ready-first routing and warm-ahead.
+"""Suite K (continued) — ready checks first, and warm-ahead.
 
-Ready-first: sources that can tell are asked "can you deliver this now?"; playback uses
-the first (in order) that says yes, otherwise goes straight to the designated reliable
-source. Nothing is streamed to find out. Sources that cannot tell, or said no, remain
-fallbacks. Optionally one source that said no is asked to prepare the track.
+Ready checks with no handover time (``ready_handover_seconds`` 0): the add-ons that can
+tell are asked "can you deliver this now?" before the plan starts; one that says yes goes
+first. Nothing is streamed to find out. Add-ons that cannot tell keep their place in the
+plan; those that said no go last. Optionally one that said no is asked to prepare the
+track.
 
 Warm-ahead: when a placeholder starts, the next placeholder tracks of the release are
 resolved in the background with the same routing - or the next songs of the client's saved
@@ -37,8 +38,8 @@ def world(
         nd,
         tmp_path_factory.mktemp("routing"),
         budget_seconds=8.0,
-        routing="ready_first",
-        reliable_source="Reliable",
+        ready_checks=True,
+        ready_handover_seconds=0.0,
         availability_timeout_seconds=1.0,
         prepare_when_not_ready=True,
         warm_ahead_depth=2,
@@ -99,15 +100,16 @@ def test_a_check_s_id_that_is_refused_is_looked_up_and_asked_for_again(
         assert sources[name].requests("stream") == [], name
 
 
-def test_nobody_ready_goes_straight_to_the_reliable_source(
+def test_nobody_ready_leaves_those_that_said_no_last(
     world: DeliveryWorld, sources: dict[str, FakeAddon]
 ) -> None:
     song, fakes, audio = world.placeholder_track("r-none", list(sources.values()))
     fakes[sources["a"]].ready = False
     fakes[sources["b"]].ready = False
     assert play(world, song) == audio.read_bytes()
-    assert sources["reliable"].requests("audio")
-    for name in ("a", "b", "unknown"):
+    # The first in the plan that did not say no: the one that cannot tell.
+    assert sources["unknown"].requests("audio")
+    for name in ("a", "b", "reliable"):
         assert sources[name].requests("stream") == [], name
     # One source that said no is asked to prepare the track for next time.
     time.sleep(0.3)
@@ -137,7 +139,9 @@ def test_a_slow_check_does_not_hold_up_playback(
     started = time.monotonic()
     assert play(world, song) == audio.read_bytes()
     assert time.monotonic() - started < 2.5
-    assert sources["reliable"].requests("audio")
+    # Its check did not answer in time: it keeps its place in the plan (the first).
+    assert sources["a"].requests("audio")
+    assert sources["b"].requests("stream") == []
 
 
 def test_warm_ahead_resolves_the_next_tracks(

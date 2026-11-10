@@ -80,8 +80,9 @@ GROUPS: dict[str, list[Group]] = {
     "delivery": [
         Group(
             "sources",
-            "Choosing an add-on",
-            "When an app plays a song you don't own, Shijhon asks your add-ons for its audio.",
+            "Songs from add-ons",
+            "When an app plays a song you don't own, Shijhon asks your add-ons for its audio,"
+            " in the plan on the Add-ons page.",
         ),
         Group(
             "bulk",
@@ -98,8 +99,8 @@ GROUPS: dict[str, list[Group]] = {
         Group("timing", "Timing", more=True),
         Group(
             "fallbacks",
-            "Fallbacks",
-            "When an add-on can't play a song, or sends another recording, the next one is asked.",
+            "Another recording",
+            "When an add-on sends another recording than the catalog's, the next one is asked.",
             more=True,
         ),
         Group(
@@ -176,30 +177,6 @@ _WRITE_ONLY = "Write-only: stored on the server and never shown."
 # The words of each setting; a section's settings appear in this order.
 META: dict[str, dict[str, Meta]] = {
     "delivery": {
-        "routing": Meta(
-            "Routing mode",
-            "In order tries the add-ons from the top of the list. Ready first picks the first"
-            " one that has the song ready. Primary first starts with the primary add-on.",
-            "sources",
-            options={
-                "ordered": "In order",
-                "ready_first": "Ready first",
-                "primary_first": "Primary first",
-            },
-        ),
-        "primary_source": Meta(
-            "Primary add-on",
-            "Asked first when the routing mode is Primary first.",
-            "sources",
-            choices="sources",
-        ),
-        "reliable_source": Meta(
-            "Preferred fallback",
-            "Ready first: used when no add-on has the song ready. Primary first: the first"
-            " fallback, until recent plays show which add-on is fastest.",
-            "sources",
-            choices="sources",
-        ),
         "bulk_downloads": Meta(
             "Songs fetched at once",
             "Whole songs fetched at the same time. More wait their turn, and playback goes"
@@ -225,10 +202,11 @@ META: dict[str, dict[str, Meta]] = {
             unit="songs",
         ),
         "budget_seconds": Meta(
-            "Time to first audio",
-            "How long a song may take to start, including one fallback. With Primary first,"
-            " the primary may use all of it and the fallbacks get their own. An add-on can"
-            " have its own time on the Add-ons page.",
+            "Default step and download time",
+            "A new step's time in the plan: how long its add-ons try before the next step's"
+            " join them (each step's time is set on the Add-ons page). It is also how long an"
+            " add-on without a time of its own has for a download or a song prepared ahead,"
+            " when nobody waits and the add-ons are asked one at a time.",
             "sources",
             cross="Must be at most the longest wait ({max_wait_seconds} s), or apps give up"
             " before an add-on has had its time.",
@@ -269,30 +247,28 @@ META: dict[str, dict[str, Meta]] = {
             cross_notice="is above the other end of the range.",
         ),
         "dash_quality_to": Meta("DASH quality: to", "", "dash", options=_QUALITIES),
-        "primary_budget_seconds": Meta(
-            "Primary's time to first audio",
-            "With Primary first: how long the primary add-on has to start the audio before"
-            " an add-on that has the song ready takes over.",
+        "ready_checks": Meta(
+            "Ask which add-ons have the song ready",
+            "Set on the Add-ons page.",
+            "timing",
+        ),
+        "ready_handover_seconds": Meta(
+            "Ready add-on takes over after",
+            "Set on the Add-ons page.",
             "timing",
         ),
         "max_wait_seconds": Meta(
             "Longest wait",
             "The most an app waits for a song's first audio, whatever the routing and the"
-            " add-ons' own times. Keep it below the apps' own timeouts.",
+            " steps' times. Keep it below the apps' own timeouts.",
             "timing",
-            cross="Must be at least the time to first audio ({budget_seconds} s), or apps give"
+            cross="Must be at least the time for a new step ({budget_seconds} s), or apps give"
             " up before an add-on has had its time.",
-            cross_notice="is below the time to first audio.",
+            cross_notice="is below the time for a new step.",
         ),
         "availability_timeout_seconds": Meta(
             "Ready check timeout",
             "How long add-ons have to answer whether they have a song ready.",
-            "timing",
-        ),
-        "reliable_lookup_after_seconds": Meta(
-            "Fallback lookup after",
-            "With Primary first: once the primary has taken this long, the likely fallback"
-            " also looks the song up, without playing it. 0: with every play.",
             "timing",
         ),
         "seek_timeout_seconds": Meta(
@@ -302,23 +278,15 @@ META: dict[str, dict[str, Meta]] = {
             "Fetch-ahead detection",
             "Some apps fetch the next songs as soon as one starts. A song requested this soon"
             " after another on the same app, and not reported as playing, counts as fetched"
-            " ahead: such songs are looked up one at a time, after the song being played has"
-            " started. 0: off.",
+            " ahead: such songs go to the plan's first add-on, one at a time, after the song"
+            " being played has started. 0: off.",
             "timing",
         ),
         "prepare_when_not_ready": Meta(
             "Prepare for next time",
-            "With Ready first: when no add-on has a song ready, one of them is asked to"
-            " prepare it for the next play.",
-            "fallbacks",
-        ),
-        "max_attempts": Meta(
-            "Attempts per play",
-            "How many add-ons get their time to start a song. With Primary first, these are"
-            " the fallbacks after the primary. An add-on that lacks the song, or fails at"
-            " once, doesn't count.",
-            "fallbacks",
-            unit="attempts",
+            "When add-ons are asked whether they have a song ready (on the Add-ons page) and"
+            " none has, one of them is asked to prepare it for the next play.",
+            "timing",
         ),
         "length_tolerance_seconds": Meta(
             "Length difference allowed",
@@ -347,30 +315,28 @@ META: dict[str, dict[str, Meta]] = {
             "cooldown",
             unit="errors",
         ),
-        "primary_cooldown_timeouts": Meta(
+        "cooldown_timeouts": Meta(
             "Timeouts before cooldown",
-            "The primary add-on cools down after this many timeouts with no audio delivered"
-            " in between.",
+            "An add-on cools down after this many timeouts with no audio delivered in"
+            " between, and again after each further one until it delivers.",
             "cooldown",
             unit="timeouts",
         ),
-        "primary_cooldown_switches": Meta(
-            "Switches before cooldown",
-            "It also cools down after another add-on that had the song ready has taken over"
-            " from it this many times.",
+        "slow_after": Meta(
+            "Slow after",
+            "An add-on still trying when another one has sent the song counts as slow, toward"
+            " its cooldown, once it is past its step's time and this many times its usual time"
+            " to first audio. An add-on with no usual time yet is slow once it is past its"
+            " step's time. The last step, which has no time of its own, counts the default"
+            " step and download time as its time."
+            " Each add-on can have its own value in its settings.",
             "cooldown",
-            unit="switches",
+            unit="times usual",
+            spoken="times its usual time",
         ),
-        "primary_miss_hours": Meta(
-            "Songs the primary lacks",
-            "A song the primary add-on didn't have isn't asked of it again for this long. 0: off.",
-            "cooldown",
-        ),
-        "primary_release_miss_minutes": Meta(
-            "Albums the primary lacks",
-            "When the primary lacks one song of an album, the album's other songs are also"
-            " looked up at the fallback right away, for this long. The primary still starts"
-            " first. 0: off.",
+        "miss_hours": Meta(
+            "Songs an add-on lacks",
+            "A song an add-on didn't have isn't asked of it again for this long. 0: off.",
             "cooldown",
         ),
         "retry_skip_seconds": Meta(
@@ -510,7 +476,11 @@ META: dict[str, dict[str, Meta]] = {
             "joining",
         ),
         "request_timeout_seconds": Meta(
-            "Add-on request timeout", "How long one request to an add-on may take.", "advanced"
+            "Add-on request timeout",
+            "How long one request to an add-on may take outside a play, or as long as the"
+            " add-on's time for a download when that is longer. In a song's start an app waits"
+            " for, the add-on's requests for the song may take until the app stops waiting.",
+            "advanced",
         ),
         "pin_ttl_seconds": Meta(
             "Link reuse",

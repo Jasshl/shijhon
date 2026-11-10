@@ -61,8 +61,8 @@ limits. Of several tracks that match:
 - HTTP 503 with a valid `Retry-After` (seconds or an HTTP date; any body) means "not ready
   yet": the add-on is preparing the audio. At `/stream/{id}`, Shijhon asks again after
   that time (half a second at least), as often as the add-on's time for the song allows
-  (its `budget_seconds` or its share of the play's budget, and the app's wait,
-  `max_wait_seconds`). When the time named is longer than what is left, it stops asking.
+  (in a play the app's wait, `max_wait_seconds`; for a download its `budget_seconds` or
+  its share of the routing's time). When the time named is longer than what is left, it stops asking.
   This is no error: it counts toward no cooldown, and a retry of the song, or a routing
   that continues it, asks that add-on again. An attempt that waited until its time ran
   out counts as a timeout; one whose first answer named more time than was left moves on
@@ -298,10 +298,10 @@ Shijhon's own, optional. An add-on that lists the resource `availability` answer
 `GET /availability?isrc=…&title=…&artist=…&durationMs=…` with
 `{"available": true | false | null, "id": "<its track ID>", "preparing": false}`: whether
 it can deliver this recording now (`null`: it cannot tell). The
-check must be quick and change nothing. Shijhon asks only with the routings
-`primary_first` and `ready_first`. With `ready_first` and `prepare_when_not_ready` on,
-when no add-on has the song ready, it adds `prepare=true` to ask one that said no to
-prepare the recording for next time.
+check must be quick and change nothing. Shijhon asks only with `[delivery] ready_checks`
+on, for a song someone plays. With `prepare_when_not_ready` also on, when no add-on has
+the song ready, it adds `prepare=true` to ask one that said no to prepare the recording
+for next time.
 
 This extension reports ordinary readiness. It does not bind a cached quality or forbid
 preparation when `/stream/{id}` is later requested. A ready ID can be looked up again if
@@ -398,14 +398,14 @@ playing, but not saves that come one by one as streams: those look like plays.
   and the link; three when the ISRC lookup finds nothing and the add-on has `/resolve` or a
   search) and one request for the audio, more when the listener seeks or the app asks in
   ranges.
-- With `primary_first` or `ready_first`, an add-on with the availability extension that is
-  not the one asked first gets one check for every song routed. A check that names the
-  track saves the lookup.
+- With `ready_checks`, an add-on with the availability extension that is not in the
+  plan's first step gets one check for every song played. A check that names the track
+  saves the lookup.
+- An add-on in a step with others is asked for every song that reaches that step, also
+  when another one's audio comes first; its request is then stopped.
 - While a song plays, the next two are routed the same way (warm-ahead: the same requests,
   and the first bytes of the audio).
-- An add-on that fails or lacks a song gets the requests up to that point. With
-  `primary_first`, the likely next add-on is looked up (no link) once the first one's
-  lookup takes longer than half a second.
+- An add-on that fails or lacks a song gets the requests up to that point.
 - The manifest is read once after a start or a change of the add-on list, and when someone
   looks at the dashboard's Add-ons or Diagnostics page (at most once a minute).
   Catalog's **Check now** also reads it again. A confirmed full-catalog add-on additionally

@@ -616,3 +616,47 @@ def test_a_wait_for_another_request_s_answer_counts_what_overlapped(
     mine = pacing.Waits()
     mine.shared(reader, joined)
     assert mine.at is None and mine.seconds == pytest.approx(0.02)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("left", [None, 0.5, 20.0])
+async def test_a_play_lengthens_only_a_request_s_read_time(left: float | None) -> None:
+    """Within a play's longer time (``lasting``), a request to an add-on may wait longer
+    for its answer, never for its connection: a host that takes none fails as soon as
+    ever. A time shorter than the client's own changes nothing."""
+    import httpx
+
+    seen: list[dict[str, float]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions["timeout"])
+        return httpx.Response(200, content=b"ok")
+
+    async def turn(url: httpx.URL) -> None:
+        return None
+
+    timeout = httpx.Timeout(1.0, pool=2.0)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle), timeout=timeout) as http:
+        with pacing.lasting(None if left is None else (lambda: left)):
+            request = http.build_request("GET", "https://addon.example.invalid/stream")
+            response = await pacing.send(http, request, turn=turn)
+            await response.aclose()
+    read = 20.0 if left == 20.0 else 1.0
+    assert seen == [{"connect": 1.0, "read": read, "write": 1.0, "pool": 2.0}]
+
+
+@pytest.mark.anyio
+async def test_a_join_s_background_work_has_the_clients_own_timeouts() -> None:
+    """Work a play's DASH join spawns copies the play's context: run in the background, it
+    leaves the play's longer time behind (its requests have the clients' own timeouts)."""
+    from shijhon.delivery.dash import _background
+
+    inside: list[object] = []
+
+    async def work() -> None:
+        inside.append(pacing._LEFT.get())
+
+    with pacing.lasting(lambda: 20.0):
+        await _background(work)()
+        assert pacing._LEFT.get() is not None
+    assert inside == [None]

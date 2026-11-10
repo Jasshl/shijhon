@@ -77,9 +77,9 @@ on its Cleanup page.
 
 | Setting | What it sets |
 |---|---|
-| `routing` (`ordered`), `primary_source`, `reliable_source` | How an add-on is picked for a song ([add-ons.md](add-ons.md#routing)); the two names are add-ons' names |
-| `budget_seconds` (9) | The time allowed until audio starts, including one fallback. With `primary_first` the primary may use all of it, and the fallbacks get a budget of their own. An add-on can have its own |
-| `max_wait_seconds` (30) | The longest an app waits for the first audio, all tries together. At least `budget_seconds`; keep it below the apps' own timeouts |
+| `budget_seconds` (9) | A new step's time in the plan: how long its add-ons try before the next step's join them ([the plan](add-ons.md#the-plan)); also an add-on's time for a download or a song prepared ahead, for one without its own |
+| `ready_checks` (false), `ready_handover_seconds` (4.5) | Ask the add-ons that can tell whether they have a song ready; one that has joins a song without audio after this long (0: it goes first). Set on the Add-ons page |
+| `max_wait_seconds` (30) | The longest an app waits for the first audio, all steps together: the add-ons asked keep trying until then. At least `budget_seconds`; keep it below the apps' own timeouts |
 | `keep_streamed_audio` (false) | A song whose whole audio Shijhon received while an app streamed it replaces its silent placeholder, as downloaded audio does ([how it works](how-it-works.md#placeholders)). Nothing more is fetched to finish a song: one skipped before Shijhon had all of it is not kept. Applies at once |
 | `delivered_days` (30), `delivered_gb` (10) | After this many days unused, downloaded or kept audio is replaced by its silent placeholder again. Once all of it together is larger than this size, the least recently used is replaced first. 0: no age limit, or no size limit; with both 0 it is kept for good |
 | `quality_default` (`"192"`) | The lowest quality listeners hear from a file unless they chose their own on their Audio quality page ([below](#audio-quality)): `"128"`, `"160"`, `"192"`, `"256"` or `"320"` - compressed audio (MP3, AAC, Opus...) needs at least that many kbit/s, lossless audio (FLAC, ALAC...) is accepted at any bitrate, and both need 44.1 kHz - or `"lossless"` (lossless audio only, 44.1 kHz or more) or `"any"` (no check). Applies at once |

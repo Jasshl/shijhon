@@ -2,9 +2,15 @@
 
 Each add-on has a name, which people see and may change, and a key (``addon_key``), given
 when it is added and never changed: its catalog's items are tagged with the key, and
-references to its catalog name it. Settings that name an add-on (the catalog's add-on, the
-primary add-on, the preferred fallback) name it by its name: a rename on the dashboard
-changes them with it."""
+references to its catalog name it. The setting that names an add-on (the catalog's add-on)
+names it by its name: a rename on the dashboard changes it with it.
+
+The plan: the add-ons are asked in their order, in steps (``step``: add-ons next to each
+other in the list, among those asked for audio, with one step start together - one that
+is off or a catalog only between them does not part them); an add-on's ``step_seconds`` is
+its step's time (its add-ons share one): when the next step's add-ons join a play's start.
+Its ``budget_seconds`` is its time when nobody waits (a download, a song prepared ahead),
+asked alone; ``slow_after`` its own measure of slow (times its usual time)."""
 
 from __future__ import annotations
 
@@ -30,6 +36,7 @@ from shijhon.store import Store
 log = logging.getLogger(__name__)
 
 RECENT_ATTEMPTS = 50  # a source's attempts kept for ordering the fallbacks
+USUAL_STARTS = 20  # an add-on's usual time is the middle of its latest starts' with audio
 MEASURED_SECONDS = 7 * 86400.0  # ... within this age
 SAVE_SECONDS = 60.0  # attempts are written to the database this often (and at a stop)
 MAX_UNSAVED = 5000  # attempts kept for the next write while the database refuses them
@@ -65,10 +72,17 @@ class SourceStats:
     # Of those, errors (an HTTP 5xx, no answer, a broken answer): the source's cooldown.
     errors_since_success: int = 0
     last_error_at: float = float("-inf")  # monotonic: errors far apart are not one run
-    timeouts_since_delivery: int = 0  # as the primary source
-    switches_since_delivery: int = 0  # plays switched away from it as the primary
-    # Its recent attempts: the fallbacks are ordered by them.
+    timeouts_since_delivery: int = 0  # timeouts in a row: its cooldown
+    # Its recent attempts (Add-ons and Diagnostics show them).
     recent: deque[Attempt] = field(default_factory=lambda: deque(maxlen=RECENT_ATTEMPTS))
+
+
+def usual_seconds(stats: SourceStats | None) -> float | None:
+    """An add-on's usual time to first audio: the middle of its latest starts' that sent
+    audio (``USUAL_STARTS``); None: none of them did."""
+    recent = list(stats.recent)[-USUAL_STARTS:] if stats is not None else []
+    times = sorted(attempt.seconds for attempt in recent if attempt.delivered)
+    return times[len(times) // 2] if times else None
 
 
 @dataclass(frozen=True)
@@ -91,6 +105,9 @@ class StoredSource:
     # The ``id`` its manifest named when the enabled add-on read it (None: not yet).
     identity: str | None = None
     key: str = ""  # fixed when it was added (``addon_key``): its catalog's identity
+    step: int = 0  # its step of the plan (add-ons next to each other with one start together)
+    step_seconds: float | None = None  # its step's time; None: the installation's
+    slow_after: float | None = None  # its own "slow after"; None: the installation's
 
 
 @dataclass
@@ -102,13 +119,18 @@ class Source:
     addon: Addon
     http: httpx.AsyncClient
     stats: SourceStats = field(default_factory=SourceStats)
-    # Own byte-zero budget, e.g. for a worker that prepares complete files; None:
-    # the global budget applies.
+    # Its own time for a download (nobody waits: asked alone), e.g. for a worker that
+    # prepares complete files; None: the installation's applies.
     budget: float | None = None
     downloads: int | None = None
     preparations: int | None = None
     capacity_group: str = ""
     key: str = ""  # fixed when it was added (``addon_key``): its catalog's identity
+    # Its step of the plan: add-ons next to each other (among those asked for audio) with
+    # one step start together.
+    step: int = 0
+    step_seconds: float | None = None  # its step's time; None: the installation's
+    slow_after: float | None = None  # its own "slow after"; None: the installation's
 
     @property
     def pace(self) -> AddonPace | None:
@@ -178,10 +200,13 @@ class SourceRegistry:
         preparations: int | None = None,
         capacity_group: str = "",
         unique_name: bool = False,
+        step: int | None = None,
+        step_seconds: float | None = None,
+        slow_after: float | None = None,
         also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> int:
-        if budget_seconds is not None and not 0 < budget_seconds <= 600:
-            raise ValueError("budget_seconds must be between 0 and 600")
+        """``step``: its step of the plan (default: a new last step)."""
+        _times(budget_seconds, step_seconds, slow_after)
         own = _checked(limits or Limits())
         _capacity(downloads, preparations, capacity_group)
         async with self.store.transaction() as conn:
@@ -192,12 +217,16 @@ class SourceRegistry:
             cursor = await conn.execute("SELECT COALESCE(MAX(position), 0) + 1 AS p FROM sources")
             row = await cursor.fetchone()
             position = int(row["p"]) if row else 1
+            if step is None:
+                cursor = await conn.execute("SELECT COALESCE(MAX(step), 0) + 1 AS s FROM sources")
+                found = await cursor.fetchone()
+                step = int(found["s"]) if found else 1
             key = await _free_key(conn, name)
             cursor = await conn.execute(
                 "INSERT INTO sources (name, key, base_url, settings, enabled, position, reach,"
                 " budget_seconds, requests_per_second, request_burst, audio_openings, created_at,"
-                " downloads, preparations, capacity_group)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " downloads, preparations, capacity_group, step, step_seconds, slow_after)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     name,
                     key,
@@ -214,6 +243,9 @@ class SourceRegistry:
                     downloads,
                     preparations,
                     capacity_group.strip(),
+                    step,
+                    step_seconds,
+                    slow_after,
                 ],
             )
             source_id = cursor.lastrowid or 0
@@ -239,6 +271,11 @@ class SourceRegistry:
         capacity_group: str | None = None,
         clear_downloads: bool = False,
         clear_preparations: bool = False,
+        step: int | None = None,
+        step_seconds: float | None = None,
+        clear_step_seconds: bool = False,
+        slow_after: float | None = None,
+        clear_slow_after: bool = False,
         also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> None:
         """Change a source's configuration (the dashboard's edit). ``name``: another name -
@@ -249,8 +286,7 @@ class SourceRegistry:
         writes what must be saved with it or not at all, in the same transaction (the
         dashboard's marks of which settings may be shown: a secret is never stored without
         its mark; the settings that name a renamed add-on)."""
-        if budget_seconds is not None and not 0 < budget_seconds <= 600:
-            raise ValueError("budget_seconds must be between 0 and 600")
+        _times(budget_seconds, step_seconds, slow_after)
         changes: dict[str, object] = {}
         _capacity(downloads, preparations, capacity_group or "")
         if downloads is not None or clear_downloads:
@@ -274,6 +310,12 @@ class SourceRegistry:
             changes["budget_seconds"] = budget_seconds
         if name is not None:
             changes["name"] = name
+        if step is not None:
+            changes["step"] = step
+        if step_seconds is not None or clear_step_seconds:
+            changes["step_seconds"] = step_seconds
+        if slow_after is not None or clear_slow_after:
+            changes["slow_after"] = slow_after
         if changes or also is not None:
             assignments = ", ".join(f"{column} = ?" for column in changes)
             async with self.store.transaction() as conn:
@@ -344,6 +386,47 @@ class SourceRegistry:
                 await also(conn)
         await self.invalidate()
 
+    async def arrange(
+        self,
+        steps: Sequence[tuple[Sequence[int], float]],
+        *,
+        also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
+    ) -> None:
+        """Save the plan: its steps in order, each with its add-ons and its time (each
+        add-on's ``step_seconds``). Its add-ons take the places in the list of the add-ons
+        it has, in its order; the others (catalog-only add-ons) keep theirs."""
+        listed = [source_id for ids, _ in steps for source_id in ids]
+        if len(set(listed)) != len(listed):
+            raise ValueError("an add-on is in two steps")
+        for _, seconds in steps:
+            if not 0 < seconds <= 600:
+                raise ValueError("a step's time must be between 0 and 600 seconds")
+        async with self.store.transaction() as conn:
+            async with conn.execute("SELECT id FROM sources ORDER BY position, id") as cursor:
+                every = [int(row["id"]) for row in await cursor.fetchall()]
+            if set(listed) - set(every):
+                raise ValueError("an add-on in the plan is not in the list")
+            chosen, placed = set(listed), iter(listed)
+            order = [next(placed) if source_id in chosen else source_id for source_id in every]
+            step_of = {i: (n, seconds) for n, (ids, seconds) in enumerate(steps, 1) for i in ids}
+            last = len(steps)
+            for position, source_id in enumerate(order, start=1):
+                if source_id in step_of:
+                    step, seconds = step_of[source_id]
+                    await conn.execute(
+                        "UPDATE sources SET position = ?, step = ?, step_seconds = ? WHERE id = ?",
+                        [position, step, seconds, source_id],
+                    )
+                else:  # (a step of its own, after the plan's, should it supply audio)
+                    last += 1
+                    await conn.execute(
+                        "UPDATE sources SET position = ?, step = ? WHERE id = ?",
+                        [position, last, source_id],
+                    )
+            if also is not None:
+                await also(conn)
+        await self.invalidate()
+
     async def remove(
         self,
         source_id: int,
@@ -374,8 +457,9 @@ class SourceRegistry:
         existing = _holders(rows)
         keyed = {row.key: row for row in rows}
         named = {addon.name for addon in addons}
-        order = []
+        order: list[int] = []
         renames: list[tuple[str, str]] = []
+        steps = _file_steps(addons)
         for addon in addons:
             reach = Reach(addon.reach)
             base_url = addon.base_url.get_secret_value()
@@ -411,6 +495,9 @@ class SourceRegistry:
                     downloads=addon.downloads,
                     preparations=addon.preparations,
                     capacity_group=addon.capacity_group,
+                    step=steps[len(order)],
+                    step_seconds=addon.step_seconds,
+                    slow_after=addon.slow_after,
                 )
             else:
                 await self.update(
@@ -426,19 +513,26 @@ class SourceRegistry:
                     capacity_group=addon.capacity_group,
                     clear_downloads=addon.downloads is None,
                     clear_preparations=addon.preparations is None,
+                    step=steps[len(order)],
+                    step_seconds=addon.step_seconds,
+                    clear_step_seconds=addon.step_seconds is None,
+                    slow_after=addon.slow_after,
+                    clear_slow_after=addon.slow_after is None,
                 )
                 await self.set_enabled(source_id, True)
             order.append(source_id)
         others = [row.id for row in rows if row.id not in order]
-        for source_id in others:
-            await self.set_enabled(source_id, False)
+        for offset, source_id in enumerate(others, start=1):  # (off, after the list)
+            await self.update(source_id, step=len(addons) + offset)
+        if others:
+            await self.set_enabled_many(dict.fromkeys(others, False))
         await self.reorder(order + others)
         await self.stored()  # (the keys by name, as the list is now)
         return renames
 
     async def differs(self, addons: Sequence[AddonSettings]) -> list[str]:
         """What ``sync`` would change: "the list" (other add-ons on, or another order) and
-        the names of the add-ons whose address, network, settings, budget or limits differ
+        the names of the add-ons whose address, network, settings, times or limits differ
         (never their values). Empty: the stored list is the configuration's."""
         stored = await self.stored()
         found: list[str] = []
@@ -446,6 +540,16 @@ class SourceRegistry:
             found.append("the list")
         holders = _holders(stored)
         first = {source.name: source for source in stored if holders[source.name] == source.id}
+        # The file's steps: add-ons that start together (``with_previous``) share one.
+        listed = [first.get(addon.name) for addon in addons]
+        steps = _file_steps(addons)
+        for index in range(1, len(listed)):
+            kept, before = listed[index], listed[index - 1]
+            if kept is None or before is None:
+                continue
+            if (kept.step == before.step) != (steps[index] == steps[index - 1]):
+                found.append("the steps")
+                break
         for addon in addons:
             kept = first.get(addon.name)
             if kept is not None and (
@@ -453,6 +557,8 @@ class SourceRegistry:
                 or kept.reach != Reach(addon.reach)
                 or kept.settings != addon.settings
                 or kept.budget != addon.budget_seconds
+                or kept.step_seconds != addon.step_seconds
+                or kept.slow_after != addon.slow_after
                 or kept.limits != _configured(addon)
                 or kept.downloads != addon.downloads
                 or kept.preparations != addon.preparations
@@ -484,12 +590,13 @@ class SourceRegistry:
         """Enabled sources in the user's order (connections are reused between calls)."""
         async with self._rebuild:
             if self._sources is None:
-                rows = await self.store.fetchall(
+                every = await self.store.fetchall(
                     "SELECT id, name, key, base_url, settings, position, reach, budget_seconds,"
                     " requests_per_second, request_burst, audio_openings, downloads,"
-                    " preparations, capacity_group"
+                    " preparations, capacity_group, step, step_seconds, slow_after"
                     " FROM sources WHERE enabled = 1 ORDER BY position, id"
                 )
+                rows = every
                 # Each add-on's limits: its own over the installation's.
                 self._limited = [(row["base_url"], _limits(row)) for row in rows]
                 self.paces.apply(self._limited)
@@ -514,7 +621,7 @@ class SourceRegistry:
                     sources[row["id"]] = Source(
                         row["id"], row["name"], row["position"], reach, addon, http, stats,
                         budget, row["downloads"], row["preparations"], row["capacity_group"],
-                        row["key"],
+                        row["key"], row["step"], row["step_seconds"], row["slow_after"],
                     )  # fmt: skip
                 self._sources = self._listed = sources
             return sorted(self._sources.values(), key=lambda s: (s.position, s.id))
@@ -527,7 +634,7 @@ class SourceRegistry:
 
     def cooling(self, source_id: int) -> bool:
         """Whether the routing passes the source over now: it cools down (errors in a row,
-        a slow primary), or it is left alone after a rate limit."""
+        timeouts), or it is left alone after a rate limit."""
         return self._cooling_for(source_id) > 0
 
     def _cooling_for(self, source_id: int) -> float:
@@ -553,7 +660,7 @@ class SourceRegistry:
         sql = (
             "SELECT id, name, key, base_url, settings, enabled, position, reach, budget_seconds,"
             " requests_per_second, request_burst, audio_openings, downloads,"
-            " preparations, capacity_group"
+            " preparations, capacity_group, step, step_seconds, slow_after"
             " FROM sources ORDER BY position, id"
         )
         if conn is None:
@@ -583,6 +690,9 @@ class SourceRegistry:
                     row["capacity_group"],
                     self.paces.identity(row["base_url"]) if row["enabled"] else None,
                     row["key"],
+                    int(row["step"]),
+                    row["step_seconds"],
+                    row["slow_after"],
                 )
             )
         holders = _holders(found)
@@ -654,6 +764,7 @@ class SourceRegistry:
         source.stats.last_latency = latency
         source.stats.last_success_at = time.time()
         source.stats.failures_since_success = source.stats.errors_since_success = 0
+        source.stats.timeouts_since_delivery = 0  # a delivery ends its run of timeouts
 
     def failed(self, source: Source, reason: str) -> None:
         source.stats.failures += 1
@@ -804,3 +915,25 @@ def _checked(limits: Limits) -> Limits:
         None if burst is None else int(burst),
         None if openings is None else int(openings),
     )
+
+
+def _file_steps(addons: Sequence[AddonSettings]) -> list[int]:
+    """The steps of the file's list: a new one for each add-on, the one before's for an add-on
+    that starts together with it (``with_previous``)."""
+    steps: list[int] = []
+    for addon in addons:
+        if steps and addon.with_previous:
+            steps.append(steps[-1])
+        else:
+            steps.append(steps[-1] + 1 if steps else 1)
+    return steps
+
+
+def _times(budget: float | None, step: float | None, slow_after: float | None) -> None:
+    """An add-on's own times, as the configuration allows them."""
+    if budget is not None and not 0 < budget <= 600:
+        raise ValueError("budget_seconds must be between 0 and 600")
+    if step is not None and not 0 < step <= 600:
+        raise ValueError("step_seconds must be between 0 and 600")
+    if slow_after is not None and not 1 <= slow_after <= 10:
+        raise ValueError("slow_after must be between 1 and 10")

@@ -29,8 +29,9 @@
   index it (the pinned macOS build). Downloads still put only FLAC, M4A, MP3, Opus and
   Ogg Vorbis in place. A catalog song streamed before it is in the library is kept
   only when it is added within half an hour.
-- With `primary_first`, a song an app fetches ahead is served only by the primary: while
-  the primary is down that fetch fails, and the song starts cold when played.
+- A song an app fetches ahead goes to the plan's first add-on that can be asked: when it
+  cannot serve the song, the fetch is routed one add-on at a time, and one that waited out
+  its turn fails, so the song starts cold when played.
 - A stream keeps the add-on connections it started with until the next change of the
   add-on settings more than `pin_ttl_seconds` later, or until Shijhon stops.
 - A `HEAD` of a song without a link takes one of the user's lookup turns, so an app that

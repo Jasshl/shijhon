@@ -1,30 +1,27 @@
-"""Suite K (continued) - plays the primary cannot serve.
+"""Suite K (continued) - plays the plan's first add-on cannot serve.
 
-Under primary-first routing, after the primary's miss:
+A plan of four steps (Primary, Reliable, Checker, Preparer), with ready checks; after the
+first add-on's miss:
 
-- the reliable source gets the whole byte-zero budget when the next possible attempt is a
-  source with its own budget (it takes no share of the common one);
-- sources that said they cannot deliver the recording now are tried last (a stream there
+- each later step has its whole time (a step's own, or the common one), whatever the
+  steps before it took, and the add-ons asked before keep trying beside it;
+- add-ons that said they cannot deliver the recording now are tried last (a stream there
   most likely fails, and can start a preparation job);
-- the primary's miss is remembered for the recording (later requests go to the other
-  sources at once) and for its release for a while: for its other songs the primary still
-  starts at once, as on an ordinary play - a source that has the song ready takes over after
-  the primary's short budget - and the likely fallback is looked up from the start; the
-  reliable source then has a fresh budget (settings, 0: off);
-- the reliable source is looked up (never streamed) while the primary's lookup has not
-  answered within a moment, never when it answers in time;
+- an add-on's miss is remembered for the recording (later requests go to the other
+  add-ons at once) for a while (a setting, 0: off) - not for its release: another song of
+  it is asked of it as usual;
 - a request that waited while another request's routing of the same song failed gets
   that answer at once instead of repeating the routing;
 - a play that ends without audio is logged with the reason and each step's source and
-  time, also when the client left before its first byte; a play a fallback served is
+  time, also when the client left before its first byte; a play a later step served is
   logged with the steps before it.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
-import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -41,7 +38,7 @@ from tests.harness.fake_addon import FakeAddon, FakeTrack
 
 CHECKS = ("stream", "isrc", "availability")
 BUDGET = 3.0
-OWN_BUDGET = 6.0  # the preparing source's own budget
+OWN_BUDGET = 6.0  # the preparing source's own times (its step's and a download's)
 
 
 @pytest.fixture(scope="module")
@@ -52,10 +49,8 @@ def world(
         navidrome_factory(),
         tmp_path_factory.mktemp("fallbacks"),
         budget_seconds=BUDGET,
-        routing="primary_first",
-        primary_source="Primary",
-        primary_budget_seconds=1.0,
-        reliable_source="Reliable",
+        ready_checks=True,
+        ready_handover_seconds=1.0,
         availability_timeout_seconds=0.5,
         max_wait_seconds=12.0,
         warm_ahead_depth=0,
@@ -74,7 +69,8 @@ def sources(world: DeliveryWorld) -> Iterator[dict[str, FakeAddon]]:
         "preparer": world.addon("Preparer"),
     }
     for name, addon in addons.items():
-        world.add_source(addon, budget_seconds=OWN_BUDGET if name == "preparer" else None)
+        own = OWN_BUDGET if name == "preparer" else None
+        world.add_source(addon, budget_seconds=own, step_seconds=own)
     yield addons
     world.clear_sources()
 
@@ -83,7 +79,6 @@ def _forget_misses(world: DeliveryWorld):  # type: ignore[no-untyped-def]
     async def forget() -> None:
         deliverer = world.services.deliverer
         deliverer._misses.clear()
-        deliverer._release_misses.clear()
         deliverer._failed.clear()
 
     return forget
@@ -135,21 +130,28 @@ def missing_at_primary(
     return songs, fakes, audio
 
 
-def plan_names(line: str) -> list[str]:
-    """The sources of a routing's plan line, in order (each shown with its seconds a song
-    and its check's answer)."""
-    return re.findall(r"(?:plan |\), )([^(]+?) \(", line)
-
-
 def lines_with(lines: list[str], prefix: str) -> list[str]:
     return [line for line in lines if line.startswith(prefix)]
 
 
-def test_the_reliable_source_gets_the_whole_budget_when_the_next_has_its_own(
+@contextlib.contextmanager
+def waiting(world: DeliveryWorld, seconds: float) -> Iterator[None]:
+    """Apps wait ``seconds`` for a song's first audio (an add-on asked keeps trying until
+    then)."""
+    settings = world.services.deliverer.settings
+    before = settings.max_wait_seconds
+    settings.max_wait_seconds = seconds
+    try:
+        yield
+    finally:
+        settings.max_wait_seconds = before
+
+
+def test_a_later_step_has_its_whole_time(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
-    """More than half of the budget: it used to get half, keeping the rest for a fallback
-    that brings its own."""
+    """The reliable source's step has the whole common time (its link takes most of
+    it), whatever the step before it took and the next one's own time."""
     [song], fakes, [audio] = missing_at_primary(world, "whole-budget", sources)
     fakes["reliable"][0].resolve_delay = BUDGET * 0.7
     fakes["checker"][0].ready = False
@@ -165,7 +167,7 @@ def test_sources_that_said_not_now_come_last(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     [song], fakes, [audio] = missing_at_primary(world, "not-now", sources)
-    fakes["reliable"][0].resolve_delay = BUDGET + 1  # times out
+    fakes["reliable"][0].resolve_delay = BUDGET + 1  # slower than its step
     fakes["checker"][0].ready = False
     fakes["checker"][0].stream_status = 503  # a stream there fails (and may start a job)
     response = play(world, song)
@@ -173,35 +175,41 @@ def test_sources_that_said_not_now_come_last(
     assert sources["checker"].requests("stream") == []  # never streamed
     assert sources["preparer"].requests("stream")
     [line] = lines_with(playback_log, "playing 'Title not-now Song 1' from Preparer")
-    assert "Reliable: timeout" in line
+    # It kept trying beside the next step, and was slow when that one's audio came.
+    assert "Reliable: stopped after" in line and "slow: counted" in line
 
 
 def test_a_play_that_ends_without_audio_is_logged_with_its_steps(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     [song], fakes, _ = missing_at_primary(world, "no-audio", sources)
-    fakes["reliable"][0].resolve_delay = BUDGET + 1
+    # It is slow, then fails (4 s, an error), after the checker, which said not now, joined
+    # once the preparer's step had ended - all before the wait ends.
+    fakes["reliable"][0].resolve_delay = 4.0
+    fakes["reliable"][0].stream_status = 502
     fakes["checker"][0].ready = False
     fakes["checker"][0].stream_status = 503
     fakes["preparer"][0].available = False
+    wait = 2 * BUDGET + 1
     started = time.monotonic()
-    response = play(world, song)
+    with waiting(world, wait):
+        response = play(world, song)
     took = time.monotonic() - started
     body = response.json()["subsonic-response"]
     assert body["status"] == "failed" and "audio unavailable" in body["error"]["message"]
-    assert took < BUDGET + 1.5  # fails fast: the reliable source's budget, then nothing
+    assert took < 4.0 + 1.0  # the reliable source kept trying until it failed
     [line] = lines_with(playback_log, "no audio for 'Title no-audio Song 1' (play) after ")
     assert ": no source delivered; " in line
     for step in (
         "Primary: not available",
         "checks",
         "Checker not now",
-        "Reliable: timeout",
+        "Reliable: add-on error (HTTP 502)",
         "Preparer: not available",
-        "Checker: no time left",  # said not now: last, and never streamed
+        "Checker: ",  # said not now: last
     ):
         assert step in line, step
-    assert sources["checker"].requests("stream") == []
+    assert line.index("Preparer: not available") < line.rindex("Checker: ")
 
 
 def test_a_rejected_resolve_match_is_named(
@@ -221,7 +229,7 @@ def test_a_rejected_resolve_match_is_named(
     assert "Primary: not available (a match was rejected: its length differs)" in line
 
 
-def test_the_primary_s_miss_is_remembered_for_the_recording_and_its_release(
+def test_a_miss_is_remembered_for_the_recording_and_not_its_release(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     songs, _, audio = missing_at_primary(world, "remembered", sources, count=3)
@@ -231,35 +239,22 @@ def test_the_primary_s_miss_is_remembered_for_the_recording_and_its_release(
     world.server.call(lambda: _forget_pin(world, songs[0]))
     assert play(world, songs[0]).content == audio[0]  # the recording: remembered
     assert len(sources["primary"].requests("resolve-isrc")) == asked
-    # Its release: a hint - the primary's own attempt at once, before the reliable
-    # source; its miss of this song is remembered too.
+    routing = world.services.deliverer.recent[-1]
+    assert "Primary: did not have it (remembered)" in routing.steps
+    # Another song of its release: asked as usual.
     assert play(world, songs[1]).content == audio[1]
     assert len(sources["primary"].requests("resolve-isrc")) == asked + 1
     asked += 1
-    assert lines_with(playback_log, "primary-first 'Title remembered Song 1': Primary did not"
-                      " have it (remembered); plan Reliable")  # fmt: skip
-    [second] = lines_with(playback_log, "primary-first 'Title remembered Song 2': Primary: not"
-                          " available; plan ")  # fmt: skip
-    assert plan_names(second) == ["Reliable", "Checker", "Preparer"]
-    [hinted] = lines_with(playback_log, "playing 'Title remembered Song 2' from Reliable")[:1]
-    assert "lacks a song of its release (remembered)" in hinted
-    world.server.call(lambda: _forget_pin(world, songs[1]))
-    assert play(world, songs[1]).content == audio[1]  # now its own miss: not asked again
-    assert len(sources["primary"].requests("resolve-isrc")) == asked
-    # Without the primary (its own miss of song 2 now), the reliable source was looked up
-    # while the checks ran.
-    served = lines_with(playback_log, "playing 'Title remembered Song 2' from Reliable")[-1]
-    assert "Reliable: looked up meanwhile" in served and "Reliable: lookup 0.0s" in served
     # Off: the primary is asked again.
     settings = world.services.deliverer.settings
-    settings.primary_miss_hours = settings.primary_release_miss_minutes = 0
+    settings.miss_hours = 0
     try:
         world.server.call(_forget_misses(world))
         assert play(world, songs[2]).content == audio[2]
         world.server.call(lambda: _forget_pin(world, songs[2]))
         assert play(world, songs[2]).content == audio[2]
     finally:
-        settings.primary_miss_hours, settings.primary_release_miss_minutes = 24.0, 60.0
+        settings.miss_hours = 24.0
     assert len(sources["primary"].requests("resolve-isrc")) == asked + 2
 
 
@@ -268,7 +263,7 @@ def test_a_release_the_primary_lacks_one_song_of_stays_playable_there(
 ) -> None:
     """The primary lacks one song of a release; another song of it that the primary
     has is played from the primary - before the reliable worker and a slow one with its own
-    budget - not left to them."""
+    time - not left to them (a miss is the recording's, not the release's)."""
     songs, fakes, audio = missing_at_primary(world, "hinted", sources, count=2)
     fakes["primary"][1].available = True  # it has the second song
     assert play(world, songs[0]).content == audio[0]  # its miss: remembered
@@ -283,9 +278,9 @@ def test_a_release_the_primary_lacks_one_song_of_stays_playable_there(
 def test_after_a_slow_primary_tried_later_the_reliable_source_has_its_whole_budget(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
-    """The primary tried for a release it lacks a song of takes its own attempt
-    (here 2 s to say it lacks this one too); the reliable source then has a fresh byte-zero
-    budget (its link takes 2 s of the 3 s), not what the primary left of it."""
+    """The primary, asked for another song of a release it lacks a song of, takes its
+    own attempt (here 2 s to say it lacks this one too); the reliable source's step then has
+    its whole time (its link takes 2 s of the 3 s), not what the primary left of it."""
     songs, fakes, audio = missing_at_primary(world, "slow-hint", sources, count=2)
     assert play(world, songs[0]).content == audio[0]
     fakes["primary"][1].lookup_delay = 2.0
@@ -295,12 +290,12 @@ def test_after_a_slow_primary_tried_later_the_reliable_source_has_its_whole_budg
     assert lines_with(playback_log, "playing 'Title slow-hint Song 2' from Reliable")
 
 
-def test_after_a_release_miss_the_primary_starts_at_once_for_its_other_songs(
+def test_after_a_miss_the_primary_starts_at_once_for_the_release_s_other_songs(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
-    """The primary lacks one song of a release; for another song of it,
-    the primary starts at once - not after the checks (slow here) - and plays it, although a
-    source says it has the song ready."""
+    """The primary lacks one song of a release; for another song of it, the first step
+    starts at once - not after the checks (slow here) - and plays it, although a source
+    says it has the song ready."""
     songs, fakes, audio = missing_at_primary(world, "at-once", sources, count=2)
     assert play(world, songs[0]).content == audio[0]  # its miss: the release remembered
     fakes["primary"][1].available = True
@@ -308,8 +303,7 @@ def test_after_a_release_miss_the_primary_starts_at_once_for_its_other_songs(
     fakes["checker"][1].availability_delay = 1.0
     started = time.monotonic()
     assert play(world, songs[1]).content == audio[1]
-    [line] = lines_with(playback_log, "playing 'Title at-once Song 2' from Primary")
-    assert "lacks a song of its release (remembered)" in line
+    assert lines_with(playback_log, "playing 'Title at-once Song 2' from Primary")
     [lookup] = [r for r in sources["primary"].requests("resolve-isrc") if r["at"] > started]
     assert lookup["at"] - started < 0.4  # at once, not after the checks (0.5 s)
     assert not [r for r in sources["checker"].requests("stream")
@@ -320,32 +314,18 @@ def test_after_a_release_miss_a_ready_source_takes_over_from_a_slow_primary(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     """As on an ordinary play, a source whose check says it has the song ready
-    takes over once the primary has no first byte after its short budget."""
+    takes over once the primary has no first byte after the handover time."""
     songs, fakes, audio = missing_at_primary(world, "take-over", sources, count=2)
     assert play(world, songs[0]).content == audio[0]
     fakes["primary"][1].available = True
-    fakes["primary"][1].resolve_delay = 2.5  # slower than its short budget (1 s)
+    fakes["primary"][1].resolve_delay = 2.5  # slower than the handover time (1 s)
     fakes["checker"][1].ready = True
-    fakes["reliable"][1].available = False  # (measured quicker than a ready source's estimate)
+    fakes["reliable"][1].available = False
     assert play(world, songs[1]).content == audio[1]
-    [line] = lines_with(playback_log, "primary-first 'Title take-over Song 2'")
-    assert "Primary had no first byte after" in line and "Checker has it ready" in line
+    steps = world.services.deliverer.recent[-1].steps
+    assert any("Checker: has it ready" in s for s in steps)
+    assert any("Primary: stopped after" in s for s in steps)  # (it kept trying beside it)
     assert lines_with(playback_log, "playing 'Title take-over Song 2' from Checker")
-
-
-def test_a_primary_that_is_also_the_reliable_source_is_asked_once(
-    world: DeliveryWorld, sources: dict[str, FakeAddon]
-) -> None:
-    settings = world.services.deliverer.settings
-    songs, _, audio = missing_at_primary(world, "one-source", sources, count=2)
-    assert play(world, songs[0]).content == audio[0]
-    settings.reliable_source = "Primary"
-    try:
-        asked = len(sources["primary"].requests("resolve-isrc"))
-        assert play(world, songs[1]).content == audio[1]
-        assert len(sources["primary"].requests("resolve-isrc")) == asked + 1
-    finally:
-        settings.reliable_source = "Reliable"
 
 
 async def _forget_pin(world: DeliveryWorld, song: str) -> None:
@@ -356,7 +336,10 @@ def test_a_request_waiting_for_a_failing_routing_gets_its_answer_at_once(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     [song], fakes, _ = missing_at_primary(world, "shared", sources)
-    fakes["reliable"][0].resolve_delay = BUDGET + 1
+    # It is slow, then fails (4 s, an error): the routing ends by itself, before apps stop
+    # waiting - an answer to share.
+    fakes["reliable"][0].resolve_delay = 4.0
+    fakes["reliable"][0].stream_status = 502
     for name in ("checker", "preparer"):
         fakes[name][0].available = False
     started = time.monotonic()
@@ -364,10 +347,16 @@ def test_a_request_waiting_for_a_failing_routing_gets_its_answer_at_once(
         answers = list(pool.map(lambda n: play(world, song, f"shared-{n}"), range(2)))
     took = time.monotonic() - started
     assert all(a.json()["subsonic-response"]["status"] == "failed" for a in answers)
-    assert took < BUDGET + 2.5  # one routing, not two in a row
+    assert took < 4.0 + 2.0  # one routing, not two in a row
     assert len(sources["reliable"].requests("stream")) == 1
+    # The second waited for the first's routing, or came just after it ended: its answer,
+    # shared either way.
     shared = [line for line in playback_log if "its answer is shared" in line]
-    assert len(shared) == 1 and "for another request's routing of this song" in shared[0]
+    assert len(shared) == 1
+    assert any(
+        words in shared[0]
+        for words in ("for another request's routing of this song", "failed a moment ago")
+    )
 
 
 def test_a_client_that_leaves_before_its_first_byte_is_logged(
@@ -391,11 +380,11 @@ def test_a_client_that_leaves_before_its_first_byte_is_logged(
 def test_a_fetch_ahead_that_waited_out_its_turn_is_never_routed_to_the_fallbacks(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
-    """After its turn ran out, the primary alone - asked also for a song of a release
-    it lacks another song of (an ordering hint), and lacking this one too - so nothing,
-    never the fallbacks side by side."""
+    """After its turn ran out, the plan's first add-on alone - asked also for a song of
+    a release it lacks another song of, and lacking this one too - so nothing, never the
+    others side by side."""
     songs, _, audio = missing_at_primary(world, "alone", sources, count=2)
-    assert play(world, songs[0]).content == audio[0]  # the release's miss is remembered
+    assert play(world, songs[0]).content == audio[0]
     reliable_streams = len(sources["reliable"].requests("stream"))
 
     async def fetch_alone() -> str:
@@ -461,77 +450,3 @@ def test_a_refusal_is_not_remembered_as_a_miss(
     finally:
         sources["primary"].refuse_lookups = False
     assert len(sources["primary"].requests("resolve-isrc")) == 2
-
-
-def test_the_reliable_source_is_looked_up_only_while_the_primary_s_lookup_keeps_it_waiting(
-    world: DeliveryWorld,
-    sources: dict[str, FakeAddon],
-    playback_log: list[str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Not on every play - only when the primary's lookup has not answered within
-    reliable_lookup_after_seconds (0.5 s), when the primary is skipped (above), or once the
-    primary's attempt has ended without audio."""
-    # This test checks ordering, not the byte-zero timeout. Keep the primary pending
-    # until the reliable lookup actually arrives, even on a loaded runner.
-    monkeypatch.setattr(world.services.deliverer.settings, "primary_budget_seconds", 30.0)
-    monkeypatch.setattr(world.services.deliverer.settings, "budget_seconds", 30.0)
-    monkeypatch.setattr(world.services.deliverer.settings, "reliable_lookup_after_seconds", 30.0)
-
-    def while_pending(song: str, primary: FakeTrack) -> httpx.Response:
-        gate = threading.Event()
-        primary.lookup_gate = gate
-        reliable = sources["reliable"]
-        before = len(reliable.requests("resolve-isrc"))
-        streams = len(reliable.requests("stream"))
-        with ThreadPoolExecutor(1) as pool:
-            played = pool.submit(play, world, song)
-            try:
-                deadline = time.monotonic() + 15
-                while len(reliable.requests("resolve-isrc")) == before:
-                    assert not played.done(), "play ended before the parallel lookup"
-                    assert time.monotonic() < deadline, "reliable lookup never started"
-                    time.sleep(0.01)
-                assert not played.done(), "primary lookup did not remain pending"
-                assert len(reliable.requests("stream")) == streams
-            finally:
-                gate.set()
-            return played.result(timeout=30)
-
-    # The primary has the song and answers at once: the reliable source is not asked.
-    served, fakes, audio = missing_at_primary(world, "lookup-served", sources)
-    fakes["primary"][0].available = True
-    assert play(world, served[0]).content == audio[0]
-    assert sources["reliable"].requests("resolve-isrc") == []
-    # It lacks the song and says so at once: the reliable source is looked up then,
-    # once - its attempt uses that answer.
-    [quick], _, [quick_audio] = missing_at_primary(world, "lookup-quick", sources)
-    assert play(world, quick).content == quick_audio
-    assert len(sources["reliable"].requests("resolve-isrc")) == 1
-    [line] = lines_with(playback_log, "playing 'Title lookup-quick Song 1' from Reliable")
-    assert re.search(r"Reliable: looked up meanwhile \(from \d+\.\ds\)", line), line
-    # Its answer is reused (one lookup), after the primary's immediate miss. The
-    # printed duration rounds scheduler/HTTP overhead and need not be exactly 0.0s.
-    assert (
-        sources["reliable"].requests("resolve-isrc")[0]["at"]
-        >= sources["primary"].requests("resolve-isrc")[-1]["at"]
-    )
-    assert re.search(r"Reliable: lookup \d+\.\ds", line), line
-    # Its lookup keeps the play waiting: the reliable source is looked up from 0.5 s on,
-    # and its attempt uses that answer.
-    monkeypatch.setattr(world.services.deliverer.settings, "reliable_lookup_after_seconds", 0.5)
-    [slow], fakes, [slow_audio] = missing_at_primary(world, "lookup-slow", sources)
-    assert while_pending(slow, fakes["primary"][0]).content == slow_audio
-    assert len(sources["reliable"].requests("resolve-isrc")) == 2
-    [line] = lines_with(playback_log, "playing 'Title lookup-slow Song 1' from Reliable")
-    started = re.search(r"Reliable: looked up meanwhile \(from (\d+\.\d)s\)", line)
-    assert started is not None and float(started.group(1)) >= 0.5, line
-    assert re.search(r"Reliable: lookup \d+\.\ds", line), line
-    # The same slow lookup that finds the song: the reliable source was asked, never
-    # streamed.
-    [found], fakes, [found_audio] = missing_at_primary(world, "lookup-found", sources)
-    fakes["primary"][0].available = True
-    streams = len(sources["reliable"].requests("stream"))
-    assert while_pending(found, fakes["primary"][0]).content == found_audio
-    assert len(sources["reliable"].requests("resolve-isrc")) == 3
-    assert len(sources["reliable"].requests("stream")) == streams

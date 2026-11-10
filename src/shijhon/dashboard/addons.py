@@ -103,6 +103,7 @@ class ManifestInfo:
     downloads: bool = True  # False: it asks not to be used for downloads (``allowDownloads``)
     # False: it declares no ``stream`` resource - a catalog only, never asked for audio.
     streams: bool = True
+    resources: frozenset[str] = frozenset()  # what it declares it serves (in lower case)
 
 
 @dataclass(frozen=True)
@@ -270,12 +271,14 @@ def parse_manifest(data: Any) -> ManifestInfo:
                 _text(item.get("description", item.get("help"))) or "",
             )
         )
+    parsed = Manifest.parse(data)
     return ManifestInfo(
         _text(data.get("name")) or "",
         _text(data.get("version")) or "",
         tuple(declared),
         allows_downloads(data.get("allowDownloads")),
-        Manifest.parse(data).streams,
+        parsed.streams,
+        parsed.resources,
     )
 
 

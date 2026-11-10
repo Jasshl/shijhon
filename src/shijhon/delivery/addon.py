@@ -729,7 +729,8 @@ class Addon:
                 continue
             reading = self._reading = _Reading()
             try:
-                with pacing.watched() as reading.waits:
+                # (Its own request: not one for a song, whose time a play may lengthen.)
+                with pacing.watched() as reading.waits, pacing.lasting(None):
                     self._manifest = await self._read_manifest()
             except AddonError as exc:
                 reading.error = exc

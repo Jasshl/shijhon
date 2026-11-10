@@ -286,16 +286,15 @@ def test_a_turn_that_came_late_is_not_the_add_ons_timeout(
 ) -> None:
     """A request that waited at the limit and got its turns - but too late for the add-on
     to answer in what was left of its time: not the add-on's failure, nothing toward its
-    cooldown as the primary, nothing in the measured order."""
+    cooldown, no attempt of its own recorded."""
     settings = world.services.deliverer.settings
-    monkeypatch.setattr(settings, "routing", "primary_first")
-    monkeypatch.setattr(settings, "primary_source", "Source")
     wanted = songs(world, addon, "l-late-turn", 2, first_byte_delay=5.0)
     known(world, addon, "l-late-turn-first")
     (source,) = world.server.call(world.services.sources.enabled)
     recorded = len(world.services.sources.stats(source.id).recent)  # type: ignore[union-attr]
     limit(world, 0.5, 1)  # its lookup at once, its link two seconds later
     monkeypatch.setattr(settings, "budget_seconds", 4.5)
+    monkeypatch.setattr(settings, "max_wait_seconds", 4.5)  # (a play tries until the wait)
     with collected("shijhon.delivery.playback") as lines:
         for song in wanted:
             answer = fetch(world, "stream", song)
@@ -329,17 +328,16 @@ def test_a_redirected_request_takes_a_turn_for_every_hop(
 def test_a_primary_held_up_at_its_own_limit_is_not_counted_as_slow(
     world: DeliveryWorld, addon: FakeAddon, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Primary-first routing switches to an add-on that has the song ready when the primary
-    has no first byte in its short budget - and counts that against the primary, which
-    cools down after three. Not when the primary was waiting for its turn at Shijhon's own
-    limit: it was never asked."""
+    """With ready checks, an add-on that has the song ready takes over when the plan's
+    first add-on has no first byte after the handover time. The first, waiting for its turn
+    at Shijhon's own limit all along, was never asked: stopped, it did not fail, time out or
+    cool down."""
     limit(world, 50.0, 10)
     ready = world.addon("Ready", resources=("stream", "isrc", "availability"))
     world.add_source(ready)
     settings = world.services.deliverer.settings
-    monkeypatch.setattr(settings, "routing", "primary_first")
-    monkeypatch.setattr(settings, "primary_source", "Source")
-    monkeypatch.setattr(settings, "primary_budget_seconds", 0.5)
+    monkeypatch.setattr(settings, "ready_checks", True)
+    monkeypatch.setattr(settings, "ready_handover_seconds", 0.5)
     known(world, addon, "l-switch-first")  # (the primary's manifest is read)
     primary = next(
         s for s in world.server.call(world.services.sources.enabled) if s.name == "Source"
@@ -352,46 +350,10 @@ def test_a_primary_held_up_at_its_own_limit_is_not_counted_as_slow(
     for song in wanted:
         answer = fetch(world, "stream", song)
         assert answer.status_code == 200 and answer.content[:4] == b"fLaC"
-    assert len(ready.requests("audio")) == 4  # each switched to the add-on that had it ready
+    assert len(ready.requests("audio")) == 4  # each handed over to the add-on that had it ready
     stats = world.services.sources.stats(primary.id)
-    assert stats is not None and stats.switches_since_delivery == 0
+    assert stats is not None and stats.timeouts_since_delivery == 0
     assert stats.failures == 0 and not world.services.sources.cooling(primary.id)
-
-
-def test_a_lookup_meanwhile_that_gets_no_turn_ends_its_attempt_once(
-    world: DeliveryWorld, addon: FakeAddon, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The likely fallback is looked up while the primary is asked: when that lookup waits
-    out its time at the fallback's limit, the fallback's attempt is over - it gets no second
-    budget - and it did not fail."""
-    limit(world, 50.0, 10)
-    fallback = world.addon("Fallback")
-    world.add_source(fallback)
-    settings = world.services.deliverer.settings
-    monkeypatch.setattr(settings, "routing", "primary_first")
-    monkeypatch.setattr(settings, "primary_source", "Source")
-    monkeypatch.setattr(settings, "reliable_lookup_after_seconds", 0.0)
-    first, _, _ = world.placeholder_track("l-meanwhile-first", [addon, fallback])
-    assert fetch(world, "stream", first).status_code == 200  # (both manifests are read)
-    held = next(
-        s for s in world.server.call(world.services.sources.enabled) if s.name == "Fallback"
-    )
-    world.server.call(lambda: world.services.sources.update(held.id, limits=Limits(0.05, 1, 0)))
-    world.server.call(world.services.sources.enabled)
-    assert held.pace is not None
-    world.server.call(held.pace.request)  # its one request is taken: the next waits 20 s
-    monkeypatch.setattr(settings, "budget_seconds", 1.5)
-    song, _, _ = world.placeholder_track("l-meanwhile", [addon, fallback], available=False)
-    fallback.clear()
-    began = time.monotonic()
-    answer = fetch(world, "stream", song)
-    took = time.monotonic() - began
-    assert "audio unavailable" in answer.text and REQUESTS in answer.text
-    assert 1.3 <= took < 2.6  # one budget's time, not two
-    assert fallback.requests() == []  # it was never asked
-    stats = world.services.sources.stats(held.id)
-    assert stats is not None and stats.failures == 0
-    assert not world.services.sources.cooling(held.id)
 
 
 def test_a_single_play_on_an_idle_add_on_waits_for_nothing(
@@ -419,16 +381,15 @@ def test_a_request_that_gets_no_turn_in_its_time_is_a_timeout_and_not_the_add_on
     limit(world, 0.1, 1)  # one request every ten seconds
     settings = world.services.deliverer.settings
     monkeypatch.setattr(settings, "budget_seconds", 0.8)
-    # As the primary: its timeouts would cool it down after two.
-    monkeypatch.setattr(settings, "routing", "primary_first")
-    monkeypatch.setattr(settings, "primary_source", "Source")
+    monkeypatch.setattr(settings, "max_wait_seconds", 0.8)  # (a play tries until the wait)
+    # Its timeouts would cool it down after two.
     wanted = songs(world, addon, "l-starved", 3)
     (source,) = world.server.call(world.services.sources.enabled)
     with collected("shijhon.delivery.playback") as lines:
         for song in wanted:
             began = time.monotonic()
             answer = fetch(world, "stream", song)
-            assert 0.7 <= time.monotonic() - began < 3.0  # its budget, as a timeout's
+            assert 0.7 <= time.monotonic() - began < 3.0  # the wait, as a timeout's
             assert answer.status_code == 200 and REQUESTS in answer.text
             assert "audio unavailable" in answer.text
     # The add-on got its manifest request and nothing else: nothing it could have failed at.
@@ -437,12 +398,13 @@ def test_a_request_that_gets_no_turn_in_its_time_is_a_timeout_and_not_the_add_on
     stats = sources.stats(source.id)
     assert stats is not None and stats.failures == 0 and stats.failures_since_success == 0
     assert stats.timeouts_since_delivery == 0 and not sources.cooling(source.id)
-    assert len(stats.recent) == 0  # ... and nothing for the measured order of the fallbacks
+    assert len(stats.recent) == 0  # ... and no attempt of its own recorded
     said = [line for line in lines if line.startswith("no audio for")]
     assert len(said) == 3 and all(f"Source: {REQUESTS}" in line for line in said)
     # A client's retry is not kept from the add-on (it did not fail for the song).
     limit(world, 50.0, 4)
     monkeypatch.setattr(settings, "budget_seconds", 8.0)
+    monkeypatch.setattr(settings, "max_wait_seconds", 30.0)
     again = fetch(world, "stream", wanted[0])
     assert again.status_code == 200 and again.content[:4] == b"fLaC"
 
@@ -497,16 +459,15 @@ def test_an_add_ons_own_limits_replace_the_installations(
 def test_a_listening_session_with_every_limit_at_its_built_in_value(
     navidrome_factory: NavidromeFactory, tmp_path: Path
 ) -> None:
-    """The limits together, as an installation has them: primary-first routing with an
-    availability check at the other add-on, warm-ahead of the next two songs, the per-user
-    limits, 5 requests a second per add-on after 10 at once. A listener playing an album -
-    and skipping on - hears each song promptly, the next ones are warm, and no add-on is
-    asked faster than its limit."""
+    """The limits together, as an installation has them: a plan of two steps with ready
+    checks (an availability check at the second add-on), warm-ahead of the next two songs,
+    the per-user limits, 5 requests a second per add-on after 10 at once. A listener playing
+    an album - and skipping on - hears each song promptly, the next ones are warm, and no
+    add-on is asked faster than its limit."""
     with delivery_world(
         navidrome_factory(),
         tmp_path,
-        routing="primary_first",
-        primary_source="Primary",
+        ready_checks=True,
         warm_ahead_depth=2,
         warm_ahead_delay_seconds=0.3,
         budget_seconds=9.0,

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.6.0
+
+- The routing modes are replaced by a plan on the Add-ons page: a timeline of steps, with
+  presets (Fastest, Fastest three, Main with backups, One at a time, Ready first).
+- Add-ons in one step start together. The next step joins when the step's time has passed
+  without audio, or at once when every add-on in it has failed; the add-ons already asked
+  keep trying, and the first audio plays.
+- In a play, an add-on's requests may take until apps stop waiting.
+- An add-on that keeps timing out cools down, judged against its usual speed (**Slow
+  after**), and one that lacked a song is not asked for it again for a day.
+- An add-on's own time is now its **Time for a download**, used when nobody is waiting:
+  downloads, warm-ahead and apps' fetches ahead, one add-on at a time.
+- Diagnostics lists the latest song starts: every add-on asked, when it joined, what it
+  answered and how long it took.
+- On a phone the plan is folded at first, under a button that shows it.
+
+### Upgrading
+
+- Database schema 35, upgraded at startup. Each add-on gets its own step in the list's
+  order, keeping its time as both its step's time and its time for a download.
+- A routing mode saved on the dashboard becomes its plan. One in the configuration file is
+  ignored: replace Primary first with `ready_checks = true`, `ready_handover_seconds` set to
+  the primary's time and its add-on first in the list.
+- For add-ons in the configuration file, `budget_seconds` is now the time for a download and
+  `step_seconds` the step's time, applied at every start: set `step_seconds` to keep a step's
+  time. `with_previous` puts an add-on in the step of the one before it.
+- Removed: `routing`, `primary_source`, `reliable_source`, `primary_budget_seconds`,
+  `reliable_lookup_after_seconds`, `max_attempts`, `primary_cooldown_switches`,
+  `primary_release_miss_minutes`.
+- Renamed, with saved values kept: `primary_cooldown_timeouts` is `cooldown_timeouts`,
+  `primary_miss_hours` is `miss_hours`.
+- New: `ready_checks`, `ready_handover_seconds`, `slow_after` (also per add-on).
+
 ## 0.5.1
 
 - Album pages, artist pages and searches take less work per request, so an app opening many

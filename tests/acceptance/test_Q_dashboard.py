@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import html
 import importlib.metadata
+import json
 import logging
 import re
 import threading
@@ -16,8 +17,6 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-import anyio
-import anyio.to_thread
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -120,6 +119,40 @@ def row_of(html: str, field_id: str) -> str:
     return found[0]
 
 
+def plan(
+    *steps: list[int], seconds: float = 3.0, checks: bool = False, handover: float = 4.5
+) -> dict[str, Any]:
+    """A plan as addon_plan.js sends it: each step's add-ons, all with the same time."""
+    return {
+        "steps": [{"seconds": seconds, "addons": ids} for ids in steps],
+        "checks": checks,
+        "handover": handover,
+    }
+
+
+def post_plan(browser: Browser, sent: dict[str, Any] | str) -> httpx.Response:
+    """POST /addons/plan as the page's script does: JSON in, JSON out."""
+    text = sent if isinstance(sent, str) else json.dumps(sent)
+    return browser.post(
+        "addons/plan",
+        {"plan": text, "csrf": browser.csrf()},
+        headers={"accept": "application/json"},
+    )
+
+
+def plan_of(page: str) -> dict[str, Any]:
+    """The plan the Add-ons page hands addon_plan.js."""
+    found = re.search(r'<section class="group" id="plan"[^>]*data-plan="([^"]*)"', page)
+    assert found, "no plan on the page"
+    data: dict[str, Any] = json.loads(html.unescape(found.group(1)))
+    return data
+
+
+def steps_of(page: str) -> list[list[str]]:
+    """The names of each step's add-ons, in the plan's order."""
+    return [[addon["name"] for addon in step["addons"]] for step in plan_of(page)["steps"]]
+
+
 class _Folds(HTMLParser):
     """A page's field ids and names, under a "More settings" and outside it, and whether
     each "More settings" is open."""
@@ -175,10 +208,10 @@ def test_pages_need_a_signed_in_admin(browser: Browser, world: DeliveryWorld) ->
         response = browser.get(page)
         assert response.status_code == 303
         assert response.headers["location"] == f"{PATH}/sign-in?next={PATH}/{page}"
-    before = world.services.deliverer.settings.primary_budget_seconds
-    posted = browser.post("playback", {"primary_budget_seconds": "1", "csrf": "x"})
+    before = world.services.deliverer.settings.cooldown_seconds
+    posted = browser.post("playback", {"cooldown_seconds": "1", "csrf": "x"})
     assert posted.status_code == 303 and "sign-in" in posted.headers["location"]
-    assert world.services.deliverer.settings.primary_budget_seconds == before
+    assert world.services.deliverer.settings.cooldown_seconds == before
     assert browser.get("static/shijhon.css").headers["content-type"].startswith("text/css")
     assert browser.get("static/fonts/OFL.txt").status_code == 200
     page = browser.get("sign-in")
@@ -285,7 +318,7 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.5.1"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.6.0"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 
@@ -341,20 +374,30 @@ def test_the_playback_page_is_generated_from_the_settings(admin: Browser) -> Non
     for key in DeliverySettings.model_fields:
         if key in ("keep_streamed_audio", "delivered_days", "delivered_gb"):  # on Cleanup
             assert f'name="{key}"' not in html and f'name="{key}"' in cleanup, key
+        elif key in ("ready_checks", "ready_handover_seconds"):  # the plan's, on Add-ons
+            row_id = "delivery-" + key.replace("_", "-")
+            assert f'name="{key}"' not in html and f'id="{row_id}"' not in html, key
         else:
             assert f'name="{key}"' in html, key
+    # The routing modes and their roles are gone: the plan on Add-ons decides.
+    for gone in ("routing", "primary_source", "reliable_source", "max_attempts"):
+        assert f'name="{gone}"' not in html, gone
+    assert "Songs from add-ons" in html and "Primary first" not in html
     budget = row_of(html, "delivery-budget-seconds")
     # The harness configures 2.5 s: the configuration's value is the default here.
     assert 'value="2.5"' in budget and "Default 2.5 s, from the configuration" in budget
     assert 'inputmode="decimal"' in budget and 'type="text"' in budget
     assert 'type="number"' not in html
-    timeouts = row_of(html, "delivery-primary-cooldown-timeouts")
+    timeouts = row_of(html, "delivery-cooldown-timeouts")
     assert 'inputmode="numeric"' in timeouts and "Default 2" in timeouts
-    routing = row_of(html, "delivery-routing")
-    assert '<option value="primary_first">Primary first</option>' in routing
+    start = row_of(html, "delivery-dash-start")
+    assert '<option value="complete">When joined</option>' in start
     assert "tag-restart" not in row_of(html, "delivery-ahead-window-seconds")  # live
     # A screen reader hears a unit the label does not say already, and only then.
-    assert '>Time to first audio<span class="visually-hidden"> (seconds)</span></label>' in html
+    assert (
+        '>Default step and download time<span class="visually-hidden"> (seconds)</span></label>'
+        in html
+    )
     rate = row_of(html, "delivery-addon-requests-per-second")
     assert ">Requests a second</label>" in rate and 'class="unit" aria-hidden="true">/s<' in rate
 
@@ -364,7 +407,7 @@ def test_the_settings_most_people_change_come_first(world: DeliveryWorld, admin:
     under one collapsed "More settings" (their group's ``more``), and none is left out. It
     opens for a row that has to be seen: a failed save's, or one saved just now."""
     from shijhon.dashboard import sections
-    from shijhon.dashboard.app import DOWNLOAD_LIMITS
+    from shijhon.dashboard.app import DOWNLOAD_LIMITS, PLAN_SETTINGS
     from shijhon.dashboard.fields import GROUPS
 
     on_cleanup = folds(admin.get("cleanup").text)
@@ -377,6 +420,9 @@ def test_the_settings_most_people_change_come_first(world: DeliveryWorld, admin:
             here = {f.id, f.key}
             if page == "playback" and f.key in DOWNLOAD_LIMITS:  # downloaded audio: Cleanup
                 assert here & on_cleanup.outside and not here & found.outside, f.key
+                continue
+            if page == "playback" and f.key in PLAN_SETTINGS:  # the plan's: Add-ons
+                assert not here & (found.outside | found.inside), f.key
                 continue
             more = groups.get(f.meta.group, GROUPS[section][-1]).more
             shown, hidden = (found.inside, found.outside) if more else (found.outside, found.inside)
@@ -405,7 +451,7 @@ def test_the_settings_most_people_change_come_first(world: DeliveryWorld, admin:
     finally:
         world.clear_sources()
     # Open for a failed save of one of its settings, not of one shown first.
-    assert folds(admin.submit("playback", {"primary_budget_seconds": "abc"}).text).open == [True]
+    assert folds(admin.submit("playback", {"seek_timeout_seconds": "abc"}).text).open == [True]
     assert folds(admin.submit("playback", {"budget_seconds": "abc"}).text).open == [False]
     try:  # and for one saved just now, once; it says how many are not at their default
         assert admin.submit("playback", {"warm_ahead_depth": "3"}).status_code == 303
@@ -421,68 +467,63 @@ def test_the_settings_most_people_change_come_first(world: DeliveryWorld, admin:
 def test_number_fields_take_a_comma_or_a_dot(world: DeliveryWorld, admin: Browser) -> None:
     settings = world.services.deliverer.settings
     try:
-        saved = admin.submit("playback", {"primary_budget_seconds": "1,5"})
+        saved = admin.submit("playback", {"seek_timeout_seconds": "1,5"})
         assert saved.status_code == 303
-        assert settings.primary_budget_seconds == 1.5
+        assert settings.seek_timeout_seconds == 1.5
         page = admin.get("playback").text
-        row = row_of(page, "delivery-primary-budget-seconds")
+        row = row_of(page, "delivery-seek-timeout-seconds")
         assert 'value="1.5"' in row and "tag-saved" in row and "is-modified" in row
         assert "Saved 1 change at" in page
-        assert admin.submit("playback", {"primary_budget_seconds": " 1.25 "}).status_code == 303
-        assert settings.primary_budget_seconds == 1.25
+        assert admin.submit("playback", {"seek_timeout_seconds": " 1.25 "}).status_code == 303
+        assert settings.seek_timeout_seconds == 1.25
         assert admin.submit("playback", {"warm_ahead_depth": "3"}).status_code == 303
         assert settings.warm_ahead_depth == 3
         assert admin.submit("playback", {"warm_ahead_depth": "3,5"}).status_code == 400
         assert settings.warm_ahead_depth == 3
     finally:
-        admin.submit("playback", {"primary_budget_seconds": "4.5", "warm_ahead_depth": "2"})
-    assert "primary_budget_seconds" not in saved_rows(world, "delivery")  # the default again
+        admin.submit("playback", {"seek_timeout_seconds": "3", "warm_ahead_depth": "2"})
+    assert "seek_timeout_seconds" not in saved_rows(world, "delivery")  # the default again
 
 
 def test_invalid_values_save_nothing_and_say_why(world: DeliveryWorld, admin: Browser) -> None:
     settings = world.services.deliverer.settings
-    before = (settings.primary_budget_seconds, settings.max_wait_seconds)
-    bad = admin.submit("playback", {"primary_budget_seconds": "abc", "cooldown_seconds": "5"})
+    before = (settings.seek_timeout_seconds, settings.max_wait_seconds)
+    bad = admin.submit("playback", {"seek_timeout_seconds": "abc", "cooldown_seconds": "5"})
     assert bad.status_code == 400
     assert "Nothing saved: 1 setting needs a different value" in bad.text
-    row = row_of(bad.text, "delivery-primary-budget-seconds")
+    row = row_of(bad.text, "delivery-seek-timeout-seconds")
     assert "is-invalid" in row and 'value="abc"' in row and 'aria-invalid="true"' in row
     assert "Enter a number, e.g. 4.5." in row
-    assert 'href="#delivery-primary-budget-seconds"' in bad.text
+    assert 'href="#delivery-seek-timeout-seconds"' in bad.text
     assert "Not saved" in bad.text
     across = admin.submit("playback", {"max_wait_seconds": "2"})  # below the 2.5 s budget
     assert across.status_code == 400
     wait = row_of(across.text, "delivery-max-wait-seconds")
-    assert "Must be at least the time to first audio (2.5 s)" in wait
-    assert "is below the time to first audio." in across.text
-    low = admin.submit("playback", {"primary_cooldown_timeouts": "0"})
+    assert "Must be at least the time for a new step (2.5 s)" in wait
+    assert "is below the time for a new step." in across.text
+    low = admin.submit("playback", {"cooldown_timeouts": "0"})
     assert "Enter a whole number of at least 1." in low.text
-    assert (settings.primary_budget_seconds, settings.max_wait_seconds) == before
+    assert (settings.seek_timeout_seconds, settings.max_wait_seconds) == before
     assert settings.cooldown_seconds == 1.5  # the valid change in the failed form: not saved
 
 
-def test_routing_changes_take_effect_at_once(world: DeliveryWorld, admin: Browser) -> None:
+def test_a_new_plan_takes_effect_at_once(world: DeliveryWorld, admin: Browser) -> None:
+    """The plan saved on the Add-ons page decides the next song's add-on, without a restart."""
     world.clear_sources()
     first, second = world.addon("RouteFirst"), world.addon("RouteSecond")
-    world.add_source(first)
-    world.add_source(second)
+    one, two = world.add_source(first), world.add_source(second)
     song, _, audio = world.placeholder_track("dash-route", [first, second])
     try:
         assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
         assert first.requests("audio") and not second.requests("audio")
-        saved = admin.submit(
-            "playback", {"routing": "primary_first", "primary_source": "RouteSecond"}
-        )
-        assert saved.status_code == 303
-        assert world.services.deliverer.settings.routing == "primary_first"
+        saved = post_plan(admin, plan([two], [one]))
+        assert saved.status_code == 200 and saved.json() == {"saved": True}
         world.services.deliverer.forget(song)
         first.clear()
         assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
         assert second.requests("audio") and not first.requests("audio")
     finally:
-        admin.submit("playback", {"routing": "ordered", "primary_source": ""})
         world.clear_sources()
-    assert world.services.deliverer.settings.routing == "ordered"
 
 
 def test_the_limits_per_addon_take_effect_at_once(world: DeliveryWorld, admin: Browser) -> None:
@@ -980,6 +1021,17 @@ def test_addons_are_added_ordered_switched_and_set(world: DeliveryWorld, admin: 
         bad = admin.submit("addons", {"budget_seconds": "0"}, action)
         assert bad.status_code == 400 and "Dashy settings not saved" in bad.text
         assert "Enter a number above 0, up to 600." in bad.text
+        # Its own "slow after": empty is Playback's.
+        assert admin.form("addons", action)["slow_after"] == ""
+        assert admin.submit("addons", {"slow_after": "3"}, action).status_code == 303
+        dashy = next(s for s in world.server.call(sources.enabled) if s.name == "Dashy")
+        assert dashy.slow_after == 3.0 and dashy.budget == 3.5
+        assert admin.form("addons", action)["slow_after"] == "3"
+        bad = admin.submit("addons", {"slow_after": "0,5"}, action)
+        assert bad.status_code == 400 and "Enter a number from 1 to 10." in bad.text
+        assert admin.submit("addons", {"slow_after": ""}, action).status_code == 303
+        dashy = next(s for s in world.server.call(sources.enabled) if s.name == "Dashy")
+        assert dashy.slow_after is None
         # Its own limits on what Shijhon sends it: empty is the installation's.
         fields = admin.form("addons", action)
         own = ("requests_per_second", "request_burst", "audio_openings")
@@ -1017,8 +1069,8 @@ def test_addons_are_added_ordered_switched_and_set(world: DeliveryWorld, admin: 
         dashy = next(s for s in world.server.call(sources.enabled) if s.name == "Dashy")
         assert dashy.pace is not None
         assert dashy.pace.limits == Limits(shared.requests_per_second, shared.request_burst, 0)
-        up = admin.post(f"addons/{dashy.id}/move", {"direction": "up", "csrf": admin.csrf()})
-        assert up.status_code == 303
+        keeper = next(s for s in world.server.call(sources.enabled) if s.name == "Keeper")
+        assert post_plan(admin, plan([dashy.id], [keeper.id])).status_code == 200
         assert [s.name for s in world.server.call(sources.enabled)] == ["Dashy", "Keeper"]
         off = admin.post(f"addons/{dashy.id}/enabled", {"enabled": "false", "csrf": admin.csrf()})
         assert off.status_code == 303
@@ -1033,52 +1085,138 @@ def test_addons_are_added_ordered_switched_and_set(world: DeliveryWorld, admin: 
         world.clear_sources()
 
 
-def test_addons_are_pulled_into_place_and_switched_together(
+def test_the_plan_is_saved_in_steps_and_addons_are_switched_together(
     world: DeliveryWorld, admin: Browser
 ) -> None:
+    """The Add-ons page hands its script the plan: the add-ons asked for audio in their
+    steps. A saved plan gives each add-on its place, whether it starts with the one before
+    it, and its step's time, and saves whether add-ons are asked which have the song ready.
+    A plan that leaves out or repeats an add-on, has an empty step or a time that does not
+    fit saves nothing, and the page, loaded again, says why."""
     world.clear_sources()
     ids = [world.add_source(world.addon(name)) for name in ("One", "Two", "Three", "Four")]
     sources = world.services.sources
-    scripted = {"accept": "application/json"}  # addons.js: saves without leaving the page
+    settings = world.services.deliverer.settings
+    handover = settings.ready_handover_seconds
 
     def on() -> list[str]:
         return [s.name for s in world.server.call(sources.enabled)]
 
-    def post(path: str, fields: dict[str, str], **kwargs: Any) -> httpx.Response:
-        return admin.post(path, {**fields, "csrf": admin.csrf()}, **kwargs)
+    def stored() -> list[tuple[str, int, float | None]]:
+        return [(s.name, s.step, s.step_seconds) for s in world.server.call(sources.stored)]
 
-    places = {f"position-{source}": str(n) for n, source in enumerate(ids, start=1)}
+    def post(path: str, fields: dict[str, str]) -> httpx.Response:
+        return admin.post(path, {**fields, "csrf": admin.csrf()})
+
     try:
         page = admin.get("addons").text
-        assert f'src="{PATH}/static/addons.js" defer>' in page
-        assert f'<ol class="chain" data-reorder="{PATH}/addons/order">' in page
-        # Pulled to the top: the page sends every place, and gets an answer, no notice.
-        moved = post("addons/order", {**places, f"position-{ids[3]}": "0"}, headers=scripted)
-        assert moved.status_code == 200 and moved.json() == {"saved": True}
+        assert f'src="{PATH}/static/addon_plan.js" defer>' in page
+        assert "addons.js" not in page and "data-reorder" not in page
+        assert "source-move" not in page and "/move" not in page  # no arrows
+        assert '<ol class="chain">' in page
+        shown = plan_of(page)
+        assert steps_of(page) == [["One"], ["Two"], ["Three"], ["Four"]]
+        assert [step["seconds"] for step in shown["steps"]] == [2.5] * 4  # Playback's time
+        assert (shown["count"], shown["checks"], shown["readonly"]) == (4, False, False)
+        assert shown["action"] == f"{PATH}/addons/plan" and shown["csrf"] == admin.csrf()
+        assert 'data-preset="fastest"' in page and 'data-preset="few"' in page
+        # None of these add-ons can say whether it has a song ready: no switch for it.
+        assert shown["checking"] == [] and "plan-checks-switch" not in page
+        assert 'data-preset="ready"' not in page
+        # Four and One start together, then Two, then Three.
+        saved = post_plan(admin, plan([ids[3], ids[0]], [ids[1]], [ids[2]], seconds=4))
+        assert saved.status_code == 200 and saved.json() == {"saved": True}
         assert on() == ["Four", "One", "Two", "Three"]
-        # The arrows answer the page's script the same way, and a form with the page.
-        stepped = post(f"addons/{ids[3]}/move", {"direction": "down"}, headers=scripted)
-        assert stepped.status_code == 200 and stepped.json() == {"saved": True}
-        assert on() == ["One", "Four", "Two", "Three"]
-        assert post(f"addons/{ids[3]}/move", {"direction": "up"}).status_code == 303
-        assert on() == ["Four", "One", "Two", "Three"]
-        # A place missing, one for an add-on not in the list, or not a number: nothing
-        # moves, and the page, loaded again, says why.
+        assert stored() == [
+            ("Four", 1, 4.0),
+            ("One", 1, 4.0),
+            ("Two", 2, 4.0),
+            ("Three", 3, 4.0),
+        ]
+        assert [s.step for s in world.server.call(sources.enabled)] == [1, 1, 2, 3]
+        page = admin.get("addons").text
+        assert steps_of(page) == [["Four", "One"], ["Two"], ["Three"]]
+        assert "Plan not saved" not in page
+        listed = page[page.index('id="order-title"') :]
+        numbers = re.findall(r'<span class="source-order">(\d+)</span>', listed)
+        assert [int(n) for n in numbers] == [1, 1, 2, 3]  # each add-on's step
+        # Each step its own time; asked which have the song ready, a ready one takes over
+        # after 1.5 s.
+        timed = {
+            "steps": [
+                {"seconds": 2, "addons": [ids[0]]},
+                {"seconds": 6.5, "addons": [ids[1], ids[2], ids[3]]},
+            ],
+            "checks": True,
+            "handover": 1.5,
+        }
+        assert post_plan(admin, timed).status_code == 200
+        assert stored() == [
+            ("One", 1, 2.0),
+            ("Two", 2, 6.5),
+            ("Three", 2, 6.5),
+            ("Four", 2, 6.5),
+        ]
+        assert (settings.ready_checks, settings.ready_handover_seconds) == (True, 1.5)
+        rows = saved_rows(world, "delivery")
+        assert (rows["ready_checks"], rows["ready_handover_seconds"]) == ("true", "1.5")
+        page = admin.get("addons").text
+        assert (plan_of(page)["checks"], plan_of(page)["handover"]) == (True, 1.5)
+        # Switched on, it is shown (and open) even with no add-on that can answer.
+        assert '<details class="plan-more" open>' in page and "none of yours is" in page
+        assert 'role="switch" aria-checked="true" aria-label="Ask which' in page
+        before = _state(world)
         for sent in (
-            {f"position-{ids[0]}": "4"},
-            {**places, "position-99999": "1"},
-            {**places, f"position-{ids[1]}": "two"},
+            plan([ids[0]], [ids[1]], [ids[2]]),  # Four left out
+            plan([ids[0], ids[0]], [ids[1]], [ids[2]], [ids[3]]),  # One twice
+            plan([ids[0]], [ids[1]], [ids[2]], [ids[3]], [99999]),  # not in the list
+            plan([], [ids[0], ids[1], ids[2], ids[3]]),  # an empty step
+            plan([ids[0], ids[1], ids[2], ids[3]], seconds=0),
+            plan([ids[0], ids[1], ids[2], ids[3]], seconds=601),
+            plan([ids[0], ids[1], ids[2], ids[3]], checks=True, handover=601),
+            plan([ids[0], ids[1], ids[2], ids[3]], checks=True, handover=-1),
+            '{"steps": [{"seconds": NaN, "addons": ' + json.dumps(ids) + "}],"
+            ' "checks": false, "handover": 1}',  # not a number
+            {"steps": [{"seconds": 3, "addons": ids}]},  # no checks, no handover
+            "not a plan",
         ):
-            refused = post("addons/order", sent, headers=scripted)
-            assert refused.status_code == 409 and refused.json() == {"saved": False}
-        assert "Order not saved" in admin.get("addons").text
-        assert on() == ["Four", "One", "Two", "Three"]
+            refused = post_plan(admin, sent)
+            assert refused.status_code == 409 and refused.json() == {"saved": False}, sent
+            assert _state(world) == before, sent
+        assert (settings.ready_checks, settings.ready_handover_seconds) == (True, 1.5)
+        assert "Plan not saved" in admin.get("addons").text
+        assert "Plan not saved" not in admin.get("addons").text  # said once
+        # Back to the configuration's: nothing of the checks stays saved.
+        assert post_plan(admin, plan(*[[i] for i in ids], handover=handover)).status_code == 200
+        assert not {"ready_checks", "ready_handover_seconds"} & set(saved_rows(world, "delivery"))
+        assert not settings.ready_checks
         # All off, all on.
         assert post("addons/enabled", {"enabled": "false"}).status_code == 303
         assert on() == [] and "Every add-on is off." in admin.get("addons").text
         assert post("addons/enabled", {"enabled": "true"}).status_code == 303
-        assert on() == ["Four", "One", "Two", "Three"]
+        assert on() == ["One", "Two", "Three", "Four"]
         assert "Every add-on is on." in admin.get("addons").text
+    finally:
+        post_plan(admin, plan(*[[i] for i in ids], handover=handover))
+        world.clear_sources()
+
+
+def test_the_plan_offers_ready_checks_for_addons_that_can_answer(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """The ready checks are offered (under "More options", closed while off) only when an
+    add-on in the plan declares it can say whether it has a song ready, and name it."""
+    world.clear_sources()
+    world.add_source(world.addon("Plain"))
+    world.add_source(world.addon("Readier", resources=("stream", "isrc", "availability")))
+    try:
+        admin.get("addons")  # (the manifests are read)
+        page = admin.get("addons").text
+        assert plan_of(page)["checking"] == ["Readier"]
+        assert '<details class="plan-more">' in page  # closed: the checks are off
+        assert "plan-checks-switch" in page and 'aria-checked="false"' in page
+        assert "Only add-ons built with this check can answer it: Readier." in page
+        assert 'data-preset="ready"' in page
     finally:
         world.clear_sources()
 
@@ -1094,7 +1232,6 @@ def test_catalog_only_addons_are_listed_on_their_own(world: DeliveryWorld, admin
     unread = world.add_source(gone)
     second = world.add_source(world.addon("Audio Two"))
     sources = world.services.sources
-    scripted = {"accept": "application/json"}
 
     def order() -> list[int]:
         return [s.id for s in world.server.call(sources.stored)]
@@ -1112,12 +1249,14 @@ def test_catalog_only_addons_are_listed_on_their_own(world: DeliveryWorld, admin
         for name in ("Audio One", "Unread", "Audio Two"):
             assert f"<h3>{name}</h3>" in audio and f"<h3>{name}</h3>" not in shelves
         assert "Manifest unreachable:" in audio
-        # Numbered among the add-ons asked for audio; the catalog only has no number, no
-        # arrows and no line joining it to the others.
-        assert [int(n) for n in re.findall(r'data-addon="\d+">(\d+)</span>', audio)] == [1, 2, 3]
-        assert 'data-addon="' not in shelves and "source-move" not in shelves
+        # Numbered by their steps among the add-ons asked for audio; the catalog only has
+        # no number, no place in the plan and no line joining it to the others.
+        numbers = re.findall(r'<span class="source-order">(\d+)</span>', audio)
+        assert [int(n) for n in numbers] == [1, 2, 3]
+        assert not re.search(r'<span class="source-order">\d', shelves)
         assert '<ol class="chain chain-unordered">' in shelves
-        assert f'<ol class="chain" data-reorder="{PATH}/addons/order">' in audio
+        assert '<ol class="chain">' in audio
+        assert steps_of(admin.get("addons").text) == [["Audio One"], ["Unread"], ["Audio Two"]]
         # Its settings: a catalog's - its name, address and network, its request limits.
         shown = folds(shelves)
         assert {f"addon-{shelf}-{n}" for n in ("name", "reach", "manifest")} <= shown.outside
@@ -1127,7 +1266,7 @@ def test_catalog_only_addons_are_listed_on_their_own(world: DeliveryWorld, admin
         for audio_only in ("audio-openings", "downloads", "preparations", "capacity-group"):
             assert f"addon-{shelf}-{audio_only}" not in shown.inside | shown.outside
         assert "request timeout or Playback's limits per add-on" in html.unescape(shelves)
-        assert "Time to first audio" not in shelves and "one address" not in shelves
+        assert "Time for a download" not in shelves and "one address" not in shelves
         assert f"addon-{first}-budget" in folds(audio).inside
         # Its own time stays, as a catalog's: playlist imports wait that long for it.
         assert f"addon-{shelf}-budget" in shown.inside
@@ -1140,156 +1279,35 @@ def test_catalog_only_addons_are_listed_on_their_own(world: DeliveryWorld, admin
         kept = stored_addon(world, shelf)
         assert kept.limits.request_burst == 3 and kept.budget == 40
         assert "Time for catalog answers 40 s" in html.unescape(admin.get("addons").text)
-        # The order is that of the add-ons asked for audio: the catalog only keeps its place.
+        # The plan holds the add-ons asked for audio; the catalog only follows them.
         assert order() == [first, shelf, unread, second]
-        places = {f"position-{first}": "3", f"position-{unread}": "1", f"position-{second}": "2"}
-        moved = admin.post("addons/order", {**places, "csrf": admin.csrf()}, headers=scripted)
+        moved = post_plan(admin, plan([unread], [second, first]))
         assert moved.status_code == 200 and moved.json() == {"saved": True}
-        assert order() == [unread, shelf, second, first]
-        with_shelf = {**places, f"position-{shelf}": "4"}
-        refused = admin.post("addons/order", {**with_shelf, "csrf": admin.csrf()}, headers=scripted)
+        assert order() == [unread, shelf, second, first]  # the catalog only keeps its place
+        assert stored_addon(world, shelf).budget == 40  # its time for catalog answers stays
+        refused = post_plan(admin, plan([unread], [second, first], [shelf]))
         assert refused.status_code == 409
-        up = admin.post(f"addons/{second}/move", {"direction": "up", "csrf": admin.csrf()})
-        assert up.status_code == 303 and order() == [second, shelf, unread, first]
-        admin.post(f"addons/{shelf}/move", {"direction": "up", "csrf": admin.csrf()})
-        assert order() == [second, shelf, unread, first]  # (it has no place to move from)
-    finally:
-        world.clear_sources()
-
-
-def test_playback_offers_only_addons_that_supply_audio(
-    world: DeliveryWorld, admin: Browser
-) -> None:
-    """The primary add-on and the preferred fallback are chosen among the add-ons asked for
-    audio. One already set to a catalog-only add-on stays chosen, marked and said, until
-    another is chosen; a catalog-only add-on is not chosen anew. The catalog still offers
-    it."""
-    world.clear_sources()
-    world.add_source(world.addon("Player"))
-    world.add_source(world.addon("Shelf", resources=("search", "catalog")))
-    saved = world.app.dashboard.saved
-    assert saved is not None
-    try:
-        page = html.unescape(admin.get("playback").text)
-        row = row_of(page, "delivery-primary-source")
-        assert '<option value="Player">Player</option>' in row and "Shelf" not in row
-        refused = admin.submit("playback", {"reliable_source": "Shelf"})
-        assert refused.status_code == 400 and "Choose one of the listed add-ons." in refused.text
-        # Set before it was known to be a catalog only (or by the file): kept, and said.
-        world.server.call(lambda: saved.put("delivery", {"primary_source": "Shelf"}, "tester"))
-        page = html.unescape(admin.get("playback").text)
-        row = row_of(page, "delivery-primary-source")
-        assert '<option value="Shelf" selected>Shelf (catalog only)</option>' in row
-        assert "The primary add-on “Shelf” provides a catalog only" in page
-        assert admin.submit("playback", {"max_attempts": "4"}).status_code == 303
-        assert saved_rows(world, "delivery")["primary_source"] == '"Shelf"'  # not replaced
+        assert order() == [unread, shelf, second, first]
+        # The catalog still offers it.
         catalog = row_of(
             html.unescape(admin.submit("catalog", {"kind": "addon"}).text), "catalog-addon"
         )
         assert '<option value="Shelf">Shelf</option>' in catalog
     finally:
-        # The default again (a required number cannot be left empty); a refused save
-        # would leave the value for the tests after this one.
-        reset = admin.submit("playback", {"primary_source": "", "max_attempts": "2"})
-        world.clear_sources()
-    assert reset.status_code == 303 and "max_attempts" not in saved_rows(world, "delivery")
-
-
-def test_a_playback_save_reads_the_chosen_addons_manifest(
-    world: DeliveryWorld, admin: Browser
-) -> None:
-    """A Playback form open from before a restart - no page has read the manifests since -
-    cannot name a catalog-only add-on: the save reads the manifest of the add-on it names."""
-    world.clear_sources()
-    player = world.add_source(world.addon("Player"))
-    shelf_addon = world.addon("Shelf", resources=("search", "catalog"))
-    shelf = world.add_source(shelf_addon)
-    checks = world.app.dashboard.checks
-    try:
-        form = admin.form("playback")  # (the page, loaded before the restart)
-        for source_id in (player, shelf):
-            checks.forget(source_id)  # as after a restart: no manifest known
-        read = len(shelf_addon.requests("manifest"))
-        refused = admin.post("playback", {**form, "reliable_source": "Shelf"})
-        assert refused.status_code == 400 and "Choose one of the listed add-ons." in refused.text
-        assert len(shelf_addon.requests("manifest")) == read + 1
-        assert "reliable_source" not in saved_rows(world, "delivery")
-        for source_id in (player, shelf):
-            checks.forget(source_id)
-        chosen = admin.post("playback", {**form, "reliable_source": "Player"})
-        assert chosen.status_code == 303
-        assert saved_rows(world, "delivery")["reliable_source"] == '"Player"'
-    finally:
-        admin.submit("playback", {"reliable_source": ""})
-        world.clear_sources()
-
-
-def test_a_rename_and_a_playback_save_apply_in_the_order_they_save(
-    world: DeliveryWorld, admin: Browser
-) -> None:
-    """A Playback save that names an add-on is applied before a rename of that add-on can
-    write: the rename's live value is never undone by the save that came before it."""
-    world.clear_sources()
-    alpha = world.add_source(world.addon("Alpha"))
-    world.add_source(world.addon("Other"))
-    saved = world.app.dashboard.saved
-    assert saved is not None
-    put = saved.put
-    persisted, resume = threading.Event(), threading.Event()
-
-    async def paused(section: str, changes: Any, by: str) -> None:
-        await put(section, changes, by)
-        if section == "delivery" and changes.get("primary_source") == "Alpha":
-            persisted.set()
-            await anyio.to_thread.run_sync(resume.wait)
-
-    second = Browser(world.server.base_url)
-    assert second.sign_in(ADMIN_USER, ADMIN_PASSWORD).status_code == 303
-    results: dict[str, int] = {}
-    saving = threading.Thread(
-        target=lambda: results.update(
-            save=admin.submit("playback", {"primary_source": "Alpha"}).status_code
-        )
-    )
-    renaming = threading.Thread(
-        target=lambda: results.update(
-            rename=second.submit("addons", {"name": "Beta"}, f"addons/{alpha}/settings").status_code
-        )
-    )
-    saved.put = paused  # type: ignore[method-assign]
-    try:
-        saving.start()
-        assert persisted.wait(10)
-        renaming.start()
-        renaming.join(0.5)
-        assert renaming.is_alive()  # (it waits for the save to be applied)
-        resume.set()
-        saving.join(10)
-        renaming.join(10)
-        assert results == {"save": 303, "rename": 303}
-        assert saved_rows(world, "delivery")["primary_source"] == '"Beta"'
-        assert world.services.deliverer.settings.primary_source == "Beta"
-    finally:
-        resume.set()
-        saved.put = put  # type: ignore[method-assign]
-        second.close()
-        admin.submit("playback", {"primary_source": ""})
         world.clear_sources()
 
 
 def test_a_renamed_addon_keeps_its_key_and_the_settings_that_name_it(
     world: DeliveryWorld, admin: Browser
 ) -> None:
-    """A rename changes the add-on's name alone: its key stays, the routing's settings that
-    name it follow at once, and names stay unique."""
+    """A rename changes the add-on's name alone: its key stays, its place in the plan too,
+    and names stay unique."""
     world.clear_sources()
     keeper = world.add_source(world.addon("Keeper"))
     world.add_source(world.addon("Taken"))
     action = f"addons/{keeper}/settings"
     key = stored_addon(world, keeper).key
     try:
-        saved = admin.submit("playback", {"primary_source": "Keeper", "reliable_source": "Keeper"})
-        assert saved.status_code == 303
         for name, problem in (
             ("Taken", "Another add-on has this name. Choose another."),
             ("", "Enter a name."),
@@ -1303,20 +1321,16 @@ def test_a_renamed_addon_keeps_its_key_and_the_settings_that_name_it(
         assert renamed.status_code == 303
         stored = stored_addon(world, keeper)
         assert (stored.name, stored.key) == ("Keeper Two", key)
-        settings = world.services.deliverer.settings
-        assert (settings.primary_source, settings.reliable_source) == ("Keeper Two", "Keeper Two")
-        assert saved_rows(world, "delivery")["primary_source"] == '"Keeper Two"'
-        page = html.unescape(admin.get("addons").text)
+        page = admin.get("addons").text
+        assert steps_of(page) == [["Keeper Two"], ["Taken"]]
+        page = html.unescape(page)
         assert "Keeper renamed to Keeper Two." in page and "Restart needed" not in page
-        assert "It is the primary add-on and the preferred fallback" in page
-        assert '<option value="Keeper Two" selected>' in admin.get("playback").text
         # A form made before the rename is older than the add-on: not saved.
         stale = admin.form("addons", action)
         admin.submit("addons", {"name": "Keeper Three"}, action)
         old = admin.post(action, {**stale, "name": "Keeper Four"})
         assert old.status_code == 409 and stored_addon(world, keeper).name == "Keeper Three"
     finally:
-        admin.submit("playback", {"primary_source": "", "reliable_source": ""})
         world.clear_sources()
 
 
@@ -1722,12 +1736,9 @@ def test_the_addon_chain_shows_health(world: DeliveryWorld, admin: Browser) -> N
         assert re.search(r"Cooling down until \d\d:\d\d", page)
         assert "source source-off" in page
         assert "6 add-ons, 5 on" in page
-        # The list is not a strict order: as Playback says it.
-        assert "top down" not in page
-        assert (
-            "<strong>Primary first</strong> starts with the primary, then tries the others"
-            " fastest first" in page
-        )
+        # The list is in the plan's order, which says how add-ons are used.
+        assert "top down" not in page and "Primary first" not in page
+        assert "Songs people are listening to follow the plan below." in page
         failing = page[page.index("<h3>Failing</h3>") - 400 : page.index("<h3>Failing</h3>") + 900]
         assert "led-error" in failing and "Error: <code>timeout</code>" in failing
         limited = page[page.index("<h3>Limited</h3>") - 400 : page.index("<h3>Limited</h3>") + 900]
@@ -1758,6 +1769,52 @@ def test_diagnostics_shows_the_last_scan_as_a_time(world: DeliveryWorld, admin: 
     diagnostics = admin.get("diagnostics").text
     assert re.search(r"songs; last scan (\d{1,2} \w+, )?\d\d:\d\d</dd>", diagnostics)
     assert raw not in diagnostics
+
+
+def test_diagnostics_shows_recent_starts(world: DeliveryWorld, admin: Browser) -> None:
+    """Each start of a song: when, the song, what it was for, the add-on that sent audio
+    and after how long - or that none did, and why; and each add-on's recent starts."""
+    from shijhon.delivery.playback import Routing
+
+    world.clear_sources()
+    starter = world.addon("Starter")
+    world.add_source(starter)
+    song, _, audio = world.placeholder_track("dash-starts", [starter])
+    recent = world.services.deliverer.recent
+    kept = list(recent)
+    recent.clear()
+
+    def starts(page: str) -> str:
+        page = html.unescape(page)
+        begin = page.index(">Recent starts</h2>")
+        return page[begin : page.index("</section>", begin)]
+
+    try:
+        empty = starts(admin.get("diagnostics").text)
+        assert "No song has started since Shijhon started." in empty
+        assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
+        recent.append(
+            Routing(
+                time.time(), "Lost Song", "Nobody", "warm", "", 2.5,
+                ("Starter: not found",), "no add-on had it",
+            )
+        )  # fmt: skip
+        page = admin.get("diagnostics").text
+        shown = starts(page)
+        assert '<ol class="starts">' in shown and "No song has started" not in shown
+        # Newest first: the failed one, then the song played.
+        assert shown.index("Lost Song") < shown.index("Title dash-starts")
+        assert '<span class="start-purpose muted">Next song opened</span>' in shown
+        assert "No audio after 2.5 s" in shown and "<li>Starter: not found</li>" in shown
+        assert '<li class="status-error">no add-on had it</li>' in shown
+        assert re.search(r"Starter after [\d.]+ s", shown)
+        assert '<span class="start-purpose muted">Play</span>' in shown
+        assert "Artist dash-starts" in shown
+        assert re.search(r"Played 1 of its last 1 starts, usually after [\d.]+ s", page)
+    finally:
+        recent.clear()
+        recent.extend(kept)
+        world.clear_sources()
 
 
 # --- appearance ---------------------------------------------------------------------------
@@ -1964,8 +2021,8 @@ def _state(world: DeliveryWorld) -> tuple[object, ...]:
     async def read() -> tuple[object, ...]:
         store = world.services.store
         sources = await store.fetchall(
-            "SELECT id, name, base_url, settings, enabled, position, reach, budget_seconds"
-            " FROM sources ORDER BY id"
+            "SELECT id, name, base_url, settings, enabled, position, reach, budget_seconds,"
+            " step FROM sources ORDER BY id"
         )
         saved = await store.fetchall("SELECT section, key, value FROM saved_settings")
         return tuple(tuple(r) for r in sources), tuple(sorted(tuple(r) for r in saved))
@@ -1977,7 +2034,7 @@ POSTS = [
     ("addons", {"manifest": "https://addon.example.invalid/manifest.json"}),
     ("addons/configuration", {}),
     ("addons/{id}/enabled", {"enabled": "false"}),
-    ("addons/{id}/move", {"direction": "down"}),
+    ("addons/plan", {}),  # (the plan, with the add-ons' ids, is made below)
     ("addons/{id}/settings", {"budget_seconds": "7"}),
     ("addons/{id}/remove", {}),
     ("playback", {"cooldown_seconds": "7"}),
@@ -1994,8 +2051,10 @@ def test_every_form_needs_an_admin_session_and_its_token(
 ) -> None:
     world.clear_sources()
     first = world.add_source(world.addon("GuardOne"))
-    world.add_source(world.addon("GuardTwo"))
+    second = world.add_source(world.addon("GuardTwo"))
     path = route.format(id=first)
+    if route == "addons/plan":  # one that would change the order, the steps and the times
+        data = {"plan": json.dumps(plan([second, first], seconds=7, checks=True, handover=1))}
     before = _state(world)
     anonymous = browser.post(path, data)
     assert anonymous.status_code == 303 and "/sign-in" in anonymous.headers["location"]
@@ -2197,10 +2256,15 @@ def test_an_addon_list_from_the_environment_is_read_only(
         assert added.status_code == 409
         for path, fields in (
             ("addons/enabled", {"enabled": "false"}),
-            ("addons/order", {f"position-{one}": "1"}),
+            ("addons/plan", {"plan": json.dumps(plan([one], seconds=7, checks=True))}),
         ):
             assert admin.post(path, {**fields, "csrf": admin.csrf()}).status_code == 409, path
-        assert "addons.js" not in page and "All off" not in page
+        assert stored_addon(world, one).budget is None
+        assert not world.services.deliverer.settings.ready_checks
+        # The plan is shown, not arranged: no presets, and its script draws it read-only.
+        assert plan_of(page)["readonly"] is True and "data-preset" not in page
+        assert "Pull an add-on" not in page
+        assert "All off" not in page
         assert [s.name for s in world.server.call(world.services.sources.enabled)] == ["EnvOne"]
     finally:
         monkeypatch.undo()

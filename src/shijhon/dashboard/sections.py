@@ -715,7 +715,7 @@ def _bound_writes(
 
 # The settings that name an add-on: a rename changes them with it (the dashboard's, and the
 # configuration file's list taking its name back).
-NAMING = (("catalog", "addon"), ("delivery", "primary_source"), ("delivery", "reliable_source"))
+NAMING = (("catalog", "addon"),)
 
 
 def naming(

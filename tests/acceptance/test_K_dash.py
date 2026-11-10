@@ -12,6 +12,7 @@ link; one join serves concurrent requests, warm-ahead and download-first.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import subprocess
@@ -620,6 +621,19 @@ async def _joins(joiner: Dash) -> int:
     return len(joiner._jobs)
 
 
+@contextlib.contextmanager
+def waiting(world: DeliveryWorld, seconds: float) -> Iterator[None]:
+    """Apps wait ``seconds`` for a song's first audio: an add-on asked keeps trying until
+    then."""
+    settings = world.services.deliverer.settings
+    before = settings.max_wait_seconds
+    settings.max_wait_seconds = seconds
+    try:
+        yield
+    finally:
+        settings.max_wait_seconds = before
+
+
 async def _at_once(joiner: Dash, joins: int) -> None:
     joiner.joins_at_once = joins
 
@@ -627,16 +641,16 @@ async def _at_once(joiner: Dash, joins: int) -> None:
 def test_a_join_not_done_in_time_goes_on_and_the_retry_gets_its_file(
     world: DeliveryWorld, a_alone: FakeAddon, dash: Dash
 ) -> None:
-    """The song's join takes longer than the budget (4 s): the play gets no audio after its
-    budget, as before; the join goes on, and the app's retry - while it is still joining,
+    """The song's join takes longer than apps wait (here 4 s): the play gets no audio after
+    the wait, as before; the join goes on, and the app's retry - while it is still joining,
     and again once it is done - gets the file: the manifest asked for once, each segment
     once, the link once."""
     a = a_alone
     song, _, source = dash_song(world, "d-goes-on", a, segment_delay=3.0)  # about 6 s
     started = time.monotonic()
-    with collected("shijhon.delivery.playback") as lines:
+    with collected("shijhon.delivery.playback") as lines, waiting(world, 4.0):
         first = stream(world, song)
-    assert time.monotonic() - started < 5.0  # the budget, and a moment
+    assert time.monotonic() - started < 5.0  # the wait, and a moment
     assert not first.headers.get("content-type", "").startswith("audio/")
     assert any("timeout while joining the segments (the join goes on)" in line for line in lines)
     assert world.server.call(lambda: _joins(dash)) == 1  # still joining
@@ -657,7 +671,8 @@ def test_a_retry_after_the_join_is_done_gets_the_file_at_once(
 ) -> None:
     a = a_alone
     song, _, _ = dash_song(world, "d-done-later", a, segment_delay=3.0)
-    assert not stream(world, song).headers.get("content-type", "").startswith("audio/")
+    with waiting(world, 4.0):
+        assert not stream(world, song).headers.get("content-type", "").startswith("audio/")
     quiet(world)  # joined in the background
     started = time.monotonic()
     retry = stream(world, song)
@@ -671,13 +686,13 @@ def test_a_retry_after_the_join_is_done_gets_the_file_at_once(
 def test_a_join_nobody_waits_for_ends_at_the_wait_cap_and_leaves_nothing(
     world: DeliveryWorld, a_alone: FakeAddon, dash: Dash
 ) -> None:
-    """A budget of 1.5 s and a wait cap of 3 s: the play gives up after 1.5 s, its join
-    after 3 s - before the add-on's slow segments come (and before a request's own time,
-    5 s, would end it)."""
+    """A wait cap of 2 s: the play gives up at it, and its join a wait after that (for the
+    app's retry) - before the add-on's slow segments come, and before a request's own time
+    (5 s) would end it."""
     a = a_alone
     settings = world.services.deliverer.settings
     saved = settings.budget_seconds, settings.max_wait_seconds
-    settings.budget_seconds, settings.max_wait_seconds = 1.5, 3.0
+    settings.budget_seconds, settings.max_wait_seconds = 1.5, 2.0
     try:
         song, _, _ = dash_song(world, "d-capped", a, segment_delay=30.0)
         kept = len(dash._files)
@@ -685,14 +700,14 @@ def test_a_join_nobody_waits_for_ends_at_the_wait_cap_and_leaves_nothing(
             started = time.monotonic()
             assert not stream(world, song).headers.get("content-type", "").startswith("audio/")
             assert time.monotonic() - started < 2.5
-            assert [p.suffix for p in dash.folder.iterdir()].count(".part") == 1
+            assert [p.suffix for p in dash.folder.iterdir()].count(".part") <= 1
             quiet(world, 10.0)
             ended = time.monotonic() - started
-        assert 2.5 < ended < 4.5  # at the cap, not at the request's own timeout
+        assert 3.5 < ended < 4.8  # a wait after the play gave up at the cap
         assert not [p for p in dash.folder.iterdir() if p.name.startswith(".")]  # no part
         assert len(dash._files) == kept
         assert any(
-            line.startswith("DASH join from A ended after 3.") and "no request waiting" in line
+            line.startswith("DASH join from A ended after 4.") and "no request waiting" in line
             for line in lines
         ), lines
         asked = len(a.requests("segment"))
@@ -710,6 +725,10 @@ def test_only_so_many_joins_at_once_and_the_song_being_played_never_waits(
     join starts once both are done. Each segment is asked for once."""
     a = a_alone
     world.server.call(lambda: _at_once(dash, 1))
+    # Each request has its step's time, also warm-ahead: enough for the second
+    # warm-ahead's wait for its turn and its join (about 4.5 s).
+    (source,) = world.server.call(world.services.sources.enabled)
+    world.server.call(lambda: world.services.sources.update(source.id, budget_seconds=8.0))
     tracks = {}
     for key in ("d-turn-warm-1", "d-turn-warm-2", "d-turn-play"):
         song, fake, _ = dash_song(world, key, a, segment_delay=1.0)  # about 2 s each
@@ -755,6 +774,7 @@ def test_an_orderly_stop_ends_the_joins_and_leaves_no_part(
         navidrome_factory(),
         tmp_path,
         budget_seconds=1.5,
+        max_wait_seconds=1.5,
         request_timeout_seconds=20.0,
         dash_start="complete",
     ) as other:
@@ -826,3 +846,27 @@ def test_without_ffmpeg_dash_links_are_refused_and_direct_links_play(
         page = browser.get("addons").text
         assert "DASH links are not played: ffmpeg was not found" in page
         browser.close()
+
+
+def test_a_join_a_waiter_leaves_stops_once_nobody_waits(
+    world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon], dash: Dash
+) -> None:
+    """A second request waits on A's DASH link, published before its audio; B's audio comes
+    first. The race lets the join go while that request still waits for it; once the
+    request leaves the link (it follows the race to B's), the join stops - it does not go on
+    with nobody waiting."""
+    a, b = a_and_b
+    quiet(world)
+    song, fake, _ = dash_song(world, "d-left-join", a, b, segment_delay=3.0)  # about 9 s
+    fake.lookup_delay = 0.3  # the second request waits for its link
+    with ThreadPoolExecutor(2) as pool:
+        first = pool.submit(stream, world, song)
+        time.sleep(0.1)
+        second = pool.submit(stream, world, song)
+        answers = [first.result(), second.result()]
+    assert all(r.headers["content-type"] == "audio/flac" for r in answers)
+    assert b.requests("audio")  # B's audio played
+    deadline = time.monotonic() + 1.5
+    while world.server.call(lambda: _joins(dash)) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert world.server.call(lambda: _joins(dash)) == 0

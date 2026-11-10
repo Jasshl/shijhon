@@ -94,6 +94,7 @@ async def test_stored_lists_every_addon_in_order(tmp_path: Path) -> None:
                 Reach.LOOPBACK,
                 40,
                 key=addon_key("Two"),
+                step=2,  # (its step stays when only the order changes)
             ),
             StoredSource(
                 one,
@@ -105,6 +106,7 @@ async def test_stored_lists_every_addon_in_order(tmp_path: Path) -> None:
                 Reach.PUBLIC,
                 None,
                 key=addon_key("One"),
+                step=1,
             ),
         ]
         assert [s.name for s in await sources.enabled()] == ["Two"]
@@ -636,6 +638,119 @@ async def test_the_files_list_finds_a_renamed_holder_past_a_duplicate(tmp_path: 
         assert sources.key_of("Alpha") == addon_key("Alpha")
         assert await sources.sync(listed, renamed=renamed) == []  # (and again: no change)
         assert [(s.id, s.enabled) for s in await sources.stored()] == [(1, True), (2, False)]
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+async def _steps(sources: SourceRegistry) -> list[tuple[str, int, float | None]]:
+    return [(s.name, s.step, s.step_seconds) for s in await sources.enabled()]
+
+
+@pytest.mark.anyio
+async def test_the_plan_is_stored_as_steps_with_their_times(tmp_path: Path) -> None:
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+    try:
+        one = await sources.add("One", "https://one.example.invalid/x", budget_seconds=60)
+        two = await sources.add("Two", "https://two.example.invalid/x")
+        three = await sources.add("Three", "https://three.example.invalid/x")
+        assert await _steps(sources) == [("One", 1, None), ("Two", 2, None), ("Three", 3, None)]
+        await sources.arrange([([three, one], 4.0), ([two], 7.5)])
+        assert await _steps(sources) == [("Three", 1, 4.0), ("One", 1, 4.0), ("Two", 2, 7.5)]
+        # The plan sets the steps' times; an add-on's time for a download stays its own.
+        assert [s.budget for s in await sources.enabled()] == [None, 60, None]
+        # An add-on turned off leaves the steps apart: they are numbers, not neighbours.
+        await sources.arrange([([one], 4.0), ([three], 4.0), ([two], 4.0)])
+        await sources.set_enabled(three, False)
+        assert await _steps(sources) == [("One", 1, 4.0), ("Two", 3, 4.0)]
+        for wrong in ([([one, one], 4.0)], [([one], 0.0)], [([12345], 4.0)]):
+            with pytest.raises(ValueError):
+                await sources.arrange(wrong)
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_add_ons_left_out_of_the_plan_keep_their_places(tmp_path: Path) -> None:
+    """A plan of some add-ons (those asked for audio) puts them in the places they had
+    among them; the others (a catalog only) stay where they are."""
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+    try:
+        one = await sources.add("One", "https://one.example.invalid/x")
+        shelf = await sources.add("Shelf", "https://shelf.example.invalid/x")
+        two = await sources.add("Two", "https://two.example.invalid/x")
+        await sources.arrange([([two, one], 3.0)])
+        assert [s.name for s in await sources.stored()] == ["Two", "Shelf", "One"]
+        assert [s.step for s in await sources.stored()] == [1, 2, 1]
+        await sources.remove(shelf)
+        assert await _steps(sources) == [("Two", 1, 3.0), ("One", 1, 3.0)]
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_the_files_list_sets_the_steps(tmp_path: Path) -> None:
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+    try:
+        listed = [
+            AddonSettings(name="One", base_url=SecretStr("https://one.example.invalid/x")),
+            AddonSettings(
+                name="Two", base_url=SecretStr("https://two.example.invalid/x"), with_previous=True
+            ),
+            AddonSettings(name="Three", base_url=SecretStr("https://three.example.invalid/x")),
+        ]
+        await sources.sync(listed)
+        assert [(n, s) for n, s, _ in await _steps(sources)] == [
+            ("One", 1),
+            ("Two", 1),
+            ("Three", 2),
+        ]
+        assert await sources.differs(listed) == []
+        listed[1] = listed[1].model_copy(update={"with_previous": False})
+        assert await sources.differs(listed) == ["the steps"]
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_the_files_list_sets_the_step_and_download_times_and_slow_after(
+    tmp_path: Path,
+) -> None:
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+    try:
+        listed = [
+            AddonSettings(
+                name="One",
+                base_url=SecretStr("https://one.example.invalid/x"),
+                step_seconds=5.0,
+                budget_seconds=120.0,
+                slow_after=3.0,
+            ),
+            AddonSettings(name="Two", base_url=SecretStr("https://two.example.invalid/x")),
+        ]
+        await sources.sync(listed)
+        assert [
+            (s.name, s.step_seconds, s.budget, s.slow_after) for s in await sources.enabled()
+        ] == [
+            ("One", 5.0, 120.0, 3.0),
+            ("Two", None, None, None),
+        ]
+        assert await sources.differs(listed) == []
+        for change in ({"step_seconds": 6.0}, {"slow_after": None}):
+            assert await sources.differs([listed[0].model_copy(update=change), listed[1]]) == [
+                "One"
+            ]
+        await sources.sync([listed[0].model_copy(update={"slow_after": None}), listed[1]])
+        assert (await sources.enabled())[0].slow_after is None
+        with pytest.raises(ValueError):
+            await sources.update(1, slow_after=0.5)
     finally:
         await sources.aclose()
         await store.close()

@@ -229,7 +229,7 @@ def test_addon_key_upgrade_gives_each_addon_the_key_its_name_made() -> None:
             (name, enabled, position),
         )
     before = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
-    assert apply_migrations(conn) == migrations[-1][0]
+    assert apply_migrations(conn, migrations[:32]) == 32
     rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
     assert [row[:-1] for row in rows] == before  # nothing else changed
     keys = [row[-1] for row in rows]
@@ -242,3 +242,123 @@ def test_addon_key_upgrade_gives_each_addon_the_key_its_name_made() -> None:
             " VALUES ('Other', ?, 'https://other.example.invalid', 6, 1)",
             (keys[0],),
         )
+
+
+def test_addon_steps_upgrade_keeps_the_order_and_drops_the_routing_modes() -> None:
+    """Schema 34: the add-ons' plan replaces the routing modes. Every add-on starts as a
+    step of its own, in the order it had; the saved settings of the modes and their roles
+    are deleted, and the primary's timeouts and misses are kept as every add-on's."""
+    migrations = load_migrations(
+        Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    )
+    conn = _conn()
+    assert apply_migrations(conn, migrations[:33]) == 33
+    for name, position in (("First", 2), ("Second", 1)):
+        conn.execute(
+            "INSERT INTO sources (name, key, base_url, position, created_at)"
+            " VALUES (?, ?, 'https://addon.example.invalid', ?, 1)",
+            (name, addon_key(name), position),
+        )
+    removed = (
+        "routing",
+        "primary_source",
+        "reliable_source",
+        "primary_budget_seconds",
+        "reliable_lookup_after_seconds",
+        "max_attempts",
+        "primary_cooldown_switches",
+        "primary_release_miss_minutes",
+    )
+    kept = {"primary_cooldown_timeouts": "3", "primary_miss_hours": "12.0", "cooldown_seconds": "5"}
+    for key, value in {**dict.fromkeys(removed, '"x"'), **kept}.items():
+        conn.execute(
+            "INSERT INTO saved_settings (section, key, value, saved_at, saved_by)"
+            " VALUES ('delivery', ?, ?, 1, 'tester')",
+            (key, value),
+        )
+    # Another section's setting of the same name is not the routing's.
+    conn.execute(
+        "INSERT INTO saved_settings (section, key, value, saved_at, saved_by)"
+        " VALUES ('catalog', 'routing', ?, 1, 'tester')",
+        ('"x"',),
+    )
+    assert apply_migrations(conn, migrations[:34]) == 34
+    rows = conn.execute("SELECT name, position, step FROM sources ORDER BY position").fetchall()
+    assert [tuple(row) for row in rows] == [("Second", 1, 1), ("First", 2, 2)]
+    saved = conn.execute("SELECT section, key, value FROM saved_settings").fetchall()
+    assert sorted(tuple(row) for row in saved) == [
+        ("catalog", "routing", '"x"'),
+        ("delivery", "cooldown_seconds", "5"),
+        ("delivery", "cooldown_timeouts", "3"),
+        ("delivery", "miss_hours", "12.0"),
+    ]
+
+
+@pytest.mark.parametrize("mode", ["primary_first", "ready_first", "ordered"])
+def test_addon_steps_upgrade_keeps_what_the_routing_mode_did(mode: str) -> None:
+    """Schema 34 converts the mode once: under primary-first the primary comes first and an
+    add-on whose check says ready takes over after the primary's time; under ready-first
+    such an add-on goes first; in order, the list stays as it is."""
+    migrations = load_migrations(
+        Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    )
+    conn = _conn()
+    assert apply_migrations(conn, migrations[:33]) == 33
+    for name, position in (("One", 1), ("Two", 2), ("Three", 3)):
+        conn.execute(
+            "INSERT INTO sources (name, key, base_url, position, created_at)"
+            " VALUES (?, ?, 'https://addon.example.invalid', ?, 1)",
+            (name, addon_key(name), position),
+        )
+    for key, value in (
+        ("routing", f'"{mode}"'),
+        ("primary_source", '"Three"'),
+        ("primary_budget_seconds", "3.0"),
+    ):
+        conn.execute(
+            "INSERT INTO saved_settings (section, key, value, saved_at, saved_by)"
+            " VALUES ('delivery', ?, ?, 1, 'tester')",
+            (key, value),
+        )
+    assert apply_migrations(conn, migrations[:34]) == 34
+    order = [r[0] for r in conn.execute("SELECT name FROM sources ORDER BY step, position")]
+    saved = dict(
+        conn.execute("SELECT key, value FROM saved_settings WHERE section = 'delivery'").fetchall()
+    )
+    if mode == "primary_first":
+        assert order == ["Three", "One", "Two"]
+        assert saved == {"ready_checks": "true", "ready_handover_seconds": "3.0"}
+    elif mode == "ready_first":
+        assert order == ["One", "Two", "Three"]
+        assert saved == {"ready_checks": "true", "ready_handover_seconds": "0"}
+    else:
+        assert order == ["One", "Two", "Three"] and saved == {}
+
+
+def test_step_times_upgrade_keeps_the_plan_and_the_download_times() -> None:
+    """Schema 35 parts an add-on's one time in two: its step's time (the plan's, as it was)
+    and its time for a download (the same value, kept); its own "slow after" is unset."""
+    migrations = load_migrations(
+        Path(__file__).parents[2] / "src" / "shijhon" / "store" / "migrations"
+    )
+    conn = _conn()
+    assert apply_migrations(conn, migrations[:34]) == 34
+    for name, position, step, budget in (
+        ("One", 1, 1, 4.5),
+        ("Two", 2, 1, 4.5),
+        ("Three", 3, 2, None),
+    ):
+        conn.execute(
+            "INSERT INTO sources (name, key, base_url, position, step, budget_seconds, created_at)"
+            " VALUES (?, ?, 'https://addon.example.invalid', ?, ?, ?, 1)",
+            (name, addon_key(name), position, step, budget),
+        )
+    assert apply_migrations(conn, migrations[:35]) == 35
+    rows = conn.execute(
+        "SELECT name, step, step_seconds, budget_seconds, slow_after FROM sources ORDER BY position"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("One", 1, 4.5, 4.5, None),
+        ("Two", 1, 4.5, 4.5, None),
+        ("Three", 2, None, None, None),
+    ]

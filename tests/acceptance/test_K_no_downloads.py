@@ -42,10 +42,18 @@ def world(
 def fresh(world: DeliveryWorld) -> Iterator[None]:
     world.clear_sources()
     settings = world.services.deliverer.settings
-    saved = (settings.routing, settings.reliable_source, settings.prepare_when_not_ready)
+    saved = (
+        settings.ready_checks,
+        settings.ready_handover_seconds,
+        settings.prepare_when_not_ready,
+    )
     saved_warm = settings.warm_ahead_depth
     yield
-    settings.routing, settings.reliable_source, settings.prepare_when_not_ready = saved
+    (
+        settings.ready_checks,
+        settings.ready_handover_seconds,
+        settings.prepare_when_not_ready,
+    ) = saved
     settings.warm_ahead_depth = saved_warm
     world.clear_sources()
 
@@ -94,29 +102,21 @@ def test_a_download_goes_to_another_add_on(world: DeliveryWorld, fresh: None, va
     assert other.requests("stream") and other.requests("audio")
 
 
-@pytest.mark.parametrize("routing", ["ordered", "primary_first"])
-def test_a_download_after_a_play_from_it_goes_elsewhere(
-    world: DeliveryWorld, fresh: None, routing: str
-) -> None:
-    """The play's link, at the add-on that asks not to be used for downloads, is not the
-    download's - also with that add-on as the primary."""
-    settings = world.services.deliverer.settings
-    settings.routing, settings.primary_source = routing, "Shy"
+def test_a_download_after_a_play_from_it_goes_elsewhere(world: DeliveryWorld, fresh: None) -> None:
+    """The play's link, at the add-on that asks not to be used for downloads (the plan's
+    first), is not the download's."""
     first, other = shy(world), world.addon("Other")
     world.add_source(first)
     world.add_source(other)
-    try:
-        song, _, audio = world.placeholder_track(f"nd-after-play-{routing}", [first, other])
-        assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
-        assert first.requests("audio") and not other.requests("stream")
-        played = len(first.requests("audio"))
-        answer = world.client().request("download", {"id": song})
-        assert answer.status_code == 200 and answer.content[:4] == b"fLaC"
-        assert row(world, song)["state"] == "delivered"
-        assert len(first.requests("audio")) == played  # nothing more asked of it
-        assert other.requests("stream") and other.requests("audio")
-    finally:
-        settings.primary_source = ""
+    song, _, audio = world.placeholder_track("nd-after-play", [first, other])
+    assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
+    assert first.requests("audio") and not other.requests("stream")
+    played = len(first.requests("audio"))
+    answer = world.client().request("download", {"id": song})
+    assert answer.status_code == 200 and answer.content[:4] == b"fLaC"
+    assert row(world, song)["state"] == "delivered"
+    assert len(first.requests("audio")) == played  # nothing more asked of it
+    assert other.requests("stream") and other.requests("audio")
 
 
 def test_a_play_from_it_keeps_its_file_while_the_song_is_downloaded_elsewhere(
@@ -228,7 +228,7 @@ def test_ready_checks_go_on_and_preparation_goes_elsewhere(
     world: DeliveryWorld, fresh: None
 ) -> None:
     settings = world.services.deliverer.settings
-    settings.routing, settings.reliable_source = "ready_first", "Reliable"
+    settings.ready_checks, settings.ready_handover_seconds = True, 0.0  # checks first
     settings.prepare_when_not_ready = True
     checks = ("stream", "isrc", "availability")
     first, preparer = shy(world, resources=checks), world.addon("Preparer", resources=checks)

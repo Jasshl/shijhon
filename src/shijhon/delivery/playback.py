@@ -1,10 +1,12 @@
 """Streaming placeholder audio from add-ons.
 
-- **Resolution**: sources are tried in the user's order, skipping disabled and cooling
-  ones, within a budget (about 9 s at byte zero) that allows one fallback; then the
-  request fails so the client skips. Ready-first and primary-first routing
-  choose the order from the add-ons' availability checks; with primary-first the primary
-  may use the whole budget and the fallbacks then get their own.
+- **Resolution**: the add-ons' plan (``SourceRegistry``: their order, in steps), skipping
+  disabled and cooling ones. For a song someone waits for, the add-ons of a step start
+  together, each within the step's time; the first audio plays and the others are
+  stopped, and a step that ends without audio leads to the next (``_run_plan``). Other
+  requests - fetches ahead, warm-ahead, downloads, probes - ask one add-on at a time in
+  the plan's order. With ``ready_checks`` the add-ons that can tell are asked whether they
+  have the song ready: one that has goes ahead, one that has not goes last.
 - **Pinning**: a play is pinned to one representation — the source's URL, and its strong
   ETag (sent as ``If-Match``) and size once seen. Seeks (non-zero ranges) never switch to
   another file: a play continuing after its pin expired or its link stopped working (a
@@ -20,14 +22,15 @@
   a second, its audio requests being opened at once - with the song being played first. A
   wait there is part of the request's budget; one that runs out there is a timeout that is
   not the add-on's failure.
-- **Primary misses** are remembered (per recording, and per release for a while): later
-  requests skip the primary's lookup and go to the other sources at once.
+- **Misses** are remembered (an add-on that said it lacks a recording is not asked for it
+  again for a while), and so are timeouts: an add-on that keeps timing out cools down.
 - **A request's own test** of the audio (``Deliverer.open``'s ``accept``: a listener's
   minimum quality, say): audio it refuses is passed over like another recording - the
   routing goes on to the next source, in the same order and budget - but the link stays,
   and the add-on is not held to have failed.
 - **Diagnostics**: a play that ends without audio is logged with the reason and the time
-  of each step at each source (a routing trace); so is a play served by a fallback.
+  of each step at each source (a routing trace); so is a play served by a fallback. The
+  latest routings are kept for the dashboard's Diagnostics (``Deliverer.recent``).
 """
 
 from __future__ import annotations
@@ -36,10 +39,12 @@ import contextlib
 import logging
 import re
 import time
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from contextlib import AbstractAsyncContextManager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -58,7 +63,7 @@ from shijhon.delivery.addon import (
 from shijhon.delivery.dash import CapacityLease, Dash, DashError, Link, Stream, link_key
 from shijhon.delivery.length import PEEK_BYTES, audio_kind, audio_length, complete, peek
 from shijhon.delivery.netpolicy import denied
-from shijhon.delivery.sources import MEASURED_SECONDS, Attempt, Source, SourceRegistry
+from shijhon.delivery.sources import Attempt, Source, SourceRegistry, usual_seconds
 from shijhon.locks import KeyedLocks
 
 if TYPE_CHECKING:
@@ -75,6 +80,9 @@ _ACCEPT: ContextVar[Accept | None] = ContextVar("shijhon_accept", default=None)
 # Whether the audio opened may go to a client (not a probe, warm-ahead or a fetch for the
 # library): its bytes are captured for ``Deliverer.retention`` until it is known.
 _KEEPS: ContextVar[bool] = ContextVar("shijhon_keeps", default=False)
+# The request is for a listener waiting for the audio (not a download, nor a fetch for the
+# library): its add-ons may race.
+_WAITED: ContextVar[bool] = ContextVar("shijhon_waited", default=False)
 
 log = logging.getLogger(__name__)
 
@@ -188,6 +196,10 @@ class _Error(_Failed):
     timeout, a refusal or a miss."""
 
 
+class _Left(Exception):
+    """A request left another request's link: that request's race went on without it."""
+
+
 class _Other(Exception):
     """Another request's link turned out to link another file than the one a continuing
     play started with: not that play's (the link itself is fine and stays)."""
@@ -224,20 +236,19 @@ class _Missing(Exception):
 
 @dataclass
 class Leftover:
-    """What a routing that ended without audio left to try: its fallbacks' order, the
-    add-on track IDs known, the sources that said "not now", the sources done with (they
-    failed or lacked the song) and the one the client's wait cap cut short while it was
-    still preparing the song."""
+    """What a routing that ended without audio left to try: its order, the add-on track IDs
+    known, the sources done with (they failed or lacked the song) and the one the client's
+    wait cap cut short while it was still preparing the song."""
 
     at: float = 0.0
     order: list[int] = field(default_factory=list)
     hints: dict[int, str] = field(default_factory=dict)
-    declined: set[int] = field(default_factory=set)
     done: set[int] = field(default_factory=set)
     cut: int | None = None
     planned: bool = False  # it got as far as its plan (else nothing to continue)
-    # Of ``done``, those given up on while they may still have been preparing the song (a
-    # primary switched away from): no failure for a client's retry.
+    # Of ``done``, those given up on while they may still have been preparing the song
+    # (stopped for another add-on's audio, or for one that has the song ready): no failure
+    # for a client's retry.
     slow: set[int] = field(default_factory=set)
     # Those that said they were preparing the song when their time ran out: not done with -
     # a routing that continues this one asks them again (after the one cut short).
@@ -283,39 +294,19 @@ class Departure:
 
 @dataclass
 class _Checks:
-    """The availability checks of one primary-first routing, answered while they run: they
-    may outlast the primary's attempt - the fallback most likely to deliver then goes
-    first, and they order the others once they are in.
+    """The availability checks of one play's routing (``ready_checks``), answered while its
+    steps run: they may outlast the step they began in."""
 
-    The fallbacks are ordered by their recent attempts: the seconds each took for a
-    song it delivered, for the answer its check gave now (``cost``) - measured, not built
-    in; a source not measured yet has a neutral estimate, and the user's order breaks ties.
-    """
-
-    others: list[Source]  # the sources asked (those that may have a check)
-    cost: Callable[[Source, str], float]  # seconds a delivered song, by the check's answer
+    sources: list[Source]  # those asked
     answers: dict[int, Availability | None] = field(default_factory=dict)
-    ids: set[int] = field(default_factory=set)  # of ``others``
     asked: set[int] = field(default_factory=set)  # answered, failed or timed out
     done: anyio.Event = field(default_factory=anyio.Event)
-    ordered: bool = False  # the fallbacks were put in their order with every answer in
-    began: bool = False  # a fallback's attempt has begun: the checks order those after it
-    looked: dict[int, float] = field(default_factory=dict)  # seconds of a lookup meanwhile
-    lacking: set[int] = field(default_factory=set)  # its lookup meanwhile found nothing
-    timed_out: set[int] = field(default_factory=set)  # its lookup meanwhile timed out
-    paced: set[int] = field(default_factory=set)  # ... at its request limit: not its doing
-    since: float | None = None  # the primary's attempt ended: the fallbacks' budget starts
+    ready_seen: anyio.Event = field(default_factory=anyio.Event)  # a check said "ready"
 
-    def __post_init__(self) -> None:
-        self.ids = {s.id for s in self.others}
-
-    def answer(self, source: Source, *, waiting: str = "not now") -> str:
-        """Its check's answer: "ready", "not now" or "-" (it cannot tell, or has no check);
-        ``waiting`` for a check not answered yet (by default not counted on until it
-        answers)."""
-        if source.id in self.ids and source.id not in self.asked:
-            return waiting
-        answer = self.answers.get(source.id)
+    def answer(self, source: Source) -> str:
+        """Its check's answer: "ready", "not now" or "-" (it cannot tell, has no check, or
+        has not answered yet)."""
+        answer = self.answers.get(source.id) if source.id in self.asked else None
         if answer is None or answer.available is None:
             return "-"
         return "ready" if answer.available else "not now"
@@ -324,22 +315,39 @@ class _Checks:
         return self.answer(source) == "ready"
 
     def said_no(self, source: Source) -> bool:
-        """It said "not now" - or has not answered: until it does, it is not counted on."""
         return self.answer(source) == "not now"
 
-    def key(self, source: Source, *, waiting: str = "not now") -> tuple[float, int]:
-        return self.cost(source, self.answer(source, waiting=waiting)), source.position
+    def hints(self) -> dict[int, str]:
+        """The add-on track IDs the checks that said ready gave."""
+        return {
+            source_id: answer.track_id
+            for source_id, answer in self.answers.items()
+            if answer is not None and answer.available and answer.track_id
+        }
 
-    def order(self, sources: list[Source]) -> list[Source]:
-        """The fallbacks still to try: those that said "not now" (or have not answered) last
-        - a stream there most likely fails and can start a preparation job; within
-        each, by their recent attempts for the answer each gave now (seconds a delivered
-        song), then the user's order."""
 
-        def rank(source: Source) -> tuple[bool, float, int]:
-            return self.said_no(source), *self.key(source)
+@dataclass
+class _Handover:
+    """When an add-on whose check says it has the song ready takes over from a step still
+    without audio (None: not, or not any more)."""
 
-        return sorted(sources, key=rank)
+    at: float | None
+
+
+@dataclass(frozen=True)
+class Routing:
+    """One routing at byte zero, for the dashboard's Diagnostics: when (wall clock), the
+    song, what it was for, the add-on that served it (empty: none), how long its first
+    byte took, and its steps."""
+
+    at: float
+    title: str
+    artist: str
+    purpose: str
+    served: str
+    seconds: float
+    steps: tuple[str, ...]
+    ended: str = ""  # why it ended without audio
 
 
 _TRACE: ContextVar[Trace | None] = ContextVar("shijhon_routing_trace", default=None)
@@ -386,6 +394,20 @@ def _done(
                 trace.left.slow.add(source.id)
 
 
+def _until_started(pin: Pin, cap: float, clock: Callable[[], float]) -> float:
+    """The time a request on a race's link may take: until the client's wait, until the
+    link's audio came."""
+    return 0.0 if pin.delivered else cap - clock()
+
+
+def _abandon(pin: Pin) -> None:
+    """A link a race published early is not the song's: the requests of others waiting on
+    it leave it (they follow the race to its next link or its answer)."""
+    pin.gone = True
+    for scope in pin.watchers or ():
+        scope.cancel()
+
+
 def _failed_step(text: str) -> None:
     """A step at which a source failed (an error, a timeout), not merely lacked the track."""
     trace = _TRACE.get()
@@ -405,7 +427,13 @@ class _Shared(NoSource):
 _ERRORS = {"failed", "broken"}
 ERROR_RUN_SECONDS = 600.0  # errors further apart than this are not one run
 
-_PURPOSES = {"play": "play", "ahead": "fetch ahead", "alone": "fetch ahead", "warm": "warm-ahead"}
+_PURPOSES = {
+    "play": "play",
+    "ahead": "fetch ahead",
+    "alone": "fetch ahead",
+    "warm": "warm-ahead",
+    "download": "download",
+}
 # How urgent a request's add-on work is at the add-ons' limits: the song being played
 # first, then a client's fetches ahead, then warm-ahead.
 _URGENCIES = {"ahead": pacing.QUEUED, "alone": pacing.QUEUED, "warm": pacing.WARM}
@@ -485,13 +513,10 @@ class Pin:
     etag: str | None = None
     size: int | None = None
     content_type: str | None = None
-    # For a source with its own budget: when its first byte must have arrived, and
-    # when it would have without a client's wait cap.
+    # By its step's time: when its first byte must have arrived, and when it would have
+    # without a client's wait cap.
     first_byte_by: float | None = None
     own_by: float | None = None
-    # Later attempts of the routing that found it which share the byte-zero budget with it
-    # (None: not known - counted from the sources left).
-    sharing: int | None = None
     # How long its lookup and its link took (for the routing trace).
     lookup_seconds: float = 0.0
     link_seconds: float = 0.0
@@ -515,7 +540,6 @@ class Pin:
     # before its attempt (its attempt's record).
     answer: str = "-"
     looked_before: float = 0.0
-    charge: int = 0  # the attempt its routing counted for it (given back on an add-on error)
     waited: float = 0.0  # seconds its lookup and link waited at the add-on's limits
     seconds: float = 0.0  # the catalog's length of the song it was found for
     # A DASH link served at once: what its audio is copied out as for the library, and its
@@ -523,6 +547,11 @@ class Pin:
     remux: str | None = None
     told: float | None = None
     cached: bool = False  # a ready-only variant: choose from the audio actually cached
+    # A link a play's race published before its audio (``Deliverer._race``): the scopes of
+    # the requests of others that wait on it, canceled when the race goes on without it
+    # (``gone``) - another add-on's audio came first, or it failed.
+    watchers: list[anyio.CancelScope] | None = field(default=None, repr=False, compare=False)
+    gone: bool = False
 
 
 @dataclass
@@ -568,21 +597,23 @@ class PlaybackSettings:
     # Only this configured catalog may use its confirmed, declared item IDs directly.
     catalog_addon: str = ""
     catalog_identity: str = ""
+    # A new step's time (when the next step joins a play's start), and an add-on's time
+    # for a download, for an add-on without its own (``Source.step_seconds``, ``budget``).
     budget_seconds: float = 9.0
-    max_attempts: int = 2  # sources whose stream is tried at byte zero (one fallback)
     pin_ttl_seconds: float = 1800.0
     cooldown_seconds: float = 30.0
     seek_timeout_seconds: float = 15.0
-    routing: str = "ordered"  # or "ready_first", "primary_first"
-    reliable_source: str = ""
-    primary_source: str = ""
-    # After this, a source that can deliver the track now takes over from the primary;
-    # without one, the primary keeps its chance up to budget_seconds.
-    primary_budget_seconds: float = 4.5
-    # The primary cools down after this many timeouts, or this many switches away from
-    # it, without a delivery in between.
-    primary_cooldown_timeouts: int = 2
-    primary_cooldown_switches: int = 3
+    # Ask the add-ons that can tell whether they have the song ready: one that has takes
+    # over after ready_handover_seconds without audio (0: it goes first), one that has not
+    # goes last.
+    ready_checks: bool = False
+    ready_handover_seconds: float = 4.5
+    # An add-on cools down after this many timeouts without a delivery in between.
+    cooldown_timeouts: int = 2
+    # An add-on still trying when another has sent the song counts a timeout once it is
+    # past its step's time and this many times its usual time to first audio (its own
+    # ``Source.slow_after`` first); one with no usual time, once past its step's time.
+    slow_after: float = 2.0
     # Any source cools down after this many errors in a row (an HTTP 5xx, no answer, a
     # broken answer) without a delivery in between, and again after each further one until
     # it delivers. 0: off.
@@ -591,16 +622,11 @@ class PlaybackSettings:
     # together), below typical client request timeouts.
     max_wait_seconds: float = 30.0
     availability_timeout_seconds: float = 2.0
-    # The reliable source is looked up (never streamed) while the primary's lookup has not
-    # answered after this long, and at once when the primary is skipped.
-    reliable_lookup_after_seconds: float = 0.5
     prepare_when_not_ready: bool = False
     warm_ahead_depth: int = 2
     warm_ahead_budget_seconds: float = 60.0
-    # A recording the primary did not have is not asked for there again for this long; for a
-    # release it lacked a track of, the likely fallback is looked up at once.
-    primary_miss_hours: float = 24.0
-    primary_release_miss_minutes: float = 60.0
+    # A recording an add-on did not have is not asked of it again for this long.
+    miss_hours: float = 24.0
     # Delivered audio whose length (from its first bytes) differs from the catalog's by
     # more than the larger of these is another recording: not used, the next source is
     # tried, and that source is not asked for the recording again for a while. Both
@@ -621,7 +647,8 @@ class PlaybackSettings:
     dash_segments_at_once: int = 4
 
 
-MAX_MISSES = 20000  # remembered primary misses (recordings and releases)
+MAX_MISSES = 20000  # remembered misses (an add-on and a recording)
+RECENT_ROUTINGS = 200  # routings kept for Diagnostics
 MAX_PINS = 4096  # songs' links kept (past it: the expired, then the oldest go)
 MAX_TWINS = 4096  # songs committed while they were played, known under both their names
 RESUME_SECONDS = 60.0  # a routing that ended without audio can be continued this long
@@ -635,13 +662,6 @@ WRONG_SECONDS = 7 * 86400.0  # a source that delivered another recording is not 
 # the source as this many first bytes - as many as reading a length may need (a large ID3
 # tag) - so their length is read before the client gets any. Only what decides is read.
 PROBE_BYTES = PEEK_BYTES
-# Ordering the fallbacks by their recent attempts, within this age: the seconds they
-# took for each song delivered, blended with a neutral estimate that counts as one song -
-# a source that has the song ready is likely quick, one that cannot deliver it now likely
-# is not; the user's preferred fallback (reliable_source) a little ahead of the others.
-# Measurements soon outweigh the estimate. (Kept across restarts.)
-ESTIMATE = {"ready": 3.0, "-": 6.0, "not now": 60.0}
-PREFERRED_ESTIMATE = 4.0
 
 
 @dataclass
@@ -664,10 +684,11 @@ class Deliverer:
     # The songs (their keys) whose audio a client was sent: played - not merely probed
     # (HEAD), warmed or fetched for the library. The newest last; past 20,000 the oldest go.
     _heard: dict[str, None] = field(default_factory=dict)
-    # When the primary did not have a recording (by ISRC, else the track), or a track of a
-    # release: until then it is skipped for them.
-    _misses: dict[str, float] = field(default_factory=dict)
-    _release_misses: dict[str, float] = field(default_factory=dict)
+    # (source, recording) -> until when: the add-on did not have the recording (by ISRC,
+    # else the track); it is skipped for it until then.
+    _misses: dict[tuple[int, str], float] = field(default_factory=dict)
+    # The latest routings at byte zero, newest last (Diagnostics).
+    recent: deque[Routing] = field(default_factory=lambda: deque(maxlen=RECENT_ROUTINGS))
     # The last failed routing of each song: when, and why.
     _failed: dict[str, tuple[float, list[str]]] = field(default_factory=dict)
     # What the last routing of each song that ended without audio left to try.
@@ -884,6 +905,10 @@ class Deliverer:
             heard and not head and not download and purpose != "warm"
             and not _LIBRARY_ACQUISITION.get()
         )  # fmt: skip
+        listener = heard and not download and not _LIBRARY_ACQUISITION.get()
+        waited_on = _WAITED.set(listener)
+        # (What it was for, in Diagnostics: a fetch for downloads or the library is no play.)
+        shown = purpose if listener or purpose != "play" else "download"
         requested = ByteRange.parse(range_header)
         starts = not head and (requested is None or requested.at_zero)
         try:
@@ -908,7 +933,7 @@ class Deliverer:
                 )  # fmt: skip
             except (NoSource, PinBroken) as exc:
                 at_zero = requested is None or requested.at_zero
-                self._no_audio(track, purpose if at_zero else "seek", trace, exc, departure)
+                self._no_audio(track, shown if at_zero else "seek", trace, exc, departure)
                 if at_zero and isinstance(exc, NoSource) and not isinstance(exc, _Shared):
                     # The sources a download did not use are left to try: a stream
                     # continuing its routing (in the song's own format) may use them.
@@ -923,6 +948,7 @@ class Deliverer:
             if requested is None or requested.at_zero:
                 self._failed_at.pop(track.key, None)  # it plays: a later routing tries all
         finally:
+            _WAITED.reset(waited_on)
             _KEEPS.reset(keeps)
             _ACCEPT.reset(tested)
             _NOT_FOR_DOWNLOAD.reset(unused)
@@ -930,7 +956,7 @@ class Deliverer:
             trace.ended_at = self.clock()
             trace.over.set()
         if starts:
-            self._served(track, purpose, trace, opened, departure)
+            self._served(track, shown, trace, opened, departure)
         if heard and not head and purpose != "warm" and opened.status in (200, 206):
             self._heard.pop(track.key, None)  # a client was sent its audio: it is played
             self._heard[track.key] = None
@@ -949,6 +975,7 @@ class Deliverer:
         """The source actually used, when a play (or warm-ahead) starts; with the steps
         before it when it was not the first source asked."""
         elapsed = self.clock() - trace.started
+        self._noted(track, purpose, trace, opened.source or "?", elapsed, "")
         steps = f": {'; '.join(trace.steps)}" if trace.steps else ""
         if departure is not None and departure.at is not None:
             log.info(
@@ -965,9 +992,12 @@ class Deliverer:
         length = "" if opened.length is None else f", length {opened.length:.1f}s"
         log.info(
             "%s %r from %s (first byte after %.1fs%s%s)",
-            {"play": "playing", "ahead": "fetched ahead", "alone": "fetched ahead"}.get(
-                purpose, "warmed"
-            ),
+            {
+                "play": "playing",
+                "ahead": "fetched ahead",
+                "alone": "fetched ahead",
+                "download": "fetched",
+            }.get(purpose, "warmed"),
             track.title,
             opened.source or "?",
             elapsed,
@@ -993,6 +1023,8 @@ class Deliverer:
         )
         if departure is not None and departure.at is not None:
             why = f"the client left after {departure.at - trace.started:.1f}s; then {why}"
+        if purpose != "seek":
+            self._noted(track, purpose, trace, "", elapsed, why)
         steps = "; ".join(trace.steps) or "no source was asked"
         log.info(
             "no audio for %r (%s) after %.1fs: %s; %s",
@@ -1002,6 +1034,17 @@ class Deliverer:
             why,
             steps,
         )
+
+    def _noted(
+        self, track: Track, purpose: str, trace: Trace, served: str, seconds: float, ended: str
+    ) -> None:
+        """A routing at byte zero, kept for Diagnostics (its steps name no links)."""
+        self.recent.append(
+            Routing(
+                time.time() - seconds, track.title, track.artist, purpose, served, seconds,
+                tuple(trace.steps), ended,
+            )
+        )  # fmt: skip
 
     async def _open(
         self,
@@ -1221,20 +1264,18 @@ class Deliverer:
             return None
         return left
 
-    async def _primary_done(self, left: Leftover) -> bool:
-        """The routing ``left`` came from is done with the primary (it failed or lacked the
-        song; not cut short)."""
+    async def _first_done(self, left: Leftover) -> bool:
+        """The routing ``left`` came from is done with the plan's first add-on (it failed or
+        lacked the song; not cut short)."""
         for source in await self.registry.streaming():
-            if source.name == self.settings.primary_source:
-                return source.id in left.done
+            return source.id in left.done
         return False
 
     async def _left_plan(self, left: Leftover) -> tuple[list[Source], dict[int, str]]:
         """A continued routing's order: the source the wait cap cut short while it was
-        preparing the song, then those that said they were preparing it - a primary first
-        (primary-first routing keeps only the fallbacks' order), then the others in the
-        routing's order -, then those the routing did not try (in its order); never again
-        those it is done with (they failed or lacked the song a moment ago)."""
+        preparing the song, then those that said they were preparing it - in the routing's
+        order -, then those the routing did not try (in its order); never again those it is
+        done with (they failed or lacked the song a moment ago)."""
         enabled = {s.id: s for s in await self.registry.streaming()}
         unordered = sorted(i for i in left.preparing if i not in left.order)
         preparing = unordered + [i for i in left.order if i in left.preparing]
@@ -1265,9 +1306,9 @@ class Deliverer:
         since: float,
         resume: bool = False,
     ) -> Opened:
-        """``_routing`` with a task group for a primary-first routing's availability checks:
-        they may outlast the primary's attempt and the first fallback's (its link, its first
-        byte), and order the fallbacks left once they answer - until the routing ends."""
+        """``_routing`` with a task group for a play's availability checks (``_run_plan``):
+        they may outlast the step they began in, and order the steps left once they answer -
+        until the routing ends."""
         error: Exception | None = None
         opened: Opened | None = None
         try:
@@ -1307,7 +1348,7 @@ class Deliverer:
     ) -> Opened:
         at_zero = requested is None or requested.at_zero
         if budget is None:
-            budget = self.settings.budget_seconds if at_zero else self.settings.seek_timeout_seconds
+            budget = await self._walk_seconds() if at_zero else self.settings.seek_timeout_seconds
         # ``loose``: when the routing's budget ends if no wait cap ends it first - a source
         # the cap takes more than a moment of that from is cut short, not failed.
         loose = self.clock() + budget
@@ -1319,7 +1360,6 @@ class Deliverer:
         excluded = _left_out()
         tried: set[int] = set(excluded)
         failures: list[str] = [note for _, note in _NOT_FOR_DOWNLOAD.get()]
-        attempts = 0
 
         def pinned() -> Pin | None:
             found = self.pinned(track.song_id)
@@ -1327,19 +1367,19 @@ class Deliverer:
 
         pin = pinned()
         plan: tuple[list[Source], dict[int, str]] | None = None
-        resolved = False  # the pin was just resolved by primary-first routing (or a resumed one)
+        resolved = False  # the pin was just resolved by a resumed routing
         left = None
         if resume and pin is None and at_zero:
             left = self._resumable(track.song_id)
             if left is not None and purpose == "alone":
-                # A fetch ahead that waited out its turn goes to the primary alone:
+                # A fetch ahead that waited out its turn goes to the first add-on alone:
                 # not again when that routing is done with it, only when it was cut short.
-                if await self._primary_done(left):
+                if await self._first_done(left):
                     _stop(
-                        "a fetch ahead that waited out its turn: the primary could not serve"
-                        " it a moment ago"
+                        "a fetch ahead that waited out its turn: the first add-on could not"
+                        " serve it a moment ago"
                     )
-                    raise NoSource(["the primary could not serve it a moment ago"])
+                    raise NoSource(["the first add-on could not serve it a moment ago"])
                 left = None
         if left is None and pin is None and at_zero:
             # A retry of a song that failed a moment ago: not the sources that failed for it
@@ -1347,23 +1387,21 @@ class Deliverer:
             await self._skip_failed(track, tried)
         fetching_ahead = left is None and pin is None and at_zero and purpose in ("ahead", "alone")
         ahead = await self._ahead_plan(track, tried) if fetching_ahead else None
-        declined: set[int] = set()  # sources whose check said "not now"
-        checks: _Checks | None = None  # a primary-first routing's availability checks
         alone = fetching_ahead and purpose == "alone"
-        if ahead is None and alone and self.settings.routing == "primary_first":
-            # It waited out its turn: the primary alone, which cannot serve it now (cooling
-            # down, or it lacks the song) - no fallbacks side by side with the client's other
-            # fetches ahead.
-            _stop("a fetch ahead that waited out its turn: the primary alone cannot serve it")
-            raise NoSource(["the primary cannot serve it now"])
+        if ahead is None and alone:
+            # It waited out its turn: the first add-on alone, which cannot serve it now
+            # (cooling down, or it lacks the song) - no others side by side with the
+            # client's other fetches ahead.
+            _stop("a fetch ahead that waited out its turn: the first add-on cannot serve it")
+            raise NoSource(["the first add-on cannot serve it now"])
         if ahead is not None:
-            # A client's fetch ahead of the song it plays: the primary alone, without
-            # availability checks; if it cannot serve the song, the song is routed as usual
-            # below (the primary is not asked again) - unless the fetch waited out its
-            # turn ("alone": no fallbacks, so fetches ahead never run side by side).
-            primary = ahead[0][0]
-            first = await self._ahead_primary(
-                track, requested, head, cap, failures, primary, alone=purpose == "alone"
+            # A client's fetch ahead of the song it plays: the plan's first add-on alone,
+            # without availability checks; if it cannot serve the song, the song is routed
+            # as usual below, one add-on at a time (it is not asked again) - unless the fetch
+            # waited out its turn ("alone": no others, so fetches ahead never run side by
+            # side).
+            first = await self._ahead_first(
+                track, requested, head, cap, failures, ahead, alone=purpose == "alone"
             )
             if isinstance(first, Pin):
                 # Another request's routing found the song while this one waited for it:
@@ -1374,9 +1412,28 @@ class Deliverer:
             elif purpose == "alone":
                 raise NoSource(failures)
             else:
-                tried.add(primary.id)  # its attempt recorded what it left (_try_primary)
+                tried.add(ahead.id)  # its attempt recorded what it left (_try_one)
                 loose = self.clock() + budget
                 deadline = _earliest(loose, cap)
+        races = at_zero and purpose == "play" and _WAITED.get()
+        if left is None and pin is None and races:
+            # Another request routes the song now: its link as soon as it has one (a step
+            # of one add-on publishes it before its first byte, as the request reads it side
+            # by side), else its lock (``_run_plan`` below; a race publishes its winner).
+            key = self._provisional.get(track.song_id, track.song_id)
+            holding = self.clock()
+            while pin is None and self._resolving.held(key):
+                published = self._published.setdefault(track.song_id, anyio.Event())
+                with anyio.move_on_after(0.1):
+                    await published.wait()
+                pin = pinned()
+                if not published.is_set() and self._published.get(track.song_id) is published:
+                    del self._published[track.song_id]  # (only a link sets it)
+            if self.clock() - holding >= 0.5:
+                _step(
+                    f"waited {self.clock() - holding:.1f}s for another request's routing of"
+                    " this song"
+                )
         if left is not None:
             # The song's routing that ended without audio a moment ago, continued.
             async with self._routing_lock(track.song_id):
@@ -1388,23 +1445,20 @@ class Deliverer:
                     deadline = _earliest(loose, cap)
                     plan = await self._left_plan(left)
                     tried |= left.done
-                    declined = set(left.declined)
                     names = ", ".join(s.name for s in plan[0]) or "nothing left to try"
                     _step(f"continuing its routing of {self.clock() - left.at:.1f}s ago: {names}")
                     if not plan[0]:
                         failures.append(
                             "nothing left to try: each source failed or lacked it a moment ago"
                         )
-                    pin, used = await self._resolve_held(
-                        track, deadline, tried, attempts, failures, plan=plan, cap=cap,
-                        declined=declined,
-                    )  # fmt: skip
-                    attempts += used
+                    pin = await self._resolve_held(
+                        track, deadline, tried, failures, plan=plan, cap=cap
+                    )
                     resolved = True
-        elif pin is None and at_zero and self.settings.routing == "primary_first":
-            # One routing per track at a time: a concurrent request (the play a warm-ahead
-            # prepares, HEAD and GET) waits for it and uses its pin instead of asking the
-            # primary again.
+        elif pin is None and races:
+            # A song someone waits for: the plan, the add-ons of a step together. One routing
+            # per track at a time: a concurrent request (the play a warm-ahead prepares,
+            # HEAD and GET) waits for it and uses its link instead of asking again.
             holding = self.clock()
             async with self._routing_lock(track.song_id):
                 waited = self.clock() - holding
@@ -1414,26 +1468,13 @@ class Deliverer:
                 if pin is None:
                     self._shared_failure(track.song_id, since)
                     await self._skip_failed(track, tried)  # also a routing waited for
-                    # The availability checks may outlast the primary's attempt (they run in
-                    # ``checking``): they order the fallbacks once they answer.
-                    first, plan, declined, checks = await self._primary_first(
-                        track, requested, head, tried, failures, cap, purpose,
-                        skip_primary=ahead is not None, checking=checking,
-                    )  # fmt: skip
-                    if first is not None:
-                        return first
-                    # The primary may have used the whole byte-zero budget; the fallbacks get
-                    # their own, from the end of its attempt (the likely fallback's lookup
-                    # waited for since then is its attempt's start).
-                    begun = self.clock() if checks.since is None else checks.since
-                    loose = begun + budget
-                    deadline = _earliest(loose, cap)
-                    pin, used = await self._resolve_held(
-                        track, deadline, tried, attempts, failures, plan=plan, cap=cap,
-                        declined=declined, checks=checks,
-                    )  # fmt: skip
-                    attempts += used
-                    resolved = True
+                    # The availability checks may outlast a step (they run in ``checking``).
+                    opened = await self._run_plan(
+                        track, requested, head, tried, failures, cap, checking
+                    )
+                    if opened is not None:
+                        return opened
+                    raise NoSource(failures)
         known = None if at_zero else self._known.get(track.song_id)
         if known is not None and pin is not None and not _holds(pin, known):
             pin = None  # another request's link to another file: the play looks for its own
@@ -1455,10 +1496,9 @@ class Deliverer:
                 if pin is None:  # routing on its own: a budget of its own, once
                     loose = max(loose, self.clock() + budget)
                     deadline = _earliest(loose, cap)
-            waited_out = purpose == "alone" and self.settings.routing == "primary_first"
-            if pin is None and at_zero and waited_out:
+            if pin is None and at_zero and purpose == "alone":
                 # A fetch ahead that waited out its turn and used another request's link,
-                # which failed: the primary alone, never the fallbacks.
+                # which failed: the first add-on alone, never the others.
                 _stop("a fetch ahead that waited out its turn: the link it used failed")
                 raise NoSource(failures or ["the link it used failed"])
             if pin is None:
@@ -1467,21 +1507,18 @@ class Deliverer:
                     # started from first, then the others.
                     plan = await self._continuing(known, tried)
                 try:
-                    pin, used = await self._resolve(
-                        track, deadline, tried, attempts, failures, plan=plan, cap=cap,
-                        since=since, declined=declined,
-                        own=None if known is None else known.source_id, checks=checks,
-                        holding=known, foreign=foreign,
+                    pin = await self._resolve(
+                        track, deadline, tried, failures, plan=plan, cap=cap, since=since,
+                        own=None if known is None else known.source_id, holding=known,
+                        foreign=foreign,
                     )  # fmt: skip
                 except NoSource as exc:
                     if known is not None:
                         raise PinBroken(str(exc)) from None
                     raise
-                attempts += used
             # A link found while this request ran - by its own routing (``fresh``) or by
             # another request's it waited for - has the terms that routing gave it: its
-            # source's own budget, or its share of the byte-zero budget. One pinned before
-            # the request is shared out with the fallbacks left.
+            # step's time. One pinned before the request has its step's time from now.
             new = fresh or pin.created >= since
             if pin.by is not _TRACE.get():
                 # Another routing found it: this request waited, which used up its own
@@ -1491,21 +1528,18 @@ class Deliverer:
                     renewed = True
                     loose = max(loose, self.clock() + budget)
                     deadline = _earliest(loose, cap)
-            if new and pin.first_byte_by is not None:
-                # An add-on with its own budget gets it for resolution and first byte.
+            if new and pin.first_byte_by is not None and not (pin.delivered and not fresh):
+                # Its step's time, for resolution and first byte. (Not for a link whose
+                # audio came already, at another request's routing - a step of the plan
+                # keeps its link only once its audio is there: this request waited for that
+                # and gets its step's time from now, below.)
                 limit = pin.first_byte_by
                 wanted = limit if pin.own_by is None else pin.own_by
                 loose, deadline = max(loose, wanted), max(deadline, limit)
             elif at_zero:
-                # Every attempt gets an equal share of what is left, so a slow source still
-                # leaves time for a fallback - if there is one that shares the budget.
-                later = pin.sharing if new else None  # the routing that found it
-                if later is None:
-                    others = await self._fallbacks(pin.source.id, tried)
-                    later = min(others, self.settings.max_attempts - max(1, attempts))
-                shares = 1 + max(0, later)
-                limit = self.clock() + max(0.0, deadline - self.clock()) / shares
-                wanted = self.clock() + max(0.0, loose - self.clock()) / shares
+                step = self._seconds(pin.source)
+                limit = min(deadline, self.clock() + step)
+                wanted = min(loose, self.clock() + step)
             else:
                 limit = wanted = deadline
             asked = self.clock()
@@ -1518,10 +1552,37 @@ class Deliverer:
                 if at_zero and pin.checked:  # what its first bytes tell is known already
                     _refuse(pin.kind, pin.kbps)
                 ask = self._probed(pin, requested, head)
-                # A continuing play: only the file it started with will do - checked on
-                # the link's answer, for this request alone (the link may be a new play's,
-                # to another file; what is known of it may change while this one waits).
-                opened = await self._request(pin, ask, head, limit, known, mine=fresh)
+                # Another request's race published the link before its audio: this request
+                # leaves it once that race goes on without it (``_abandon``: another add-on's
+                # audio came first, or the link failed) and follows the race.
+                watched = pin.watchers if pin.by is not _TRACE.get() else None
+                leaving = anyio.CancelScope()
+                if watched is not None:
+                    watched.append(leaving)
+                    if pin.gone:
+                        leaving.cancel()
+                answered: Opened | None = None
+                # (On a race's link, as the race's own request: until the client's wait.)
+                # (Only a play an app waits on: not a download or a fetch ahead on it.)
+                playing = at_zero and purpose == "play" and _WAITED.get()
+                longest = (
+                    None
+                    if watched is None or cap is None or not playing
+                    else partial(_until_started, pin, cap, self.clock)
+                )
+                try:
+                    with leaving, pacing.lasting(longest):
+                        # A continuing play: only the file it started with will do - checked
+                        # on the link's answer, for this request alone (the link may be a new
+                        # play's, to another file; what is known of it may change while this
+                        # one waits).
+                        answered = await self._request(pin, ask, head, limit, known, mine=fresh)
+                finally:
+                    if watched is not None and leaving in watched:
+                        watched.remove(leaving)
+                if answered is None:
+                    raise _Left
+                opened = answered
                 opened = await self._verify(pin, opened, track, ask, limit, cap)
                 if at_zero:
                     opened = await _tested(pin, opened)
@@ -1554,6 +1615,16 @@ class Deliverer:
                         pin.source.name,
                     )
                 return opened
+            except _Left:
+                _step(f"{pin.source.name}: left after {self.clock() - asked:.1f}s, another"
+                      " request's routing went on without it")  # fmt: skip
+                # Its DASH join, which that race let go while this request still waited for
+                # it, stops now unless yet another request waits for it.
+                self._let_go(pin)
+                if pin.by is not None:
+                    owner, failed_link = pin.by, pin
+                pin = None
+                continue
             except _Other as exc:
                 # Another request's link, to another file: left alone; the play's own file
                 # is looked for.
@@ -1581,7 +1652,6 @@ class Deliverer:
                     log.info(
                         "representation changed at %s (%s); re-resolving", pin.source.name, exc
                     )
-                    attempts = max(attempts, 1)
                 elif known is None:
                     raise PinBroken(str(exc)) from None
                 elif new:  # a new link without the play's representation: not here
@@ -1601,6 +1671,8 @@ class Deliverer:
                     self.forget(track.song_id, pin)
                 if new:  # a link found for this request: its error counts, once a link
                     self._failure(pin.source, exc, pin)
+                    if fresh and at_zero:
+                        self._count_timeout(pin.source, exc)
                 elif not isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused)):
                     self.registry.failed(pin.source, str(exc))  # its old link (not the add-on's)
                 if fresh and at_zero and not _spared(exc):  # the attempt's record
@@ -1622,16 +1694,6 @@ class Deliverer:
                         continue
                 _done(pin.source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc))
                 tried.add(pin.source.id)
-                if isinstance(exc, _Refused) or (
-                    new and isinstance(exc, (_Error, _Wrong, _Unusable, _Cooling))
-                ):
-                    # An add-on error (its audio's) uses no attempt, nor another recording
-                    # or audio this request refused (the routing goes on to the next source
-                    # within the budget): this link's own is given back (another routing's
-                    # link, or one pinned before, took none of this one's).
-                    attempts -= pin.charge if fresh else 0
-                else:
-                    attempts = max(attempts, 1)
                 pin = None
 
     def _routing_on(self, pin: Pin, since: float) -> Trace | None:
@@ -1689,57 +1751,86 @@ class Deliverer:
             raise _Shared(owner.shared)
         return None
 
-    async def _ahead_primary(
+    async def _ahead_first(
         self,
         track: Track,
         requested: ByteRange | None,
         head: bool,
         cap: float | None,
         failures: list[str],
-        primary: Source,
+        first: Source,
         *,
         alone: bool = False,
     ) -> Opened | Pin | None:
-        """A fetch ahead at the primary alone, as the primary's attempt of a play (its
+        """A fetch ahead at the plan's first add-on alone, as an attempt of a play (its
         timeouts count toward its cooldown, a delivery resets it); None when it cannot
         serve the song; the pin another request's routing of the song found while this one
         waited for it (it is used)."""
         async with self._routing_lock(track.song_id):
             if (pinned := self.pinned(track.song_id)) is not None:
                 return pinned
-            if primary.id in self._recently_failed(track):  # failed for it meanwhile
-                failures.append(f"{primary.name}: failed for this song a moment ago")
+            if first.id in self._recently_failed(track):  # failed for it meanwhile
+                failures.append(f"{first.name}: failed for this song a moment ago")
                 return None
-            opened = await self._try_primary(primary, track, requested, head, failures, cap)
+            opened = await self._try_one(first, track, requested, head, failures, cap)
         if opened is None:
             log.info(
                 "fetch ahead %r: %s could not serve it (%s); %s",
                 track.title,
-                primary.name,
+                first.name,
                 failures[-1] if failures else "no answer",
-                "no fallbacks: it waited out its turn" if alone else "routing it as usual",
+                "no others: it waited out its turn" if alone else "routing it as usual",
             )
         return opened
 
-    async def _ahead_plan(
-        self, track: Track, tried: set[int]
-    ) -> tuple[list[Source], dict[int, str]] | None:
-        """The primary alone, under primary-first routing with a usable primary that is not
-        known to lack the song (nor failed for it a moment ago, ``tried``); None otherwise
-        (the fetch ahead is routed as usual, still one at a time)."""
-        if self.settings.routing != "primary_first":
-            return None
-        sources = [
-            s
-            for s in await self.registry.streaming()
-            if not self.registry.cooling(s.id) and s.id not in tried
-        ]
-        primary = [s for s in sources if s.name == self.settings.primary_source]
-        if not primary or self._recording_missed(track):  # a release's miss: still the primary
-            return None
-        if self._known_wrong(primary[0], track):  # another recording there: routed as usual
-            return None
-        return primary, {}
+    async def _ahead_plan(self, track: Track, tried: set[int]) -> Source | None:
+        """The plan's first add-on that can be asked for this song now: on, not cooling
+        down, not failed for it a moment ago (``tried``), nor known to lack it or to have
+        another recording; None: none (the fetch ahead is routed as usual, still one at a
+        time)."""
+        for source in await self.registry.streaming():
+            if self.registry.cooling(source.id) or source.id in tried:
+                continue
+            if self._lacks(source, track) or self._known_wrong(source, track):
+                continue
+            return source
+        return None
+
+    def _seconds(self, source: Source) -> float:
+        """The add-on's time when it is asked alone (a download, a song prepared ahead, a
+        fetch ahead, a routing continued): its own, else the installation's."""
+        return source.budget if source.budget is not None else self.settings.budget_seconds
+
+    def _step_seconds(self, step: list[Source]) -> float:
+        """A step's time in a play: when the next step's add-ons join, the longest of its
+        add-ons' times (each its own, else the installation's), as the dashboard shows it."""
+        fallback = self.settings.budget_seconds
+        times = [s.step_seconds if s.step_seconds is not None else fallback for s in step]
+        return max(times) if times else fallback
+
+    def _slow_now(
+        self, source: Source, trying: float, step_seconds: float, last: bool = False
+    ) -> bool:
+        """Whether an add-on stopped after ``trying`` seconds (its waits at its own limits
+        left out), because another's audio came first, counts a timeout: past its step's
+        time and ``slow_after`` times its usual time to first audio (with none known, past
+        its step's time alone). The last step has no time of its own: there the default
+        step time (``budget_seconds``) counts as its time."""
+        if last:
+            step_seconds = self.settings.budget_seconds
+        if trying <= step_seconds:
+            return False
+        usual = usual_seconds(source.stats)
+        if usual is None:
+            return True
+        factor = source.slow_after if source.slow_after is not None else self.settings.slow_after
+        return trying > factor * usual
+
+    async def _walk_seconds(self) -> float:
+        """A request's time when it asks the add-ons one at a time: each one's own time
+        (not those cooling down)."""
+        sources = [s for s in await self.registry.streaming() if not self.registry.cooling(s.id)]
+        return sum(self._seconds(s) for s in sources) or self.settings.budget_seconds
 
     async def _continuing(
         self, known: Known, tried: set[int]
@@ -1753,31 +1844,20 @@ class Deliverer:
             order += [s for s in enabled if s.id != known.source_id]
         return [s for s in order if s.id not in tried], {known.source_id: known.track_id}
 
-    async def _fallbacks(self, source_id: int, tried: set[int]) -> int:
-        """Sources that could still be tried after ``source_id``."""
-        return sum(
-            1
-            for s in await self.registry.streaming()
-            if s.id != source_id and s.id not in tried and not self.registry.cooling(s.id)
-        )
-
     async def _resolve(
         self,
         track: Track,
         deadline: float,
         tried: set[int],
-        attempts: int,
         reasons: list[str],
         *,
         plan: tuple[list[Source], dict[int, str]] | None = None,
         cap: float | None = None,
         since: float | None = None,
-        declined: set[int] | None = None,
         own: int | None = None,
-        checks: _Checks | None = None,
         holding: Known | None = None,
         foreign: list[Pin] | None = None,
-    ) -> tuple[Pin, int]:
+    ) -> Pin:
         """``holding``: a continuing play's file - the song's link is used only when it
         links that file (another request may have replaced it with another file meanwhile:
         the play looks for its own, never switching files); ``foreign``: links the
@@ -1787,45 +1867,35 @@ class Deliverer:
             pin = self.pinned(track.song_id)
             mine = pin is not None and all(pin is not other for other in foreign or ())
             if pin is not None and pin.source.id not in tried and mine and _holds(pin, holding):
-                return pin, 0
+                return pin
             if since is not None and not tried:
                 self._shared_failure(track.song_id, since)
             return await self._resolve_held(
-                track, deadline, tried, attempts, reasons, plan=plan, cap=cap,
-                declined=declined, own=own, checks=checks,
-            )  # fmt: skip
+                track, deadline, tried, reasons, plan=plan, cap=cap, own=own
+            )
 
     async def _resolve_held(
         self,
         track: Track,
         deadline: float,
         tried: set[int],
-        attempts: int,
         reasons: list[str],
         *,
         plan: tuple[list[Source], dict[int, str]] | None = None,
         cap: float | None = None,
-        declined: set[int] | None = None,
         own: int | None = None,
-        checks: _Checks | None = None,
-    ) -> tuple[Pin, int]:
-        """``_resolve`` for a caller that holds the track's resolution lock. ``cap``: when a
-        waiting client's first byte must have arrived, whatever the sources' own budgets.
-        ``declined``: sources whose check said they cannot deliver the recording now (tried
-        last; no time is kept for them). ``checks``: availability checks still running when
-        the plan was made: after a fallback's attempt has begun (in this call or an
-        earlier one of the routing), the rest are put in order once they are in. An attempt
-        that ends with an add-on error (an HTTP 5xx, no connection) uses none of
-        ``max_attempts``: it takes no time, and the budget still bounds the routing."""
-        used = 0
-        declined = set(declined or ())
+    ) -> Pin:
+        """``_resolve`` for a caller that holds the track's resolution lock: the add-ons one
+        at a time, in the plan's order (``plan``: another order, with add-on track IDs
+        known), each within its step's time and ``deadline``. ``cap``: when a waiting
+        client's first byte must have arrived, whatever the steps' times."""
         enabled = [s for s in await self.registry.streaming() if s.id not in tried]
         # A continuing play's own source (``own``) is asked while it cools down too:
         # only it has the play's file.
         candidates = [s for s in enabled if s.id == own or not self.registry.cooling(s.id)]
         trace = _TRACE.get()
         for source in enabled:
-            if source not in candidates and source.name != self.settings.primary_source:
+            if source not in candidates:
                 note = f"{source.name}: cooling down"
                 if trace is not None and note not in trace.steps:
                     trace.add(note)
@@ -1834,132 +1904,72 @@ class Deliverer:
             # The current source objects: the configuration may have changed meanwhile.
             current = {s.id: s for s in candidates}
             candidates, hints = [current[s.id] for s in plan[0] if s.id in current], plan[1]
-        elif self.settings.routing == "ready_first":
-            candidates, hints, said_no = await self._ready_first(track, candidates, deadline)
-            declined |= said_no
         if trace is not None and not trace.left.planned:  # the plan, for a routing continuing it
             trace.left.planned = True
             trace.left.order = [s.id for s in candidates]
             trace.left.hints.update(hints)
-            trace.left.declined |= declined
         missing = failed = timeless = 0
-        for index in range(len(candidates)):
-            exhausted = attempts + used >= self.settings.max_attempts
-            if checks is not None and checks.began and not exhausted:
-                # A fallback is done with: the checks' answers order the rest - in each later
-                # pass too (the plan it is given is the one made before they answered).
-                if not checks.ordered:
-                    if not checks.done.is_set():
-                        with anyio.move_on_after(self.settings.availability_timeout_seconds):
-                            await checks.done.wait()
-                    checks.ordered = checks.done.is_set()
-                before_checks = candidates[index:]
-                candidates[index:] = checks.order(before_checks)
-                declined = {s.id for s in candidates if checks.said_no(s)}
-                if candidates[index:] != before_checks:
-                    _step(f"then, by the checks: {', '.join(s.name for s in candidates[index:])}")
-                if trace is not None:  # for a routing continuing this one
-                    trace.left.order = [s.id for s in candidates]
-                    trace.left.declined = set(declined)
-            if checks is not None:
-                checks.began = True
-            source = candidates[index]
-            # A source's attempt that began with its lookup meanwhile and ended there:
-            # accounted for first, whatever time or attempts are left.
-            answer = checks.answer(source, waiting="-") if checks is not None else "-"
-            before = checks.looked.pop(source.id, 0.0) if checks is not None else 0.0
-            if checks is not None and source.id in checks.lacking:
+        for source in candidates:
+            if source.id != own and self._lacks(source, track):
                 missing += 1
-                self._record(source, answer, False, before)
                 _done(source)
                 tried.add(source.id)
-                reasons.append(f"{source.name}: not available (looked up meanwhile)")
+                reasons.append(f"{source.name}: did not have it (remembered)")
+                _step(f"{source.name}: did not have it (remembered)")
                 continue
-            if checks is not None and source.id in checks.timed_out:
-                used += 1
-                failed += 1
-                # (At its request limit: its attempt's time is used, but it did not fail.)
-                paced = source.id in checks.paced
-                if not paced:
-                    self._record(source, answer, False, before)
-                    self.registry.failed(source, "timeout")
-                _done(source, slow=paced)
-                tried.add(source.id)
-                why = pacing.REQUESTS if paced else "timeout"
-                reasons.append(f"{source.name}: {why} (looked up meanwhile)")
-                continue
-            if attempts + used >= self.settings.max_attempts:
-                most = self.settings.max_attempts
-                _stop(f"attempts used up ({most} of {most}; not tried: "
-                      f"{', '.join(s.name for s in candidates[index:])})")  # fmt: skip
-                break
             if cap is not None and cap <= self.clock():
                 reasons.append(f"{source.name}: the wait ran out")
                 _stop("the wait cap was reached")
                 break
             remaining = deadline - self.clock()
-            if remaining <= 0 and source.budget is None:
+            if remaining <= 0:
                 reasons.append(f"{source.name}: time budget used up")
                 _step(f"{source.name}: no time left")
                 timeless += 1
                 continue
-            # Equal shares of the remaining budget for this attempt and the later attempts
-            # still possible that use it: an add-on with its own budget uses its own,
-            # so it takes no share (none left to share: all of it).
-            later = max(0, self.settings.max_attempts - attempts - used - 1)
-            upcoming = candidates[index + 1 :][:later]
-            sharing = sum(1 for s in upcoming if s.budget is None and s.id not in declined)
-            share = remaining / (1 + sharing)
-            # A source's own budget counts from its lookup meanwhile, when that began it.
-            limit = share if source.budget is None else max(0.01, source.budget - before)
-            # The wait cap ends it, taking more than a moment of its time: cut short.
-            capped = cap is not None and limit - (cap - self.clock()) > CUT_SECONDS
+            limit = min(self._seconds(source), remaining)
+            if cap is None:
+                # Nobody waits (warm-ahead): an add-on still preparing the song gets an equal
+                # share of the routing's longer time, if that is more than its step's.
+                left = len(candidates) - candidates.index(source)
+                limit = max(limit, remaining / left)
+            # The wait cap ends it, taking more than a moment of its step's time: cut short.
+            capped = cap is not None and self._seconds(source) - (cap - self.clock()) > CUT_SECONDS
             if cap is not None:
                 limit = max(0.01, min(limit, cap - self.clock()))
-            # A source counts as an attempt unless it simply does not have the track; its
-            # lookup meanwhile, when it gave the track ID used now, is its attempt's too.
             started = self.clock()
             try:
-                pin = await self._resolve_at(
-                    source, track, limit, hints.get(source.id), cap=cap, before=before
-                )
+                pin = await self._resolve_at(source, track, limit, hints.get(source.id), cap=cap)
             except _Missing as exc:
                 missing += 1
-                self._record(source, answer, False, before + self.clock() - started - exc.waited)
+                self._record(source, "-", False, self.clock() - started - exc.waited)
                 _done(source)
                 tried.add(source.id)  # not asked again by a later pass
                 reasons.append(f"{source.name}: {exc}")
                 _step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
-                primary_first = self.settings.routing == "primary_first"
-                if exc.absent and primary_first and source.name == self.settings.primary_source:
-                    self._primary_missed(track)  # a hint for the release's other songs
+                if exc.absent:
+                    self._missed(source, track)
                 continue
             except _Failed as exc:
-                at_once = isinstance(exc, _Preparing) and not exc.waited_out
-                used += 0 if isinstance(exc, (_Error, _Cooling)) or at_once else 1
                 failed += 1
                 if not _spared(exc):
-                    took = before + self.clock() - started - exc.waited
-                    self._record(source, answer, False, took)
+                    self._record(source, "-", False, self.clock() - started - exc.waited)
                 _done(source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc),
                       preparing=isinstance(exc, _Preparing))  # fmt: skip
                 tried.add(source.id)  # not asked again by a later pass
                 reasons.append(f"{source.name}: {exc}")
+                if cap is not None:  # (a timeout nobody waited for is no reason to cool it)
+                    self._count_timeout(source, exc)
                 _failed_step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
                 continue
-            pin.charge = 1
-            used += pin.charge
-            pin.sharing = sharing
             pin.by = _TRACE.get()
-            pin.answer = answer
-            pin.looked_before = before
             self._remember(track.song_id, pin)
-            return pin, used
-        failed += trace.failed if trace is not None else 0  # the primary's too
+            return pin
+        failed += trace.failed if trace is not None else 0
         if not candidates:
             _stop("no source to try")
         elif failed == 0 and missing == 0 and timeless:
-            _stop("the byte-zero budget was used up")
+            _stop("the time was used up")
         elif failed == 0 and missing:
             rejected = any("a match was rejected" in r for r in reasons)
             _stop("no source had it" + (" (a match was rejected)" if rejected else ""))
@@ -1977,13 +1987,16 @@ class Deliverer:
         cap: float | None = None,
         looked: anyio.Event | None = None,
         before: float = 0.0,
+        until: float | None = None,
     ) -> Pin:
         """Resolve ``track`` at one source within ``limit`` seconds. Raises ``_Missing``
         when the source does not have it and ``_Failed`` when the attempt failed (recorded
         in the source's diagnostics, except for an unsupported stream type). ``looked`` is
         set once its lookup has answered. ``before``: the seconds its lookup meanwhile took
-        (its own budget counts from then). What the attempt waited at the add-on's request
-        limit is noted with its outcome (``Pin.waited``, the exception's ``waited``)."""
+        (its own budget counts from then). ``until``: when its first byte must come (an
+        add-on in a play's race: the client's wait), instead of its own time. What the
+        attempt waited at the add-on's request limit is noted with its outcome
+        (``Pin.waited``, the exception's ``waited``)."""
         capacity = _BULK_LEASE.get()
         if _BULK_REUSE.get() or (
             capacity is not None and (not capacity.active or capacity.owner is not None)
@@ -1994,8 +2007,9 @@ class Deliverer:
         with pacing.watched() as waits:
             try:
                 pin = await self._resolved_at(
-                    source, track, limit, hint, waits, cap=cap, looked=looked, before=before
-                )
+                    source, track, limit, hint, waits, cap=cap, looked=looked, before=before,
+                    until=until,
+                )  # fmt: skip
             except (_Missing, _Failed) as exc:
                 exc.waited = waits.seconds
                 raise
@@ -2013,6 +2027,7 @@ class Deliverer:
         cap: float | None,
         looked: anyio.Event | None,
         before: float,
+        until: float | None = None,
     ) -> Pin:
         if self._known_wrong(source, track):
             raise _Missing("another recording (remembered)")
@@ -2057,6 +2072,8 @@ class Deliverer:
                 raise _Cooling(exc.reason) from None
             if exc.kind == "rate_limited":
                 raise _Limited(exc.reason) from None
+            if exc.kind == "timeout" and not exc.shared:  # slow, as audio's is (not one
+                raise _TimedOut(exc.reason) from None  # shared: another request's)
             if exc.kind == "preparing":  # not ready yet, and not within the time left
                 # Waited for it (asked again): its time is used up but for less than the next
                 # wait. Never waited (the first answer named more than was left): on at once.
@@ -2099,79 +2116,13 @@ class Deliverer:
         pin = Pin(track.song_id, source, track_id, info, self.clock())
         pin.seconds = track.duration_ms / 1000
         pin.lookup_seconds, pin.link_seconds = looked_up - started, self.clock() - looked_up
-        if source.budget is not None:  # from its lookup meanwhile (``before``), if any
-            pin.own_by = started - before + source.budget
-            pin.first_byte_by = _earliest(pin.own_by, cap)
+        # Its own time, from its lookup meanwhile (``before``), if any - or, with nobody
+        # waiting (warm-ahead), the longer time its attempt was given; in a play's race,
+        # until the client's wait (``until``).
+        span = self._seconds(source) if cap is not None else max(self._seconds(source), limit)
+        pin.own_by = until if until is not None else started - before + span
+        pin.first_byte_by = _earliest(pin.own_by, cap)
         return pin
-
-    async def _ready_first(
-        self, track: Track, candidates: list[Source], deadline: float
-    ) -> tuple[list[Source], dict[int, str], set[int]]:
-        """Ask the sources that can tell whether they can deliver the recording now;
-        use the first (in order) that says yes, otherwise go straight to the reliable one.
-        Sources that cannot tell, or said no, remain as fallbacks. Nothing is streamed to
-        find out: a stream request for a song a source cannot deliver now can start a
-        preparation job there, and this would start one at every source.
-        """
-        reliable = next((s for s in candidates if s.name == self.settings.reliable_source), None)
-        others = [s for s in candidates if s is not reliable]
-        answers: dict[int, Availability | None] = {}
-        timeout = max(0.1, min(self.settings.availability_timeout_seconds, deadline - self.clock()))
-
-        async def ask(source: Source) -> None:
-            try:
-                with anyio.fail_after(timeout):
-                    answers[source.id] = await source.addon.availability(track.wanted)
-            except AddonError as exc:
-                if exc.kind == "rate_limited":
-                    self._source_error(source, exc)
-            except Exception as exc:  # timeouts and broken answers: the source cannot tell
-                log.debug("availability check of %s failed: %s", source.name, type(exc).__name__)
-
-        async with anyio.create_task_group() as tg:
-            for source in others:
-                tg.start_soon(ask, source)
-        ready = [
-            s
-            for s in others
-            if (a := answers.get(s.id)) is not None
-            and a.available
-            and not self._known_wrong(s, track)
-        ]
-        first = ready[:1]
-        # Those that said they cannot deliver it now come last (see _primary_first).
-        said_no = [
-            s for s in others if (a := answers.get(s.id)) is not None and a.available is False
-        ]
-        rest = [s for s in others if s not in first and s not in said_no]
-        order = first + ([reliable] if reliable else []) + rest + said_no
-        hints = {s.id: a.track_id for s in first if (a := answers[s.id]) and a.track_id}
-        chosen = order[0].name if order else "none"
-
-        def names(state: bool | None) -> str:
-            found = [
-                s.name
-                for s in others
-                if (a := answers.get(s.id)) is not None and a.available is state
-            ]
-            return ", ".join(found) or "-"
-
-        silent = ", ".join(s.name for s in others if answers.get(s.id) is None) or "-"
-        log.info(
-            "ready-first %r: %s (ready: %s; not now: %s; cannot tell: %s)",
-            track.title,
-            chosen if first else f"none ready, {chosen}",
-            names(True),
-            names(False),
-            ", ".join(filter(lambda n: n != "-", [names(None), silent])) or "-",
-        )
-        if not ready and self.settings.prepare_when_not_ready:
-            declined = [
-                s for s in others if (a := answers.get(s.id)) is not None and a.available is False
-            ]
-            if declined:
-                self.background(lambda: self._prepare(declined, track))
-        return order, hints, {s.id for s in said_no}
 
     async def _prepare(self, declined: list[Source], track: Track) -> None:
         """Ask the first source that said "not now" to prepare the recording for next time
@@ -2189,369 +2140,510 @@ class Deliverer:
                     self._source_error(source, exc)
                 return
 
-    async def _primary_first(
+    async def _run_plan(
         self,
         track: Track,
         requested: ByteRange | None,
         head: bool,
         tried: set[int],
         failures: list[str],
-        cap: float | None = None,
-        purpose: str = "play",
-        *,
-        skip_primary: bool = False,
+        cap: float | None,
         checking: anyio.abc.TaskGroup,
-    ) -> tuple[Opened | None, tuple[list[Source], dict[int, str]], set[int], _Checks]:
-        """(the opened answer, the plan for the fallbacks, the sources that said "not now"
-        or have not answered yet, the availability checks - run in ``checking``, the
-        caller's task group, as they may outlast this).
+    ) -> Opened | None:
+        """A play's routing by the plan (``_race``): the add-ons of a step start together,
+        and the next step's join them once the step has had its time, or once every add-on
+        asked so far has ended without audio; those asked keep trying. The first audio
+        plays. None: no audio (``failures`` say why).
 
-        Start the primary source at once while the sources that can tell are asked
-        whether they can deliver the recording now. If the primary has no first byte after
-        the short primary budget and one of them can, switch to it. Otherwise the primary
-        keeps its chance up to the byte-zero budget (or its own); only then are the
-        others tried: the reliable source first. One track is never streamed from two
-        sources at once - an abandoned request can still make an add-on prepare a file.
+        With ``ready_checks``, the add-ons that can tell are asked meanwhile whether they
+        have the song ready (in ``checking``: the checks may outlast the step they began
+        in). One that has joins after ``ready_handover_seconds`` without audio (0: the
+        checks are waited for, and it goes first); the steps not begun are arranged by the
+        answers: the add-ons that have it ready first, those that have not last, one at a
+        time - a stream there most likely fails, and may start a preparation."""
+        usable: list[Source] = []
+        for source in await self.registry.streaming():
+            if source.id in tried:
+                continue
+            if self.registry.cooling(source.id):
+                _step(f"{source.name}: cooling down")
+                continue
+            if self._lacks(source, track):
+                _done(source)
+                tried.add(source.id)
+                failures.append(f"{source.name}: did not have it (remembered)")
+                _step(f"{source.name}: did not have it (remembered)")
+                continue
+            usable.append(source)
+        if not usable:
+            # Every add-on left cools down: they are asked all the same (one may deliver),
+            # rather than no audio at once.
+            cooling = [
+                s
+                for s in await self.registry.streaming()
+                if s.id not in tried and self.registry.cooling(s.id) and not self._lacks(s, track)
+            ]
+            if cooling:
+                _step("every add-on cools down: asked all the same")
+                usable = cooling
+        steps = _steps(usable)
+        handover = _Handover(None)
+        checks: _Checks | None = None
+        if self.settings.ready_checks and len(usable) > 1:
+            first = self.settings.ready_handover_seconds <= 0
+            # The first step's add-ons start at once: only the others are asked - unless
+            # the checks are waited for.
+            asked = usable if first else [s for step in steps[1:] for s in step]
+            checks = _Checks(asked)
+            checking.start_soon(self._check_all, checks, track)
+            if first:
+                wait = self.settings.availability_timeout_seconds
+                if cap is not None:
+                    wait = min(wait, cap - self.clock())
+                with anyio.move_on_after(max(0.0, wait)):
+                    await checks.done.wait()
+                steps = self._arranged(steps, checks)
+            else:
+                handover.at = self.clock() + self.settings.ready_handover_seconds
+        trace = _TRACE.get()
+        opened = await self._race(track, requested, head, steps, cap, failures, tried, checks,
+                                  handover)  # fmt: skip
+        if opened is not None:
+            return opened
+        if not usable:
+            _stop("no source to try")
+        elif trace is not None and trace.failed == 0:
+            rejected = any("a match was rejected" in r for r in failures)
+            _stop("no source had it" + (" (a match was rejected)" if rejected else ""))
+        else:
+            _stop("no source delivered")
+        return None
 
-        When the primary does not serve the song, the likely fallback is looked up at
-        once - from the start when the primary lacks another song of the release - and goes
-        next as soon as it has the song, unless a check has said by then that a source has
-        it ready: checks still running do not hold it up (they take 1-2 s, and a play whose
-        first audio comes after about 4 s is often given up); they order the fallbacks after
-        it once they are in."""
-        enabled = await self.registry.streaming()
-        configured = next((s for s in enabled if s.name == self.settings.primary_source), None)
-        # Not those that failed for this song a moment ago (``tried``).
-        sources = [s for s in enabled if not self.registry.cooling(s.id) and s.id not in tried]
-        # ``skip_primary``: a fetch ahead the primary could not serve: the others only.
-        primary = configured if configured in sources and not skip_primary else None
-        skipped = self._primary_skipped(track, primary) if primary is not None else None
-        hint = False
-        if skipped is not None:  # a remembered miss
-            # It lacks another song of this release: a hint only - the primary still
-            # starts at once, as on an ordinary play (a source whose check says it has the
-            # song ready takes over after the primary's short budget), and the likely
-            # fallback is looked up from the start. A miss of this very song, or
-            # another recording there, skips it.
-            hint = (
-                primary is not None
-                and not self._recording_missed(track)
-                and not self._known_wrong(primary, track)
+    def _arranged(self, steps: list[list[Source]], checks: _Checks) -> list[list[Source]]:
+        """The steps left, by the checks' answers: the add-ons that have the song ready
+        first, together; those that have not last, one at a time."""
+        ready = [s for step in steps for s in step if checks.ready(s)]
+        said_no = [s for step in steps for s in step if checks.said_no(s)]
+        rest = [[s for s in step if s not in ready and s not in said_no] for step in steps]
+        arranged = ([ready] if ready else []) + [step for step in rest if step]
+        arranged += [[s] for s in said_no]
+        if arranged != steps:
+            _step(
+                "then, by the checks: "
+                + "; ".join(", ".join(s.name for s in step) for step in arranged)
             )
-            if not hint:
-                primary = None
-            _step(skipped)
-        reliable = next((s for s in sources if s.name == self.settings.reliable_source), None)
-        others = [s for s in sources if s is not configured and s is not reliable]
-        # The fallbacks, ordered by their recent attempts; the reliable source is the
-        # user's preferred one until they are measured (it has no check asked).
-        fallbacks = [s for s in [reliable, *others] if s is not None and s is not configured]
-        checks = _Checks(others, lambda source, answer: self._cost(source, answer)[0])
-        answers = checks.answers
-        for source in fallbacks:
-            if self._known_wrong(source, track):  # another recording there
-                answers[source.id] = Availability(False)
-                if source in others:
-                    checks.asked.add(source.id)
-        checked = checks.done
-        finished = anyio.Event()
-        outcome: list[Opened | None] = []
-        primary_scope = anyio.CancelScope()
-        checks_started = self.clock()
+        return arranged
+
+    async def _check_all(self, checks: _Checks, track: Track) -> None:
+        """Ask ``checks.sources`` whether they have the song ready; with none that has and
+        ``prepare_when_not_ready``, one that has not is asked to prepare it for next time."""
+        started = self.clock()
 
         async def ask(source: Source) -> None:
             if self._known_wrong(source, track):  # another recording there: not counted on
-                answers[source.id] = Availability(False)
+                checks.answers[source.id] = Availability(False)
                 checks.asked.add(source.id)
                 return
             try:
                 with anyio.fail_after(self.settings.availability_timeout_seconds):
-                    answers[source.id] = await source.addon.availability(track.wanted)
+                    answer = await source.addon.availability(track.wanted)
+                checks.answers[source.id] = answer
+                if answer is not None and answer.available:
+                    checks.asked.add(source.id)
+                    checks.ready_seen.set()
             except AddonError as exc:  # it cannot tell
                 if exc.kind == "rate_limited":  # ... and is left alone for a while
                     self._source_error(source, exc)
             except Exception as exc:  # timeouts and broken answers: it cannot tell
                 log.debug("availability check of %s failed: %s", source.name, type(exc).__name__)
-            checks.asked.add(source.id)  # not when cut short: it has not answered
+            checks.asked.add(source.id)
 
-        async def check_all() -> None:
-            complete = False
-            try:
-                async with anyio.create_task_group() as asking:
-                    for source in others:
-                        asking.start_soon(ask, source)
-                complete = True
-            finally:  # cut short too, when they did not matter to the primary's play
-                served = bool(outcome) and outcome[0] is not None
-                if others and (complete or not served):
-                    states = _states(others, answers, checks.asked)
-                    _step(f"checks {self.clock() - checks_started:.1f}s: {states}")
-                checked.set()
+        try:
+            async with anyio.create_task_group() as asking:
+                for source in checks.sources:
+                    asking.start_soon(ask, source)
+        finally:
+            checks.done.set()
+        states = _states(checks.sources, checks.answers, checks.asked)
+        _step(f"checks {self.clock() - started:.1f}s: {states}")
+        if self.settings.prepare_when_not_ready and not any(
+            checks.ready(s) for s in checks.sources
+        ):
+            declined = [s for s in checks.sources if checks.said_no(s)]
+            if declined:
+                self.background(lambda: self._prepare(declined, track))
 
-        primary_looked = anyio.Event()  # the primary's lookup has answered
+    async def _race(
+        self,
+        track: Track,
+        requested: ByteRange | None,
+        head: bool,
+        steps: list[list[Source]],
+        cap: float | None,
+        failures: list[str],
+        tried: set[int],
+        checks: _Checks | None,
+        handover: _Handover,
+    ) -> Opened | None:
+        """A play's plan, its steps joining in turn: the add-ons of the first start
+        together, and each next step's join them once the step before has had its time
+        (``_step_seconds``), or at once when every add-on of the step before (or every one
+        asked so far) has ended without audio. The add-ons asked keep trying, each until the
+        client's wait cap (with none, its own time). The first whose audio comes plays - its
+        link is kept for the song; the others are stopped: their links are not kept (the
+        requests of others waiting on one published early leave it: ``Pin.watchers``), a
+        DASH join one of them began stops unless another request waits for it, and one past
+        its step's time and slow for its usual time (``_slow_now``) counts a timeout. With
+        ``checks``, an add-on that has the song ready joins once the ``handover`` moment has
+        passed, and the steps not begun are arranged by the answers. None: no audio."""
+        begun = self.clock()
+        pending = [list(step) for step in steps]
+        scopes: dict[int, anyio.CancelScope] = {}
+        starts: dict[int, float] = {}  # when each add-on asked began (its step's start)
+        times: dict[int, float] = {}  # the time of each one's step
+        order: list[Source] = []  # the add-ons asked, in the order they joined
+        pins: dict[int, Pin] = {}
+        # Links whose attempt ended without audio but that stay (``_kept``: a DASH join
+        # going on, audio not asked for in time at the add-on's limits, audio this request
+        # refused).
+        kept: list[Pin] = []
+        published: list[Pin] = []  # links made the song's before their audio came
+        over: set[int] = set()  # attempts that ended by themselves
+        first: list[tuple[Source, Pin, Opened]] = []
+        nudge = [anyio.Event()]  # set when an attempt ends or audio comes
+        own_waits: dict[int, pacing.Waits] = {}  # each one's waits at its own limits
+        lasts: set[int] = set()  # the add-ons of the plan's last step
+        latest: list[int] = []  # the add-ons of the step that joined last
 
-        held_up: list[pacing.Waits] = []  # the primary's waits at its own limits
+        def running() -> list[Source]:
+            return [s for s in order if s.id not in over]
 
-        async def run_primary(source: Source) -> None:
-            with primary_scope, pacing.watched() as waits:
-                held_up.append(waits)
+        def unpublish(pin: Pin) -> None:
+            """A link published early that is not the song's after all (it failed, or a
+            fresh one replaces it): dropped at once - unless it stays (``kept``)."""
+            if any(pin is other for other in published) and all(pin is not k for k in kept):
+                published[:] = [other for other in published if other is not pin]
+                self.forget(track.song_id, pin)
+                _abandon(pin)
+
+        def end(source: Source) -> None:
+            over.add(source.id)
+            nudge[0].set()
+
+        async def run(source: Source) -> None:
+            answer = checks.answer(source) if checks is not None else "-"
+            started = self.clock()
+            until = cap if cap is not None else started + self._seconds(source)
+            # The wait cap ends it, taking more than a moment of its own time: cut short.
+            capped = cap is not None and started + self._seconds(source) - cap > CUT_SECONDS
+            hint = (checks.hints() if checks is not None else {}).get(source.id)
+            relinked = False
+            # In a play an app waits on, its requests for the song may take until the app
+            # stops waiting, beyond its client's timeout: it tries many in parallel, and its
+            # own time is a download's. Only until the song starts: then (its DASH join's
+            # later segments) the client's own timeout again.
+            longest = None if cap is None else (lambda: 0.0 if first else cap - self.clock())
+            with scopes[source.id], pacing.watched() as waits, pacing.lasting(longest):
+                own_waits[source.id] = waits
                 try:
-                    opened = await self._try_primary(
-                        source, track, requested, head, failures, cap, looked=primary_looked
+                    while True:
+                        begun_link = self.clock()
+                        pin = await self._resolve_at(
+                            source, track, max(0.01, until - begun_link), hint, cap=cap,
+                            until=until,
+                        )  # fmt: skip
+                        pins[source.id] = pin
+                        if not first and all(s is source for s in running()):
+                            # Nothing to race (yet): the link is the song's at once, so
+                            # requests waiting for it read it side by side (it is dropped
+                            # again when its audio does not come, and another's audio that
+                            # comes first takes its place).
+                            pin.by = _TRACE.get()
+                            pin.watchers = []
+                            self._remember(track.song_id, pin)
+                            published.append(pin)
+                        asked = self.clock()
+                        ask = self._probed(pin, requested, head)
+                        try:
+                            opened = await self._request(pin, ask, head, until)
+                        except _Changed as exc:
+                            # Its link expired or changed before its audio came (an HTTP
+                            # 403, 410 or 412, a DASH segment's): the add-on gives a fresh
+                            # one, as for a play's own link - asked again while its time
+                            # lasts.
+                            if self.clock() >= until or relinked:
+                                raise
+                            relinked = True  # (once: an add-on whose links keep failing fails)
+                            self._link_failed(pin, exc, True)
+                            unpublish(pin)  # (the fresh one is published as this one was)
+                            _failed_step(f"{source.name}: {exc} {self.clock() - asked:.1f}s,"
+                                         " asked for a new link")  # fmt: skip
+                            continue
+                        break
+                    opened = await self._verify(pin, opened, track, ask, until, cap)
+                    opened = await _tested(pin, opened)
+                    opened = _narrowed(opened, ask, requested, pin.size)
+                except _Missing as exc:
+                    _done(source)
+                    tried.add(source.id)
+                    self._record(source, answer, False, self.clock() - started - exc.waited)
+                    failures.append(f"{source.name}: {exc}")
+                    _step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
+                    if exc.absent:
+                        self._missed(source, track)
+                except _Changed as exc:
+                    _done(source)
+                    tried.add(source.id)
+                    self._link_failed(pins[source.id], exc, True)
+                    unpublish(pins[source.id])
+                    self._record(source, answer, False, self.clock() - started - exc.waited)
+                    failures.append(f"{source.name}: {exc}")
+                    _failed_step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
+                except _Failed as exc:
+                    if source.id in pins:  # its link's or its audio's (its lookup's: counted)
+                        self._failure(source, exc, pins[source.id])
+                        if _kept(exc):
+                            kept.append(pins[source.id])
+                        unpublish(pins[source.id])
+                    _done(source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc),
+                          preparing=isinstance(exc, _Preparing))  # fmt: skip
+                    tried.add(source.id)
+                    if not _spared(exc):
+                        self._record(source, answer, False, self.clock() - started - exc.waited)
+                    failures.append(f"{source.name}: {exc}")
+                    self._count_timeout(source, exc)
+                    (_step if isinstance(exc, _Refused) else _failed_step)(
+                        f"{source.name}: {exc} {self.clock() - started:.1f}s"
                     )
                 except Exception as exc:  # a broken add-on must not break playback
                     reason = f"unexpected {type(exc).__name__}"
                     log.warning("source %s failed: %s", source.name, reason)
                     self._failure(source, _Error(reason))
                     _done(source)
+                    tried.add(source.id)
                     failures.append(f"{source.name}: {reason}")
-                    opened = None
-                outcome.append(opened)
-            checks.since = self.clock()
-            finished.set()
-
-        def ready() -> list[Source]:
-            return [s for s in others if checks.ready(s)]
-
-        # Without the primary - or while its lookup keeps it waiting, so that it may well
-        # lack the recording - the likely fallback's lookup (never its stream: one
-        # source prepares a track at a time) runs meanwhile: the best by its recent
-        # attempts among those that have no check or whose check has answered other
-        # than "not now" - with none of those, among those whose check is still running.
-        looked_up: dict[int, str] = {}
-        own_ids: set[int] = set()  # of them: the catalog's own track IDs (never hints)
-        lookup_done = anyio.Event()
-        after = self.settings.reliable_lookup_after_seconds
-        target: list[Source] = []  # the fallback looked up meanwhile
-
-        def likely() -> Source | None:
-            answered = [s for s in fallbacks if s.id not in checks.ids or s.id in checks.asked]
-            willing = [s for s in answered if not checks.said_no(s)]
-            pending = [s for s in fallbacks if s not in answered]
-            ranked = sorted(willing or pending, key=lambda s: checks.key(s, waiting="-"))
-            return ranked[0] if ranked else None
-
-        async def look_up(source: Source | None, *, late: bool = False) -> None:
-            if source is None or checks.ready(source):  # its check gave its track ID
-                lookup_done.set()
-                return
-            target.append(source)
-            begun = self.clock()
-            since = f" (from {begun - started:.1f}s)" if late else ""
-            bound = self.settings.budget_seconds if source.budget is None else source.budget
-            try:
-                # The start of its attempt, bounded like one (this phase ends it when another
-                # source goes first): a lookup cut short would be repeated by its attempt.
-                with pacing.watched() as waits, anyio.fail_after(bound):
-                    if "stream" not in (await source.addon.manifest()).resources:
-                        return  # (no audio: its attempt ends at once, without a lookup)
-                    # A song of its own catalog: its ID is known without asking. It
-                    # is no hint for later: its attempt works it out again, from the add-on
-                    # as it is then (the same name may be another service by then).
-                    own = await _own_id(source, track, self.settings)
-                    found = own or await source.addon.find(track.wanted)
-                checks.looked[source.id] = self.clock() - begun
-                if own:
-                    looked_up[source.id] = own  # it has the song: it may go next
-                    own_ids.add(source.id)
-                    _step(f"{source.name}: its catalog's track, no lookup{since}")
-                elif found:
-                    looked_up[source.id] = found
-                    _step(f"{source.name}: looked up meanwhile{since}"
-                          f" {self.clock() - begun:.1f}s")  # fmt: skip
-                else:  # it lacks the song: its attempt does not look it up again
-                    checks.lacking.add(source.id)
-                    _step(f"{source.name}: not available (looked up meanwhile{since})"
-                          f" {self.clock() - begun:.1f}s")  # fmt: skip
-            except TimeoutError:  # its attempt: timed out
-                checks.looked[source.id] = self.clock() - begun
-                checks.timed_out.add(source.id)
-                why = "timeout"
-                if (held := waits.held(CUT_SECONDS)) is not None:
-                    checks.paced.add(source.id)  # at its request limit: not its doing
-                    why = held
-                _failed_step(f"{source.name}: {why} (looked up meanwhile{since})"
-                             f" {self.clock() - begun:.1f}s")  # fmt: skip
-            except AddonError as exc:
-                if exc.kind == "rate_limited":
-                    self._source_error(source, exc)
-            except Exception as exc:  # its attempt looks it up again
-                log.debug("lookup at %s failed: %s", source.name, type(exc).__name__)
-            finally:
-                lookup_done.set()
-
-        async def look_up_if_slow() -> None:
-            """When the primary's lookup has not answered within the moment - or once
-            its attempt has ended without audio."""
-            with anyio.move_on_after(after):
-                await _either(primary_looked, finished)
-            if not primary_looked.is_set() and not finished.is_set():
-                await look_up(likely(), late=True)
-                return
-            await finished.wait()
-            if outcome and outcome[0] is not None:
-                lookup_done.set()  # served
-            else:
-                await look_up(likely(), late=True)
-
-        switched = False
-        started = self.clock()
-        try:
-            async with anyio.create_task_group() as tg:
-                checking.start_soon(check_all)  # may outlast this
-                if not fallbacks:
-                    lookup_done.set()  # nothing to look up meanwhile
-                elif primary is None or hint:
-                    # Skipped, cooling down, or lacking another song of the release: the
-                    # likely fallback is looked up at once.
-                    tg.start_soon(look_up, likely())
+                    if source.id in pins:
+                        unpublish(pins[source.id])
                 else:
-                    tg.start_soon(look_up_if_slow)
-                if primary is None:
-                    checks.since = self.clock()
-                    finished.set()
-                else:
-                    tg.start_soon(run_primary, primary)
-                    with anyio.move_on_after(self.settings.primary_budget_seconds):
-                        await finished.wait()
-                if not finished.is_set():
-                    # Too slow so far: a source that can deliver the track now takes over.
-                    await _either(checked, finished)
-                    if not finished.is_set() and ready():
-                        primary_scope.cancel()
-                        switched = True
-                    await finished.wait()
-                if not outcome or outcome[0] is None:
-                    # The likely fallback goes next once it has the song looked up, or a
-                    # source whose check said it has it ready: checks still running do not
-                    # hold them up. Without either to go on, the checks decide.
-                    await _either(checked, lookup_done)
-                    # Found, and not waiting for its own check (it may say "not now").
-                    found = any(
-                        s.id in looked_up and (s.id not in checks.ids or s.id in checks.asked)
-                        for s in target[:1]
+                    if first:  # another one's audio came first: not used
+                        with anyio.CancelScope(shield=True):
+                            await opened.close()
+                        _step(f"{source.name}: audio after {self.clock() - started:.1f}s,"
+                              f" {first[0][0].name}'s came first")  # fmt: skip
+                    else:
+                        self._delivered(pin, opened, asked)
+                        took = self.clock() - started - opened.waited
+                        self._record(source, answer, True, took)
+                        first.append((source, pin, opened))
+                        for other, scope in scopes.items():
+                            if other != source.id:
+                                scope.cancel()
+                        if len(order) > 1 or ((trace := _TRACE.get()) is not None and trace.steps):
+                            _step(
+                                f"{source.name}: lookup {pin.lookup_seconds:.1f}s, link"
+                                f" {pin.link_seconds:.1f}s, first byte {self.clock() - asked:.1f}s"
+                            )
+                end(source)
+
+        def join(step: list[Source], racing: anyio.abc.TaskGroup, planned: bool = True) -> float:
+            """Start ``step``'s add-ons (``planned``: a step of the plan, not the add-ons
+            that have the song ready); when the next step joins."""
+            now = self.clock()
+            seconds = self._step_seconds(step)
+            names = ", ".join(s.name for s in step)
+            if order:
+                _step(f"at {now - begun:.1f}s, joining: {names}")
+            elif len(step) > 1:
+                _step(f"together: {names}")
+            if planned:
+                latest[:] = [source.id for source in step]
+            for source in step:
+                scopes[source.id] = anyio.CancelScope()
+                starts[source.id], times[source.id] = now, seconds
+                if not pending:
+                    lasts.add(source.id)
+                order.append(source)
+                racing.start_soon(run, source)
+            trace = _TRACE.get()
+            if trace is not None:  # what it left, for a routing continuing it
+                trace.left.planned = True
+                trace.left.order = [s.id for later in pending for s in later]
+                trace.left.hints = checks.hints() if checks is not None else {}
+            return now + seconds
+
+        def settle() -> None:
+            """The add-ons still trying when the race ended, stopped: also when the caller
+            gave up (its wait cap's grace), so that what they did is counted before the
+            client's answer."""
+            winner = first[0] if first else None
+            for pin in list(published):
+                if winner is not None and pin is winner[1]:
+                    continue
+                if winner is None:
+                    unpublish(pin)  # (not the song's: no audio came from it)
+                else:  # (the winner's link takes its place)
+                    self.forget(track.song_id, pin)
+                    _abandon(pin)
+            for source in order:
+                if source.id in over:
+                    continue
+                # Stopped: another add-on's audio came first, or its attempt did not end at
+                # the wait cap by itself.
+                over.add(source.id)
+                if (link := pins.get(source.id)) is not None:
+                    self._let_go(link)
+                tried.add(source.id)
+                trying = self.clock() - starts[source.id]
+                if winner is not None:
+                    _done(source, slow=True)
+                    waits = own_waits.get(source.id)
+                    held = 0.0 if waits is None else waits.seconds
+                    if waits is not None and waits.since is not None:
+                        held += max(0.0, time.monotonic() - waits.since)
+                    slow = self._slow_now(
+                        source, trying - held, times[source.id], source.id in lasts
                     )
-                    if not ready() and not found:
-                        await checked.wait()  # bounded by the checks' own timeout
-                        if not ready():
-                            await lookup_done.wait()  # the likely fallback's first step
-                tg.cancel_scope.cancel()
+                    if slow:
+                        self.registry.failed(source, "timeout")
+                        self._record(source, "-", False, trying - held)
+                        self._slow(source)
+                    counted = ", slow: counted toward its cooldown" if slow else ""
+                    _step(f"{source.name}: stopped after {trying:.1f}s, {winner[0].name}'s audio"
+                          f" came first{counted}")  # fmt: skip
+                else:
+                    _done(source)
+                    self.registry.failed(source, "timeout")
+                    failures.append(f"{source.name}: timeout")
+                    self._slow(source)
+                    _failed_step(f"{source.name}: timeout {trying:.1f}s")
+
+        waited_ready = False
+        # Each attempt ends at the wait cap by itself; this is in case one does not - before
+        # the caller gives up (``CAP_GRACE``).
+        hard = (cap if cap is not None else float("inf")) + CAP_GRACE / 2
+        try:
+            async with anyio.create_task_group() as racing:
+                next_at = join(pending.pop(0), racing) if pending else float("inf")
+                while True:
+                    nudge[0] = anyio.Event()
+                    if first:
+                        break
+                    now = self.clock()
+                    if not running() and not pending:
+                        break  # every add-on asked ended without audio
+                    if now >= hard or (cap is not None and now >= cap and not running()):
+                        break
+                    ended = bool(latest) and all(i in over for i in latest)
+                    if pending and (now >= next_at or not running() or ended):
+                        # The step before has had its time, or every add-on of it (or every
+                        # one asked) has ended: the next one joins (by the checks' answers
+                        # so far).
+                        if checks is not None and checks.answers:
+                            pending = self._arranged(pending, checks)
+                        if cap is not None and cap <= now:
+                            break
+                        next_at = join(pending.pop(0), racing)
+                        continue
+                    at = handover.at if checks is not None else None
+                    if checks is not None and at is not None and now >= at:
+                        ready = [s for later in pending for s in later if checks.ready(s)]
+                        if ready:
+                            # An add-on that has the song ready joins now.
+                            handover.at = None
+                            pending = [[s for s in later if s not in ready] for later in pending]
+                            pending = [later for later in pending if later]
+                            _step(f"{', '.join(s.name for s in ready)}: has it ready")
+                            join(ready, racing, planned=False)
+                            continue
+                        if checks.done.is_set():
+                            handover.at = None  # none has it ready: the plan goes on
+                        waited_ready = checks.ready_seen.is_set()  # (none of use: wait on)
+                    wake = min(next_at if pending else hard, hard)
+                    if at is not None and at > now:
+                        wake = min(wake, at)
+                    with anyio.move_on_after(max(0.0, wake - now)):
+                        if checks is not None and at is not None and now >= at:
+                            # The first "ready" answer, or all of them.
+                            seen = [] if waited_ready else [checks.ready_seen]
+                            await _either(nudge[0], checks.done, *seen)
+                        else:
+                            await nudge[0].wait()
+                racing.cancel_scope.cancel()
         except BaseException:
             # The caller gave up (or something broke): a delivered response must not leak.
-            if outcome and outcome[0] is not None:
+            if first:
                 with anyio.CancelScope(shield=True):
-                    await outcome[0].close()
+                    await first[0][2].close()
             raise
-        opened = outcome[0] if outcome else None
-        checks.ordered = checked.is_set()
-        if opened is not None:
-            return opened, ([], {}), set(), checks
-        if primary is not None:
-            tried.add(primary.id)  # its attempt recorded what it left (_try_primary)
-            if switched or not outcome:  # given up for a ready source, or it broke
-                _done(primary, slow=switched)
-            # (A warm-ahead's switch is no play's wait; nor is a primary slow that was
-            # held up at its own request limit.)
-            paced = any(w.held(CUT_SECONDS) is not None for w in held_up)
-            if switched and purpose == "play" and not paced:
-                self._primary_slow(primary, "switches_since_delivery")
-        # The fallbacks by their recent attempts, for the answers their checks gave:
-        # one that said it cannot deliver the song now is measured as such (a stream there
-        # most likely fails and can start a preparation job); one that has not answered
-        # yet is not counted on until it does.
-        ranked = checks.order(fallbacks)
-        said_no = [s for s in fallbacks if checks.said_no(s)]
-        first = [s for s in ranked if checks.ready(s)][:1]
-        # The likely fallback that has the song looked up goes first - unless a check has said
-        # a source has it ready, or its own check said "not now" meanwhile.
-        looked_first = [
-            s
-            for s in target[:1]
-            if s.id in looked_up and not first and not (s.id in checks.asked and checks.said_no(s))
-        ]
-        order: list[Source] = []  # each source once, where it first appears
-        for source in looked_first + ranked:
-            if all(source.id != s.id for s in order):
-                order.append(source)
-        hints = {
-            s.id: a.track_id
-            for s in ranked
-            if checks.ready(s) and (a := answers[s.id]) and a.track_id
-        }
-        hints.update({k: v for k, v in looked_up.items() if k not in own_ids})
+        finally:
+            settle()
+        winner = first[0] if first else None
         trace = _TRACE.get()
-        if trace is not None:  # for a routing continuing this one
-            trace.left.planned = True
-            trace.left.order = [s.id for s in order]
-            trace.left.hints = dict(hints)
-            trace.left.declined = {s.id for s in said_no}
-        if switched:
-            why = (
-                f"{primary.name if primary else '?'} had no first byte after"
-                f" {self.clock() - started:.1f}s and {first[0].name} has it ready"
-            )
-        elif primary is not None:
-            why = failures[-1] if failures else f"{primary.name} failed"
-        elif skipped is not None:
-            why = skipped
-        elif skip_primary:
-            why = "a fetch ahead the primary could not serve"
-        elif configured is not None and configured.id in _left_out():
-            why = f"{configured.name} is not used for downloads"
-        elif configured is not None and configured.id in tried:
-            why = f"{configured.name} failed for it a moment ago"
-        elif configured is not None:
-            why = f"{configured.name} is cooling down"
-        else:
-            why = "no primary source"
-        log.info(
-            "primary-first %r: %s; plan %s",
-            track.title,
-            why,
-            ", ".join(self._planned(s, checks) for s in order) or "-",
-        )
-        return None, (order, hints), {s.id for s in said_no}, checks
+        if trace is not None and winner is not None:
+            trace.left.order = []
+        if winner is None:
+            if trace is not None:
+                trace.left.order = [s.id for later in pending for s in later]
+            if cap is not None and cap <= self.clock():
+                failures.append("the wait ran out")
+                _stop("the wait cap was reached")
+            if kept:
+                # A link that stays is the song's (the first asked), as one found one
+                # add-on at a time is: a client's retry asks it again - and gets the file
+                # its DASH join goes on to make, or waits for that join.
+                ordered = sorted(kept, key=lambda p: order.index(p.source))
+                ordered[0].by = _TRACE.get()
+                self._remember(track.song_id, ordered[0])
+            return None
+        _, pin, opened = winner
+        pin.by = _TRACE.get()
+        self._remember(track.song_id, pin)
+        return opened
 
-    async def _try_primary(
+    def _let_go(self, pin: Pin) -> None:
+        """A stopped attempt's link: a DASH join it began stops, unless another request
+        waits for it."""
+        if self.dash is not None and pin.info.transport == "dash":
+            self.dash.let_go(self._dash_key(pin))
+
+    async def _try_one(
         self,
-        primary: Source,
+        source: Source,
         track: Track,
         requested: ByteRange | None,
         head: bool,
         failures: list[str],
         cap: float | None = None,
-        looked: anyio.Event | None = None,
     ) -> Opened | None:
-        """The primary's attempt, given up after the byte-zero budget or its own,
-        or earlier when the client's wait cap comes first. A timeout is recorded as a failure
-        (also one the cap cut short); repeated timeouts without a delivery in between cool
-        the primary down, so a hanging primary does not delay every track. ``looked`` is set
-        once its lookup has answered."""
-        full = primary.budget if primary.budget is not None else self.settings.budget_seconds
+        """One add-on's attempt, given up after its step's time, or earlier when the
+        client's wait cap comes first. A timeout is recorded as a failure (also one the cap
+        cut short) and counts toward its cooldown."""
+        full = self._seconds(source)
         limit = full if cap is None else min(full, cap - self.clock())
         if limit <= 0:
-            failures.append(f"{primary.name}: no time left")
+            failures.append(f"{source.name}: no time left")
             return None
         capped = full - limit > CUT_SECONDS  # the wait cap ends it: it may still be preparing
         deadline = self.clock() + limit
         started = self.clock()
         try:
-            pin = await self._resolve_at(primary, track, limit, looked=looked)
+            pin = await self._resolve_at(source, track, limit)
         except _Missing as exc:
-            _done(primary)
-            self._record(primary, "-", False, self.clock() - started - exc.waited)
-            failures.append(f"{primary.name}: {exc}")
-            _step(f"{primary.name}: {exc} {self.clock() - started:.1f}s")
+            _done(source)
+            self._record(source, "-", False, self.clock() - started - exc.waited)
+            failures.append(f"{source.name}: {exc}")
+            _step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
             if exc.absent:
-                self._primary_missed(track)
+                self._missed(source, track)
             return None
         except _Failed as exc:  # recorded by _resolve_at (as far as it is a failure)
-            _done(primary, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc),
+            _done(source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc),
                   preparing=isinstance(exc, _Preparing))  # fmt: skip
             if not _spared(exc):
-                self._record(primary, "-", False, self.clock() - started - exc.waited)
-            self._primary_failed(primary, exc, failures)
-            _failed_step(f"{primary.name}: {exc} {self.clock() - started:.1f}s")
+                self._record(source, "-", False, self.clock() - started - exc.waited)
+            failures.append(f"{source.name}: {exc}")
+            self._count_timeout(source, exc)
+            _failed_step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
             return None
         asked = self.clock()
         try:
@@ -2563,103 +2655,72 @@ class Deliverer:
             opened = _narrowed(opened, ask, requested, pin.size)
             self._delivered(pin, opened, asked)
         except _Changed as exc:
-            _done(primary)
+            _done(source)
             self._link_failed(pin, exc, True)
-            self._record(primary, "-", False, self.clock() - started - exc.waited)
-            failures.append(f"{primary.name}: {exc}")
-            _failed_step(f"{primary.name}: {exc} {self.clock() - started:.1f}s")
+            self._record(source, "-", False, self.clock() - started - exc.waited)
+            failures.append(f"{source.name}: {exc}")
+            _failed_step(f"{source.name}: {exc} {self.clock() - started:.1f}s")
             return None
         except _Failed as exc:
             # (Its DASH join going on: a retry asks it again, and joins the same join.)
-            _done(primary, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc))
-            self._failure(primary, exc)
+            _done(source, cut=capped and isinstance(exc, _TimedOut), slow=_unfinished(exc))
+            self._failure(source, exc)
             if not _spared(exc):
-                self._record(primary, "-", False, self.clock() - started - exc.waited)
-            self._primary_failed(primary, exc, failures)
+                self._record(source, "-", False, self.clock() - started - exc.waited)
+            failures.append(f"{source.name}: {exc}")
+            self._count_timeout(source, exc)
             (_step if isinstance(exc, _Refused) else _failed_step)(
-                f"{primary.name}: {exc} {self.clock() - started:.1f}s"
+                f"{source.name}: {exc} {self.clock() - started:.1f}s"
             )
             return None
-        primary.stats.timeouts_since_delivery = 0
-        primary.stats.switches_since_delivery = 0
-        self._record(primary, "-", True, self.clock() - started - opened.waited)
+        self._record(source, "-", True, self.clock() - started - opened.waited)
         pin.by = _TRACE.get()
         self._remember(track.song_id, pin)
         return opened
 
-    def _cost(self, source: Source, answer: str) -> tuple[float, bool]:
-        return seconds_a_song(source, answer, self.clock(), self.settings.reliable_source)
-
     def _record(self, source: Source, answer: str, delivered: bool, seconds: float) -> None:
-        """One attempt at ``source`` at byte zero, for ordering the fallbacks; kept
+        """One attempt at ``source`` at byte zero (Add-ons and Diagnostics show them); kept
         across restarts."""
         self.registry.attempted(source, Attempt(self.clock(), answer, delivered, max(0.0, seconds)))
 
-    def _planned(self, source: Source, checks: _Checks) -> str:
-        """A fallback in the plan's log line: its seconds for a delivered song (by its recent
-        attempts, "~" while estimated) and what its check said, if anything."""
-        answer = checks.answer(source)
-        seconds, measured = self._cost(source, answer)
-        said = checks.answer(source, waiting="no answer yet")
-        said = "" if said == "-" else f", {said}"
-        return f"{source.name} ({'' if measured else '~'}{seconds:.1f}s{said})"
+    def _missed(self, source: Source, track: Track) -> None:
+        """``source`` does not have this recording: remembered for a while, so that later
+        requests do not ask it again."""
+        if self.settings.miss_hours <= 0:
+            return
+        key = (source.id, _recording(track))
+        self._misses.pop(key, None)  # newest last: the oldest go first
+        self._misses[key] = self.clock() + self.settings.miss_hours * 3600
+        if len(self._misses) > MAX_MISSES:
+            now = self.clock()
+            for old in [k for k, until in self._misses.items() if until <= now]:
+                del self._misses[old]
+            while len(self._misses) > MAX_MISSES:
+                self._misses.pop(next(iter(self._misses)))
 
-    def _primary_missed(self, track: Track) -> None:
-        """The primary does not have this recording: remembered, and its release for a
-        while, so that later requests go to the other sources at once."""
-        now = self.clock()
-        if self.settings.primary_miss_hours > 0:
-            self._misses[_recording(track)] = now + self.settings.primary_miss_hours * 3600
-        if track.release and self.settings.primary_release_miss_minutes > 0:
-            minutes = self.settings.primary_release_miss_minutes
-            self._release_misses[track.release] = now + minutes * 60
-        for remembered in (self._misses, self._release_misses):
-            if len(remembered) > MAX_MISSES:
-                for key in [k for k, until in remembered.items() if until <= now]:
-                    del remembered[key]
-                while len(remembered) > MAX_MISSES:
-                    remembered.pop(next(iter(remembered)))
+    def _lacks(self, source: Source, track: Track) -> bool:
+        """``source`` said it does not have this recording (remembered)."""
+        return self._misses.get((source.id, _recording(track)), 0.0) > self.clock()
 
-    def _primary_skipped(self, track: Track, primary: Source) -> str | None:
-        """Why the primary is not asked first for this track (a remembered miss), or None."""
-        now = self.clock()
-        if self._recording_missed(track):
-            return f"{primary.name} did not have it (remembered)"
-        if self._known_wrong(primary, track):
-            return f"{primary.name} delivered another recording of it (remembered)"
-        if track.release and self._release_misses.get(track.release, 0.0) > now:
-            return f"{primary.name} lacks a song of its release (remembered)"
-        return None
-
-    def _recording_missed(self, track: Track) -> bool:
-        """The primary said it does not have this recording (remembered)."""
-        return self._misses.get(_recording(track), 0.0) > self.clock()
-
-    def _primary_failed(self, primary: Source, exc: _Failed, failures: list[str]) -> None:
-        failures.append(f"{primary.name}: {exc}")
-        # (A wait at its limits is not its timeout; a DASH join's counts once; one that was
-        # preparing the song is its timeout only when it waited until its time ran out.)
+    def _count_timeout(self, source: Source, exc: Exception) -> None:
+        """A timeout of ``source`` toward its cooldown: not a wait at its limits, a DASH
+        join's beyond its first, nor one that was preparing the song unless it waited until
+        its time ran out."""
         again = isinstance(exc, _Joining) and exc.again
         at_once = isinstance(exc, _Preparing) and not exc.waited_out
         if isinstance(exc, _TimedOut) and not _paced(exc) and not again and not at_once:
-            self._primary_slow(primary, "timeouts_since_delivery")
+            self._slow(source)
 
-    def _primary_slow(self, primary: Source, counter: str) -> None:
-        """Count a timeout of the primary, or a switch away from it; enough of either
-        without a delivery in between cool it down. Until it delivers again, each further
-        one cools it down again."""
-        count = getattr(primary.stats, counter) + 1
-        setattr(primary.stats, counter, count)
-        if counter == "timeouts_since_delivery":
-            threshold, what = self.settings.primary_cooldown_timeouts, "timed out"
-        else:
-            threshold, what = self.settings.primary_cooldown_switches, "was switched away from"
-        if count >= max(1, threshold):
-            self.registry.cool_down(primary.id, self.settings.cooldown_seconds)
+    def _slow(self, source: Source) -> None:
+        """Count a timeout of ``source``; enough of them without a delivery in between cool
+        it down. Until it delivers again, each further one cools it down again."""
+        count = source.stats.timeouts_since_delivery + 1
+        source.stats.timeouts_since_delivery = count
+        if count >= max(1, self.settings.cooldown_timeouts):
+            self.registry.cool_down(source.id, self.settings.cooldown_seconds)
             log.info(
-                "primary %s %s %d times without delivering; cooling down for %gs",
-                primary.name,
-                what,
+                "source %s timed out %d times without delivering; cooling down for %gs",
+                source.name,
                 count,
                 self.settings.cooldown_seconds,
             )
@@ -3008,10 +3069,14 @@ class Deliverer:
                     assert self.retention is not None
                     opened.capture = self.retention.dash(file, self.dash)
             except BaseException:
-                await response.aclose()
+                with anyio.CancelScope(shield=True):
+                    await response.aclose()
                 raise
             if opened.body is None:
-                await response.aclose()
+                # (Closed whatever comes: an answer received is not lost to a request
+                # leaving another's link - ``_Left`` - or giving up.)
+                with anyio.CancelScope(shield=True):
+                    await response.aclose()
             elif ended is not None:
                 # The opening lasts until the audio's first bytes (an answer's headers may
                 # come long before them), or until the answer is closed unread.
@@ -3103,7 +3168,8 @@ class Deliverer:
         range asked for (416 past its end; a HEAD's one byte), with its size, type and
         strong ETag - 412 when ``matching`` is another. A play goes on with the kind of
         file it started with. A join this starts goes on for up to the client's wait cap,
-        whatever this request's time."""
+        whatever this request's time - for a request someone waits on, for that long after
+        its own time (the app's retry joins it)."""
         dash = self.dash
         if dash is None:  # (a plain link that answered with a manifest)
             raise _Failed(f"DASH is off ({self.dash_off})")
@@ -3125,6 +3191,9 @@ class Deliverer:
         tolerance = max(
             settings.length_tolerance_seconds, settings.length_tolerance_percent / 100 * wanted
         )
+        lasting = settings.max_wait_seconds
+        if _WAITED.get():  # (its time is the client's wait: the retry's comes after it)
+            lasting += max(0.0, deadline - self.clock())
         start = (dash.holding(link.key, matching) if matching else None) or settings.dash_start
         if start == "at_once":
             try:
@@ -3135,7 +3204,7 @@ class Deliverer:
                     seconds=wanted,
                     tolerance=tolerance,
                     deadline=deadline,
-                    lasting=settings.max_wait_seconds,
+                    lasting=lasting,
                     limited=lambda named: self._rate_limited(pin.source, named, audio=True),
                 )
             except DashError as exc:
@@ -3152,7 +3221,7 @@ class Deliverer:
                 seconds=wanted,
                 tolerance=tolerance,
                 deadline=deadline,
-                lasting=settings.max_wait_seconds,
+                lasting=lasting,
                 limited=lambda named: self._rate_limited(pin.source, named, audio=True),
             )
         except DashError as exc:
@@ -3257,14 +3326,11 @@ class Deliverer:
         return _Failed(str(exc))  # another answer
 
     def _delivered(self, pin: Pin, opened: Opened, asked: float) -> None:
-        """Its audio answered: the source's success (once per link) - for the primary also
-        where it was not asked first (a delivery ends its run of timeouts and switches)."""
+        """Its audio answered: the source's success (once per link); a delivery ends its run
+        of timeouts and of errors (``SourceRegistry.succeeded``)."""
         if opened.status in (200, 206) and not pin.delivered:
             pin.delivered = True
             self.registry.succeeded(pin.source, self.clock() - asked)
-            if pin.source.name == self.settings.primary_source:
-                pin.source.stats.timeouts_since_delivery = 0
-                pin.source.stats.switches_since_delivery = 0
 
     def _answer(
         self,
@@ -3395,27 +3461,6 @@ class Deliverer:
         """Whether the audio being opened may go to a client and be kept once it has
         (``retention``)."""
         return self.retention is not None and self.retention.enabled and _KEEPS.get()
-
-
-def seconds_a_song(source: Source, answer: str, now: float, preferred: str) -> tuple[float, bool]:
-    """Seconds for a delivered song at ``source`` when its check gave ``answer``, from its
-    recent attempts with that answer: the time they took in all over the songs they
-    delivered - so a source that often lacks songs, times out or fails counts its lost time
-    too - blended with a neutral estimate that counts as one delivered song (``preferred``:
-    the user's preferred fallback). (seconds, measured: any attempts)."""
-    recent = [
-        a for a in source.stats.recent if a.answer == answer and now - a.at <= MEASURED_SECONDS
-    ]
-    estimate = ESTIMATE.get(answer, ESTIMATE["-"])
-    if answer == "-" and source.name == preferred:
-        estimate = PREFERRED_ESTIMATE
-    elif answer == "-" and source.budget is not None:
-        # A worker given its own budget: a slow one by the user's setting, until its
-        # attempts are measured - not tried ahead of a quick source on a guess.
-        estimate = max(estimate, source.budget)
-    delivered = sum(1 for a in recent if a.delivered)
-    spent = sum(a.seconds for a in recent)
-    return (spent + estimate) / (delivered + 1), bool(recent)
 
 
 def _states(sources: list[Source], answers: dict[int, Availability | None], asked: set[int]) -> str:
@@ -3714,3 +3759,14 @@ async def _slice(chunks: AsyncIterator[bytes], first: int, last: int) -> AsyncIt
         offset = end
         if offset > last:
             return
+
+
+def _steps(sources: list[Source]) -> list[list[Source]]:
+    """``sources`` (in the plan's order) by their steps."""
+    steps: list[list[Source]] = []
+    for source in sources:
+        if steps and steps[-1][0].step == source.step:
+            steps[-1].append(source)
+        else:
+            steps.append([source])
+    return steps

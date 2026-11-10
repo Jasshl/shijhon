@@ -690,8 +690,13 @@ def test_no_match_job_checks_the_current_row_before_rechecking(
     state: str,
 ) -> None:
     pending: list[Callable[[], Awaitable[None]]] = []
+    spawn = world.app.dashboard.host.try_spawn
 
     def queue(work: Callable[[], Awaitable[None]]) -> bool:
+        # Only the recheck waits; other background work, such as the library index
+        # writing its facts, runs as usual.
+        if not work.__qualname__.startswith("Dashboard.library_recheck."):
+            return spawn(work)  # type: ignore[arg-type]
         pending.append(work)
         return True
 

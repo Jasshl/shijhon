@@ -224,11 +224,14 @@ def transcoded(client: SubsonicClient, song: str, token: str, **headers: str) ->
     )
 
 
-def routing(gated: Gated, mode: str, primary: str = "") -> None:
-    settings = gated.world.services.deliverer.settings
+def plan(gated: Gated, together: bool) -> None:
+    """The two add-ons in one step (they race), or one after the other."""
+    sources = gated.world.services.sources
 
     async def change() -> None:
-        settings.routing, settings.primary_source = mode, primary  # type: ignore[assignment]
+        ids = [s.id for s in await sources.stored()]
+        steps = [(ids, 2.5)] if together else [([i], 2.5) for i in ids]
+        await sources.arrange(steps)
 
     gated.world.server.call(change)
 
@@ -282,25 +285,27 @@ def test_the_file_plays_when_the_addons_have_nothing_better(gated: Gated) -> Non
     assert asked(gated.addon, "XXQ0L2000004") and asked(gated.second, "XXQ0L2000004")
 
 
-@pytest.mark.parametrize("mode,title", [("ordered", "Pale Ember"), ("primary_first", "Dim Ember")])
+@pytest.mark.parametrize("together,title", [(False, "Pale Ember"), (True, "Dim Ember")])
 def test_audio_below_the_minimum_is_passed_over_for_the_next_addon(
-    gated: Gated, mode: str, title: str
+    gated: Gated, together: bool, title: str
 ) -> None:
-    """The first add-on's MP3 is below the minimum: the routing goes on to the second,
-    whose FLAC plays - also its later ranges."""
-    routing(gated, mode, "Source" if mode == "primary_first" else "")
+    """The first add-on's MP3 is below the minimum: the routing goes on to the second (or,
+    racing, takes the second's), whose FLAC plays - also its later ranges."""
+    plan(gated, together)
     try:
         client = gated.world.client()
         song, isrc = gated.songs[title], gated.isrcs[title]
         answer = client.request("stream", {"id": song})
         assert answer.status_code == 200
         assert digest(answer.content) == digest(gated.seconds[title])
-        assert asked(gated.addon, isrc) == 1  # asked, and passed over
+        # Asked and passed over (racing: perhaps stopped first, once the FLAC came).
+        first = asked(gated.addon, isrc)
+        assert first == 1 or (together and first == 0)
         part = client.request("stream", {"id": song}, headers={"range": "bytes=10-99"})
         assert part.status_code == 206 and part.content == gated.seconds[title][10:100]
-        assert asked(gated.addon, isrc) == 1
+        assert asked(gated.addon, isrc) == first  # its later ranges stay on the FLAC
     finally:
-        routing(gated, "ordered")
+        plan(gated, False)
 
 
 def test_only_a_play_the_addons_served_may_upgrade_an_import(gated: Gated) -> None:

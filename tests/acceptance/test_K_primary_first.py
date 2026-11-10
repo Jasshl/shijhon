@@ -1,13 +1,15 @@
-"""Suite K (continued) — primary-first routing, a setting.
+"""Suite K (continued) — a plan whose first step is one add-on, with ready checks.
 
-The primary source starts at once while the other sources are asked whether they can
-deliver the recording now. If the primary has no first byte after the short primary budget
-and a source reported the track ready, playback switches to that source. Otherwise the
-primary keeps its chance up to the byte-zero budget, and only then the reliable source is
-tried: one track is never streamed from two sources at once. Primary timeouts are recorded
-as failures; repeated timeouts, or repeated switches away from the primary, cool it down
-(both thresholds are settings). A client's whole wait for the first byte is capped. Warm-ahead
-uses the same routing. The source actually used is logged when a play starts.
+The plan's first add-on (here "Primary") starts at once while the add-ons of the later
+steps are asked whether they can deliver the recording now. If it has no first byte after
+the handover time (``ready_handover_seconds``) and an add-on reported the track ready,
+that add-on joins it. Otherwise the first has its step's time alone, and then the next
+step joins - those that said "not now" last - while the first keeps trying: the first
+audio plays. One still trying past its step's time when another's audio comes counts a
+timeout (with no usual time known); repeated timeouts cool an add-on down (a setting).
+A client's whole wait for the first byte is capped. Warm-ahead
+and fetches ahead ask one add-on at a time in the plan's order. The source actually used
+is logged when a play starts.
 """
 
 from __future__ import annotations
@@ -29,8 +31,8 @@ from tests.harness.fake_addon import FakeAddon, FakeTrack
 from tests.harness.navidrome import ADMIN_USER
 
 CHECKS = ("stream", "isrc", "availability")
-BUDGET = 3.0  # byte-zero budget: how long the primary may take without an alternative that is ready
-PRIMARY_BUDGET = 1.0  # when a ready source takes over
+BUDGET = 3.0  # a step's time: how long the primary may take without an alternative that is ready
+PRIMARY_BUDGET = 1.0  # when a ready source takes over (the handover time)
 HANG = 6.0  # a primary that does not answer within the byte-zero budget
 WARM_DELAY = 0.2  # warm-ahead starts this long after a play's first byte
 
@@ -43,10 +45,8 @@ def world(
         navidrome_factory(),
         tmp_path_factory.mktemp("primary"),
         budget_seconds=BUDGET,
-        routing="primary_first",
-        primary_source="Primary",
-        primary_budget_seconds=PRIMARY_BUDGET,
-        reliable_source="Reliable",
+        ready_checks=True,
+        ready_handover_seconds=PRIMARY_BUDGET,
         availability_timeout_seconds=0.5,
         cooldown_seconds=30.0,
         warm_ahead_depth=2,
@@ -111,6 +111,13 @@ def logged(lines: list[str], prefix: str) -> bool:
     return any(line.startswith(prefix) for line in lines)
 
 
+def stepped(world: DeliveryWorld, title: str, text: str) -> bool:
+    """Whether the latest routing of ``title`` kept for Diagnostics has a step with
+    ``text``."""
+    routing = next(r for r in reversed(world.services.deliverer.recent) if r.title == title)
+    return any(text in step for step in routing.steps)
+
+
 def test_a_quick_primary_is_used(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
@@ -139,11 +146,11 @@ def test_a_slow_primary_gives_way_to_a_ready_source(
     assert checks and all(r["at"] < started + PRIMARY_BUDGET for r in checks)
     assert first_request(sources["b"]) >= started + PRIMARY_BUDGET
     assert sources["reliable"].requests("stream") == []
-    assert any(
-        line.startswith("primary-first 'Title p-slow Song 1': Primary had no first byte after")
-        and "and Checker-B has it ready" in line
-        for line in playback_log
-    )
+    # The primary kept trying beside it until its audio came: within its step's time, so
+    # not counted as slow.
+    assert stepped(world, "Title p-slow Song 1", "Checker-B: has it ready")
+    assert stepped(world, "Title p-slow Song 1", "Primary: stopped after")
+    assert source(world, "Primary").stats.timeouts_since_delivery == 0
     assert logged(playback_log, "playing 'Title p-slow Song 1' from Checker-B")
 
 
@@ -169,21 +176,19 @@ def test_a_hanging_primary_falls_back_to_the_reliable_source_after_the_budget(
 ) -> None:
     song, fakes, audio = world.placeholder_track("p-hanging", list(sources.values()))
     fakes[sources["primary"]].resolve_delay = HANG
-    fakes[sources["a"]].ready = False
+    fakes[sources["a"]].ready = fakes[sources["b"]].ready = False  # "not now": they go last
     started = time.monotonic()
     assert play(world, song) == audio.read_bytes()
     assert BUDGET <= time.monotonic() - started < BUDGET + 2.0
     assert sources["reliable"].requests("audio")
-    # Never two sources at once: the reliable source only after the primary gave up.
+    # The next step joins once the primary's step has had its time.
     assert first_request(sources["reliable"]) >= started + BUDGET
     assert sources["a"].requests("stream") == [] and sources["b"].requests("stream") == []
-    # The timeout is recorded as the primary's failure.
+    # Still trying past its step's time, with no usual time: a timeout, its failure.
     primary = source(world, "Primary")
     assert primary.stats.last_failure == "timeout"
     assert primary.stats.timeouts_since_delivery == 1
-    assert logged(
-        playback_log, "primary-first 'Title p-hanging Song 1': Primary: timeout; plan Reliable"
-    )
+    assert stepped(world, "Title p-hanging Song 1", "slow: counted toward its cooldown")
     assert logged(playback_log, "playing 'Title p-hanging Song 1' from Reliable")
 
 
@@ -192,21 +197,22 @@ def test_a_primary_hanging_at_the_first_byte_times_out_too(
 ) -> None:
     song, fakes, audio = world.placeholder_track("p-silent", list(sources.values()))
     fakes[sources["primary"]].first_byte_delay = HANG
+    fakes[sources["a"]].ready = fakes[sources["b"]].ready = False  # "not now": they go last
     started = time.monotonic()
     assert play(world, song) == audio.read_bytes()
     assert BUDGET <= time.monotonic() - started < BUDGET + 2.0
     assert sources["reliable"].requests("audio")
     primary = source(world, "Primary")
-    assert primary.stats.last_failure == "timeout before the first byte"
+    assert primary.stats.last_failure == "timeout"
     assert primary.stats.timeouts_since_delivery == 1
 
 
-def test_a_primary_with_its_own_budget_gets_it(
+def test_a_primary_with_a_longer_step_gets_it(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
-    """A primary that prepares files keeps its chance beyond the global budget."""
+    """A primary that prepares files has its longer step alone, beyond the default."""
     primary = source(world, "Primary")
-    world.server.call(lambda: world.services.sources.update(primary.id, budget_seconds=BUDGET + 2))
+    world.server.call(lambda: world.services.sources.update(primary.id, step_seconds=BUDGET + 2))
     song, fakes, audio = world.placeholder_track("p-own", list(sources.values()))
     fakes[sources["primary"]].first_byte_delay = BUDGET + 0.5
     started = time.monotonic()
@@ -240,9 +246,7 @@ def test_a_disabled_primary_is_skipped(
     assert play(world, song) == audio.read_bytes()
     assert time.monotonic() - started < 1.5
     assert sources["primary"].requests() == []
-    assert logged(
-        playback_log, "primary-first 'Title p-disabled Song 1': no primary source; plan Reliable"
-    )
+    assert logged(playback_log, "playing 'Title p-disabled Song 1' from Checker-A")
 
 
 def test_a_primary_without_the_track_is_passed_at_once(
@@ -266,17 +270,14 @@ def test_repeated_primary_timeouts_cool_the_primary_down(
         fakes[sources["primary"]].resolve_delay = HANG
     for song, _, audio in tracks[:2]:
         assert play(world, song) == audio.read_bytes()
-    assert logged(playback_log, "primary Primary timed out 2 times without delivering; cooling")
+    assert logged(playback_log, "source Primary timed out 2 times without delivering; cooling")
     sources["primary"].clear()
     song, _, audio = tracks[2]
     started = time.monotonic()
     assert play(world, song) == audio.read_bytes()
     assert time.monotonic() - started < 1.5  # no wait for the hanging primary
     assert sources["primary"].requests() == []
-    assert logged(
-        playback_log,
-        "primary-first 'Title p-cool-3 Song 1': Primary is cooling down; plan Reliable",
-    )
+    assert stepped(world, "Title p-cool-3 Song 1", "Primary: cooling down")
 
 
 def test_a_delivery_resets_the_timeout_count(
@@ -291,62 +292,24 @@ def test_a_delivery_resets_the_timeout_count(
     assert source(world, "Primary").stats.timeouts_since_delivery == 0
 
 
-def test_repeated_switches_away_from_a_slow_primary_cool_it_down(
-    world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
-) -> None:
-    """Three switches in a row (the default setting) without a delivery in between."""
-    assert world.services.deliverer.settings.primary_cooldown_switches == 3
-    tracks = [world.placeholder_track(f"p-switch-{n}", list(sources.values())) for n in range(4)]
-    for _, fakes, _ in tracks:
-        fakes[sources["primary"]].first_byte_delay = 5.0
-        fakes[sources["b"]].ready = True
-    for song, _, audio in tracks[:2]:
-        assert play(world, song) == audio.read_bytes()
-    assert source(world, "Primary").stats.switches_since_delivery == 2
-    assert not logged(playback_log, "primary Primary was switched away from")
-    assert play(world, tracks[2][0]) == tracks[2][2].read_bytes()
-    assert logged(
-        playback_log, "primary Primary was switched away from 3 times without delivering; cooling"
-    )
-    sources["primary"].clear()
-    song, _, audio = tracks[3]
-    started = time.monotonic()
-    assert play(world, song) == audio.read_bytes()
-    assert time.monotonic() - started < PRIMARY_BUDGET  # straight to the ready source
-    assert sources["primary"].requests() == []
-
-
-def test_a_delivery_resets_the_switch_count(
-    world: DeliveryWorld, sources: dict[str, FakeAddon]
-) -> None:
-    slow, fakes, _ = world.placeholder_track("p-sreset-1", list(sources.values()))
-    fakes[sources["primary"]].first_byte_delay = 5.0
-    fakes[sources["b"]].ready = True
-    quick, _, _ = world.placeholder_track("p-sreset-2", list(sources.values()))
-    play(world, slow)
-    assert source(world, "Primary").stats.switches_since_delivery == 1
-    play(world, quick)
-    assert source(world, "Primary").stats.switches_since_delivery == 0
-
-
 def test_the_timeout_threshold_is_a_setting(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     settings = world.services.deliverer.settings
-    settings.primary_cooldown_timeouts = 1
+    settings.cooldown_timeouts = 1
     try:
         song, fakes, audio = world.placeholder_track("p-threshold", list(sources.values()))
         fakes[sources["primary"]].resolve_delay = HANG
         assert play(world, song) == audio.read_bytes()
-        assert logged(playback_log, "primary Primary timed out 1 times without delivering")
+        assert logged(playback_log, "source Primary timed out 1 times without delivering")
     finally:
-        settings.primary_cooldown_timeouts = 2
+        settings.cooldown_timeouts = 2
 
 
 def test_the_whole_wait_for_the_first_byte_is_capped(
     world: DeliveryWorld, sources: dict[str, FakeAddon]
 ) -> None:
-    """The primary's budget plus a reliable source's own budget would exceed the cap: the
+    """The primary's step plus the next one's own time would exceed the cap: the
     client gets its answer (an error, so it skips) when the cap is reached."""
     reliable = source(world, "Reliable")
     world.server.call(lambda: world.services.sources.update(reliable.id, budget_seconds=20))
@@ -354,7 +317,8 @@ def test_the_whole_wait_for_the_first_byte_is_capped(
     cap = BUDGET + 1.5
     settings.max_wait_seconds = cap
     try:
-        song, fakes, _ = world.placeholder_track("p-cap", list(sources.values()))
+        # (The checking add-ons lack it: the reliable source is the next with it.)
+        song, fakes, _ = world.placeholder_track("p-cap", [sources["primary"], sources["reliable"]])
         fakes[sources["primary"]].resolve_delay = HANG
         fakes[sources["reliable"]].first_byte_delay = HANG * 2
         started = time.monotonic()
@@ -376,7 +340,7 @@ def test_a_primary_timeout_cut_short_by_the_cap_counts(
     primary = source(world, "Primary")
     world.server.call(lambda: world.services.sources.update(primary.id, budget_seconds=20))
     settings = world.services.deliverer.settings
-    settings.max_wait_seconds, settings.primary_cooldown_timeouts = 2.0, 1
+    settings.max_wait_seconds, settings.cooldown_timeouts = 2.0, 1
     try:
         song, fakes, _ = world.placeholder_track("p-cutshort", list(sources.values()))
         fakes[sources["primary"]].resolve_delay = HANG
@@ -384,10 +348,10 @@ def test_a_primary_timeout_cut_short_by_the_cap_counts(
         answer = world.client().request("stream", {"id": song, "f": "json"})
         elapsed = time.monotonic() - started
     finally:
-        settings.max_wait_seconds, settings.primary_cooldown_timeouts = 30.0, 2
+        settings.max_wait_seconds, settings.cooldown_timeouts = 30.0, 2
     assert answer.json()["subsonic-response"]["status"] == "failed"
     assert 1.8 <= elapsed < 3.0
-    assert logged(playback_log, "primary Primary timed out 1 times without delivering")
+    assert logged(playback_log, "source Primary timed out 1 times without delivering")
 
 
 def test_the_cap_covers_waiting_for_a_warm_ahead_s_routing(
@@ -427,7 +391,7 @@ def wait_for(lines: list[str], prefix: str, seconds: float = 10.0) -> bool:
     return logged(lines, prefix)
 
 
-def test_warm_ahead_switches_to_a_ready_source(
+def test_warm_ahead_goes_on_to_the_next_add_on_after_a_slow_one(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     release = catalog_release("p-warm", "Primary Warm", "Warm Artist", 2)
@@ -440,9 +404,10 @@ def test_warm_ahead_switches_to_a_ready_source(
         sources["primary"].add(FakeTrack(isrc=track.isrc, audio=audio, first_byte_delay=slow))
         sources["b"].add(FakeTrack(isrc=track.isrc, audio=audio, ready=True))
     play(world, songs[0], "warm-switch")
-    assert wait_for(playback_log, "warmed 'Primary Warm Song 2' from Checker-B")
-    # A warm-ahead's switch is no play's wait: it does not count toward the cooldown.
-    assert source(world, "Primary").stats.switches_since_delivery == 0
+    # One add-on at a time in the plan's order: the primary's whole step, then the next
+    # that has it (Checker-A lacks it).
+    # (A whole step and the next add-on's answer: more than 10 s on a loaded machine.)
+    assert wait_for(playback_log, "warmed 'Primary Warm Song 2' from Checker-B", seconds=20.0)
     sources["b"].clear()
     started = time.monotonic()
     play(world, songs[1], "warm-switch")
@@ -461,11 +426,11 @@ def test_warm_ahead_waits_for_the_primary_then_falls_back(
         assert track.isrc
         audio = world.audio(track.title)
         sources["primary"].add(FakeTrack(isrc=track.isrc, audio=audio, **delay))
-        for name in ("a", "reliable"):
-            sources[name].add(FakeTrack(isrc=track.isrc, audio=audio, ready=False))
+        sources["a"].add(FakeTrack(isrc=track.isrc, audio=audio, available=False))
+        sources["reliable"].add(FakeTrack(isrc=track.isrc, audio=audio))
     play(world, songs[0], "warm-patient")
-    # Nothing ready: the second track waits for the slow primary; the third falls back to
-    # the reliable source only once the primary used up the byte-zero budget.
+    # The second track waits for the slow primary; the third goes on to the next add-ons
+    # (Checker-A lacks it, Checker-B too) only once the primary used up its step's time.
     assert wait_for(playback_log, "warmed 'Patient Warm Song 2' from Primary")
     assert wait_for(playback_log, "warmed 'Patient Warm Song 3' from Reliable")
     third = release.tracks[2].isrc
@@ -484,7 +449,7 @@ def test_fetches_ahead_go_to_the_primary_one_at_a_time_after_the_played_song(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     """A client starting the next songs of its queue with the one it plays (four
-    within a quarter of a second) - those go to the primary alone, without
+    within a quarter of a second) - those go to the plan's first add-on alone, without
     availability checks, one at a time, after the played song has its first byte."""
     gate = world.services.interceptor.ahead
     assert gate is not None
@@ -512,7 +477,9 @@ def test_fetches_ahead_go_to_the_primary_one_at_a_time_after_the_played_song(
     # After the played song's first byte (its primary took 1.5 s), then one at a time.
     assert starts[1] - starts[0] >= 1.4
     assert all(b - a >= 0.28 for a, b in itertools.pairwise(starts[1:]))
-    assert sources["reliable"].requests() == [] and sources["b"].requests("stream") == []
+    # (The played song's checks read the reliable source's manifest: nothing more.)
+    assert [r["endpoint"] for r in sources["reliable"].requests()] in ([], ["manifest"])
+    assert sources["b"].requests("stream") == []
     assert sum(line.startswith("fetched ahead 'Title p-ahead-") for line in playback_log) == 3
 
 
@@ -520,8 +487,9 @@ def test_a_fetch_ahead_the_primary_cannot_serve_is_routed_as_usual(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     """A fetch ahead the primary does not have, or fails, is not left to fail
-    (a client may skip that song later): it is routed as usual - availability checks,
-    fallbacks - still in the client's turn. The primary alone serves the common case."""
+    (a client may skip that song later): it is routed as usual - the other add-ons one at a
+    time in the plan's order, without availability checks - still in the client's turn.
+    The primary alone serves the common case."""
     gate = world.services.interceptor.ahead
     assert gate is not None
     gate.window = 0.5
@@ -549,7 +517,7 @@ def test_a_fetch_ahead_the_primary_cannot_serve_is_routed_as_usual(
         gate.window = 0.0
     isrcs = [next(iter(fakes.values())).isrc for _, fakes, _ in tracks]
     checked = {r["isrc"] for r in sources["a"].requests("availability")}
-    assert checked == {isrcs[0], isrcs[1], isrcs[3]}  # not for the song the primary served
+    assert checked == {isrcs[0]}  # only the played song was routed with checks
     fell_back = [line for line in playback_log if line.startswith("fetch ahead 'Title p-fb-")]
     assert len(fell_back) == 2 and all("routing it as usual" in line for line in fell_back)
     failing = [r for r in sources["primary"].requests("stream") if r["key"] == isrcs[3]]
@@ -558,7 +526,7 @@ def test_a_fetch_ahead_the_primary_cannot_serve_is_routed_as_usual(
                for line in playback_log)  # fmt: skip
 
 
-def test_a_fetch_ahead_while_the_primary_cools_down_is_routed_as_usual(
+def test_a_fetch_ahead_while_the_primary_cools_down_goes_to_the_next_add_on(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
     gate = world.services.interceptor.ahead
@@ -580,16 +548,16 @@ def test_a_fetch_ahead_while_the_primary_cools_down_is_routed_as_usual(
         gate.window = 0.0
         world.services.sources.cool_down(primary.id, 0.0)
     isrc = next(iter(tracks[1][1].values())).isrc
-    assert isrc in {r["isrc"] for r in sources["a"].requests("availability")}  # checks allowed
+    # The plan's first add-on that can be asked now, alone.
     assert not [r for r in sources["primary"].requests("stream") if r["key"] == isrc]
-    assert any(line.startswith("primary-first 'Title p-cooling-1") and "cooling down" in line
-               for line in playback_log)  # fmt: skip
+    assert [r for r in sources["a"].requests("stream") if r["key"] == isrc]
+    assert logged(playback_log, "fetched ahead 'Title p-cooling-1 Song 1' from Checker-A")
 
 
 def test_during_a_primary_outage_the_next_song_is_prepared_first(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
-    """With the primary down, each fetch ahead is routed as usual
+    """With the primary down, each fetch ahead goes to the next add-on of the plan
     and takes its time, one at a time - so the turns go in the order of playing: the
     song after the current one in the client's saved queue first, whenever its request
     came, then the others as they came."""
@@ -600,8 +568,8 @@ def test_during_a_primary_outage_the_next_song_is_prepared_first(
     for _, fakes, _ in tracks:
         fakes[sources["a"]].ready = True
         fakes[sources["a"]].resolve_delay = 0.4  # a routing takes a while
-        # The reliable source, looked up meanwhile, lacks them: the checking source's
-        # answer, not which of the two answers first, decides where each song comes from.
+        # The reliable source lacks them: Checker-A, the first add-on that can be asked
+        # (the primary cools down), serves each song.
         fakes[sources["reliable"]].available = False
     isrcs = [next(iter(fakes.values())).isrc for _, fakes, _ in tracks]
 

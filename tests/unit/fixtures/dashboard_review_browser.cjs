@@ -95,48 +95,6 @@ async function collection(dirty) {
     text.children[0].listeners.click(); assert.equal(reloads,1);
   }
 }
-async function addons() {
-  const chain = new Element(), token = new Element(), timers = [], requests = [];
-  token.value = 'synthetic'; chain.dataset.reorder = '/order';
-  const rows = ['a','b','c'].map(id => {
-    const row = new Element(), number = new Element(), move = new Element();
-    number.dataset.addon = id; move.action = `/addons/${id}/move`;
-    move.closest = () => row;
-    row.buttons = [new Element(),new Element()];
-    row.querySelectorAll = () => row.buttons;
-    row.querySelector = selector => selector === '.source-order' ? number : {textContent:id};
-    row.getBoundingClientRect = () => ({height:100});
-    row.move = move;
-    return row;
-  });
-  chain.querySelector = () => token;
-  chain.querySelectorAll = () => rows;
-  chain.insertBefore = (row, next) => {rows.splice(rows.indexOf(row),1); rows.splice(next ? rows.indexOf(next) : rows.length,0,row);};
-  let releaseSave;
-  const context = {
-    document:{querySelector:() => chain,getElementById:() => new Element(),addEventListener() {}},
-    window:{matchMedia:() => ({matches:false}),setTimeout(callback,delay) {if (delay === 220) timers.push(callback);return 1;},clearTimeout() {},location:{reload() {throw new Error('Unexpected reload');}}},
-    URLSearchParams,
-    fetch:async(action, options) => {requests.push({action,options});return new Promise(resolve => {releaseSave = () => resolve({ok:true,json:async() => ({saved:true})});});}
-  };
-  run('addons.js',context);
-  const row = rows[0];
-  let prevented = 0;
-  const event = {target:{closest:() => row.move},submitter:{value:'down'},preventDefault() {prevented++;}};
-  const first = chain.listeners.submit(event);
-  await chain.listeners.submit(event);
-  assert.equal(prevented,2,'A second press during animation cannot fall through to a form POST.');
-  assert.equal(timers.length,1); assert.equal(requests.length,0);
-  timers.shift()(); await flush();
-  assert.equal(requests.length,1); assert.equal(rows.indexOf(row),1);
-  await chain.listeners.submit(event);
-  assert.equal(prevented,3); assert.equal(requests.length,1,'The save stays locked.');
-  releaseSave(); await first;
-  const second = chain.listeners.submit(event);
-  assert.equal(timers.length,1,'The lock releases after saving.');
-  timers.shift()(); await flush(); releaseSave(); await second;
-  assert.equal(rows.indexOf(row),2); assert.equal(requests.length,2);
-}
 (async() => {
-  await removals(); await collection(false); await collection(true); await addons();
+  await removals(); await collection(false); await collection(true);
 })().catch(error => {console.error(error);process.exitCode = 1;});

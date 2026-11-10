@@ -78,13 +78,19 @@ class Server:
 
 @asynccontextmanager
 async def world(
-    tmp_path: Path, servers: list[Server], bases: list[str] | None = None, **settings: Any
+    tmp_path: Path,
+    servers: list[Server],
+    bases: list[str] | None = None,
+    *,
+    together: bool = False,
+    **settings: Any,
 ) -> AsyncIterator[tuple[Deliverer, list[Source]]]:
+    """``together``: the add-ons are one step of the plan (else each a step of its own)."""
     store = await Store.open(tmp_path / "state.sqlite3")
     registry = SourceRegistry(store, limits=Limits(0, 4, 0))
     bases = bases or [f"https://demo{i}.example.invalid" for i in range(len(servers))]
     for index, base in enumerate(bases):
-        await registry.add(str(index), base)
+        await registry.add(str(index), base, step=1 if together else None)
     sources = await registry.enabled()
     for source, server in zip(sources, servers, strict=True):
         await source.http.aclose()
@@ -114,14 +120,15 @@ async def play(deliverer: Deliverer, number: int) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("routing", ["ordered", "primary_first", "ready_first"])
+@pytest.mark.parametrize("plan", ["steps", "together", "checks"])
 async def test_an_add_on_that_does_not_stream_is_asked_for_no_audio(
-    tmp_path: Path, routing: str
+    tmp_path: Path, plan: str
 ) -> None:
     catalog = Server("demo.catalog", ("isrc", "search", "catalog", "availability"))
     audio = Server("demo.audio", ("isrc", "stream", "availability"))
-    names = {"primary_source": "0", "reliable_source": "1"} if routing != "ordered" else {}
-    async with world(tmp_path, [catalog, audio], routing=routing, **names) as (d, sources):
+    async with world(
+        tmp_path, [catalog, audio], together=plan == "together", ready_checks=plan == "checks"
+    ) as (d, sources):
         await play(d, 1)  # its manifest not known yet: read, and nothing more asked
         assert catalog.asked("resolve-isrc") == catalog.asked("stream") == 0
         assert catalog.asked("manifest.json") == 1 and audio.asked("stream") == 1
@@ -129,35 +136,17 @@ async def test_an_add_on_that_does_not_stream_is_asked_for_no_audio(
         assert [s.name for s in await d.registry.streaming()] == ["1"]
         for number in (2, 3):
             await play(d, number)
-        # Never looked up, nor checked, nor asked for a link: not even its measured order.
+        # Never looked up, nor checked, nor asked for a link.
         assert catalog.asked("resolve-isrc") == catalog.asked("availability") == 0
         assert catalog.asked("stream") == 0 and audio.asked("stream") == 3
         assert sources[0].stats.failures == 0
         # A fetch ahead and warm-ahead too.
         with anyio.fail_after(10):
-            await (await d.open(track(4), None, purpose="warm")).close()
+            await (await d.open(track(4), None, purpose="ahead")).close()
+            await (await d.open(track(5), None, purpose="warm")).close()
         assert catalog.asked("resolve-isrc") == catalog.asked("stream") == 0
-
-
-@pytest.mark.anyio
-async def test_primary_firsts_lookup_meanwhile_asks_nothing_of_an_add_on_that_does_not_stream(
-    tmp_path: Path,
-) -> None:
-    """The likely fallback, looked up while the primary is asked, reads its
-    manifest first - and an add-on for its catalog only is not looked up."""
-    failing = Server("demo.failing", stream_status=404)
-    catalog = Server("demo.catalog", ("isrc", "search", "catalog"))
-    audio = Server("demo.audio")
-    names = {"routing": "primary_first", "primary_source": "0", "reliable_source": "1"}
-    async with world(
-        tmp_path, [failing, catalog, audio], reliable_lookup_after_seconds=0.0, **names
-    ) as (d, _):
-        await play(d, 1)
-        assert catalog.asked("manifest.json") == 1
-        assert catalog.asked("resolve-isrc") == catalog.asked("stream") == 0
-        assert audio.asked("stream") == 1
         # ... nor through the client's own lookup, whoever asks.
-        assert await d.registry._listed[2].addon.find(track(2).wanted) is None
+        assert await sources[0].addon.find(track(6).wanted) is None
         assert catalog.asked("resolve-isrc") == 0
 
 
@@ -238,11 +227,15 @@ async def test_a_preparing_add_on_not_ready_in_time_is_no_error_and_is_asked_aga
 
 
 @pytest.mark.anyio
-async def test_a_preparing_add_on_that_never_gets_ready_uses_its_budget_and_no_more(
+async def test_a_preparing_add_on_that_never_gets_ready_uses_the_wait_and_no_more(
     tmp_path: Path,
 ) -> None:
+    """In a play an add-on keeps trying until the client's wait, not its step's time."""
     preparing = Server(preparing=1000, retry_after="0.2")
-    async with world(tmp_path, [preparing], budget_seconds=2.0) as (d, sources):
+    async with world(tmp_path, [preparing], budget_seconds=0.5, max_wait_seconds=2.0) as (
+        d,
+        sources,
+    ):
         source = sources[0]
         began = anyio.current_time()
         with anyio.fail_after(4), pytest.raises(NoSource, match="asked again 3 times"):
@@ -273,21 +266,25 @@ async def test_its_own_budget_and_the_clients_wait_cap_bound_the_asking_again(
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("routing", ["ordered", "primary_first", "ready_first"])
+@pytest.mark.parametrize("plan", ["steps", "together", "checks"])
 async def test_a_continued_routing_asks_a_preparing_first_add_on_again(
-    tmp_path: Path, routing: str
+    tmp_path: Path, plan: str
 ) -> None:
-    """The first add-on (primary-first's primary, kept out of the fallbacks'
-    order) said it was preparing - and moved on at once, not cut short by the wait cap -
-    and the other lacked the song: a routing that continues it asks the first again."""
+    """The first add-on said it was preparing - and moved on at once, not cut short by the
+    wait cap - and the other lacked the song: a routing that continues it asks the first
+    again (whether they were one step of the plan or two, with ready checks or without)."""
     preparing = Server(preparing=1, retry_after="5")
     lacking = Server("demo.two", stream_status=404)
-    names = {"primary_source": "0", "reliable_source": "1"} if routing != "ordered" else {}
-    async with world(tmp_path, [preparing, lacking], routing=routing, **names) as (d, _):
+    async with world(
+        tmp_path,
+        [preparing, lacking],
+        together=plan == "together",
+        ready_checks=plan == "checks",
+    ) as (d, _):
         with anyio.fail_after(2), pytest.raises(NoSource, match="not ready"):
             await d.open(track(1), None)
         assert preparing.asked("stream") == 1
-        lacked = lacking.asked("stream")  # (primary-first: its looked-up ID, then again)
+        lacked = lacking.asked("stream")
         with anyio.fail_after(5):
             answer = await d.open(track(1), None, resume=True)
         await answer.close()
@@ -309,18 +306,19 @@ async def test_a_continued_routing_asks_a_preparing_add_on_again(tmp_path: Path)
 
 
 @pytest.mark.anyio
-async def test_a_primary_that_moves_on_at_once_is_not_timed_out_and_one_that_waits_is(
+async def test_an_add_on_that_moves_on_at_once_is_not_timed_out_and_one_that_waits_is(
     tmp_path: Path,
 ) -> None:
-    """A primary that is not ready in time counts as a timeout only when the attempt
-    waited until its time ran out. A Retry-After longer than what is left
-    moves on at once: nothing toward its timeouts or cooldown, no attempt used - and the
-    time it took is still measured."""
-    primary = Server(preparing=1000, retry_after="5")
-    names = {"routing": "primary_first", "primary_source": "0", "reliable_source": "1"}
-    async with world(
-        tmp_path, [primary, Server("demo.two")], primary_cooldown_timeouts=1, **names
-    ) as (d, sources):
+    """An add-on that is not ready in time counts as a timeout only when the attempt
+    waited until its time ran out. A Retry-After longer than what is left (the client's
+    wait) moves on at once: nothing toward its timeouts or cooldown - and the time it took
+    is still recorded. One asked again, still trying when the next step's add-on sends the
+    song past its step's time, counts as slow."""
+    primary = Server(preparing=1000, retry_after="40")
+    async with world(tmp_path, [primary, Server("demo.two")], cooldown_timeouts=1) as (
+        d,
+        sources,
+    ):
         source = sources[0]
         for number in (1, 2):
             began = anyio.current_time()
@@ -470,3 +468,24 @@ def test_the_new_defaults_are_5_a_second_after_10_at_once() -> None:
     assert delivery.addon_audio_openings == 4
     pace = Paces().of("https://addon.example.invalid")
     assert pace is not None and pace.limits == Limits(5.0, 10, 4)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("shared", [False, True])
+async def test_a_lookup_timeout_is_a_timeout_unless_it_was_another_request_s(
+    tmp_path: Path, shared: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lookup that took too long is the add-on's timeout, as audio's is; one this request
+    shared - another request's lookup, waited for - is not counted again here."""
+    from shijhon.delivery import playback
+
+    async with world(tmp_path, [Server()]) as (d, sources):
+        source = sources[0]
+
+        async def slow_lookup(*args: Any, **kwargs: Any) -> None:
+            raise AddonError("timeout", "ReadTimeout", shared=shared)
+
+        monkeypatch.setattr(source.addon, "find", slow_lookup)
+        with pytest.raises(playback._Failed) as caught:
+            await d._resolve_at(source, track(1), 2.0)
+        assert isinstance(caught.value, playback._TimedOut) is not shared

@@ -4,11 +4,11 @@
 {% block main %}
 <div class="page-head">
   <h1>Add-ons</h1>
-  <p class="page-summary">Add-ons supply the audio for catalog songs you don't own.{% if items %} The routing mode on <a href="{{ prefix }}/playback">Playback</a> decides which one plays a song.{% endif %}</p>
+  <p class="page-summary">Add-ons supply the audio for catalog songs you don't own.</p>
 {% if items %}
   <details class="page-about">
     <summary>How add-ons are used</summary>
-    <p><strong>In order</strong> goes down this list; <strong>Ready first</strong> takes the first on it that has the song ready; <strong>Primary first</strong> starts with the primary, then tries the others fastest first, by their recent plays. Add-ons that are off are skipped.</p>
+    <p>Songs people are listening to follow the plan below. Add-ons that are off are skipped. Fetches that nobody is waiting on, like the next songs in a queue, go through the same steps one add-on at a time, so they don't ask several add-ons for the same song.</p>
     <p>Downloads and playlist preparation use one selected add-on at a time for each song and share transfer slots. Set the defaults on <a href="{{ prefix }}/playback#bulk-title">Playback</a>; set an add-on's own limits and shared account or worker group under its Settings, in Advanced settings.</p>
   </details>
 {% endif %}
@@ -55,12 +55,12 @@
 {% if item.catalog_only %}
   <span class="source-order"></span>
 {% else %}
-  <span class="source-order" data-addon="{{ addon.id }}">{{ item.order }}</span>
+  <span class="source-order">{{ item.order }}</span>
 {% endif %}
   <span class="led{% if health.light %} led-{{ health.light }}{% endif %}" aria-hidden="true"></span>
   <div class="source-name">
     <h3>{{ addon.name }}</h3>
-    <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.catalog_only %}{% if addon.budget is not none %}<span>Time for catalog answers {{ addon.budget|number }} s</span>{% endif %}{% else %}{% if addon.budget is not none %}<span>Time to first audio {{ addon.budget|number }} s</span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}{% endif %}</p>
+    <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.catalog_only %}{% if addon.budget is not none %}<span>Time for catalog answers {{ addon.budget|number }} s</span>{% endif %}{% else %}{% if addon.budget is not none %}<span>Time for a download {{ addon.budget|number }} s</span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}{% endif %}</p>
   </div>
   <p class="source-health{% if health.light == 'error' %} status-error{% endif %}">{{ health.words }}{% if health.code %} <code>{{ health.code }}</code>{% endif %}</p>
   <form class="source-switch" method="post" action="{{ prefix }}/addons/{{ addon.id }}/enabled">
@@ -69,15 +69,6 @@
       <span class="switch-track" aria-hidden="true"></span><span class="switch-text" aria-hidden="true">{{ "On" if addon.enabled else "Off" }}</span>
     </button>
   </form>
-  <div class="source-actions">
-{% if not item.catalog_only %}
-  <form class="source-move joined" method="post" action="{{ prefix }}/addons/{{ addon.id }}/move">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <button class="btn-icon btn-small" name="direction" value="up" aria-label="Move {{ addon.name }} up"{% if item.first %} disabled{% endif %}>{{ chevron("up") }}</button>
-    <button class="btn-icon btn-small" name="direction" value="down" aria-label="Move {{ addon.name }} down"{% if item.last %} disabled{% endif %}>{{ chevron("down") }}</button>
-  </form>
-{% endif %}
-  </div>
   <details class="source-settings"{% if item.open %} open{% endif %}>
     <summary>Settings<span class="visually-hidden"> for {{ addon.name }}</span></summary>
     <div class="source-settings-body">
@@ -116,7 +107,7 @@
       <details class="confirm source-remove">
         <summary class="btn btn-danger btn-small"><span class="if-closed">Remove add-on…</span><span class="if-open">Keep add-on</span></summary>
         <div class="confirm-body">
-          <p>Remove {{ addon.name }}? Its address and settings are deleted.{% if not item.catalog_only %} Songs it served are tried on the other add-ons.{% endif %}{% if item.roles %} It is {{ item.roles|join(" and ") }}: choose another on <a href="{{ prefix }}/playback">Playback</a>.{% endif %}</p>
+          <p>Remove {{ addon.name }}? Its address and settings are deleted.{% if not item.catalog_only %} Songs it served are tried on the other add-ons.{% endif %}</p>
           <form method="post" action="{{ prefix }}/addons/{{ addon.id }}/remove">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <button class="btn-danger-fill">Remove {{ addon.name }}</button>
@@ -127,14 +118,74 @@
   </details>
 </li>
 {% endmacro %}
+{% if plan %}
+<section class="group" id="plan" aria-labelledby="plan-title" data-plan="{{ plan|tojson|forceescape }}">
+  <div class="group-head">
+    <h2 id="plan-title">How a song starts</h2>
+    <p class="group-meta"><span class="plan-status" role="status"></span></p>
+    <p class="group-help">Add-ons in the same step start together, and the first to send audio plays.</p>
+    <details class="inline-about plan-about">
+      <summary>How the plan works</summary>
+      <p>Each step has a time. When it ends without audio, or every add-on in it has failed or lacks the song, the next step's add-ons join, and the ones already asked keep trying: the first to send audio plays, and the others are stopped. Downloads and songs prepared ahead ask one add-on at a time instead, each for its time for a download. Apps stop waiting at {{ plan.wait|number }} s, so steps after that are never reached, and their add-ons wait in a list under the board.{% if not plan.readonly %} Pull an add-on's bar sideways into another step's column to start with it, or onto the line between two columns for a step of its own. Under the board, pull an add-on up into a column, or up and down in that list. Pull a step's edge to change its time; when a step is too narrow to show its edge, a tap on its number or on one of its bars shows it.{% endif %}</p>
+      <p class="plan-says"></p>
+    </details>
+  </div>
+  <div class="plan-card">
+    <div class="plan-fold" hidden>
+      <p class="plan-fold-words"></p>
+      <button type="button" class="btn-small plan-fold-button" aria-expanded="false" aria-controls="plan-body">Show the plan</button>
+    </div>
+    <div class="plan-body" id="plan-body">
+{% if not plan.readonly and plan.count > 1 %}
+    <div class="plan-presets" role="group" aria-label="Presets">
+      <button type="button" class="btn-small plan-preset" data-preset="fastest" aria-pressed="false" aria-describedby="plan-preset-help" data-help="All add-ons start together, and the first to send audio plays.">Fastest</button>
+{% if plan.count > 3 %}
+      <button type="button" class="btn-small plan-preset" data-preset="few" aria-pressed="false" aria-describedby="plan-preset-help" data-help="The three quickest right now start together, and the rest join one at a time.">Fastest three</button>
+{% endif %}
+{% if plan.count > 2 %}
+      <button type="button" class="btn-small plan-preset" data-preset="backups" aria-pressed="false" aria-describedby="plan-preset-help" data-help="The first add-on starts alone. Without audio in its time, the others join it together.">Main with backups</button>
+{% endif %}
+      <button type="button" class="btn-small plan-preset" data-preset="turns" aria-pressed="false" aria-describedby="plan-preset-help" data-help="Add-ons join one at a time, each when the one before has had its time, and the ones asked keep trying.">One at a time</button>
+{% if plan.checking or plan.checks %}
+      <button type="button" class="btn-small plan-preset" data-preset="ready" aria-pressed="false" aria-describedby="plan-preset-help" data-help="One at a time, but add-ons that say they have the song ready go first.">Ready first</button>
+{% endif %}
+    </div>
+    <p class="plan-preset-help" id="plan-preset-help"></p>
+{% endif %}
+    <div class="plan-board"></div>
+    <div class="plan-words">
+      <p class="plan-guess"></p>
+      <button type="button" class="btn-small plan-show" aria-pressed="false">Watch it</button>
+      <p class="visually-hidden plan-announce" aria-live="polite"></p>
+    </div>
+{% if plan.count > 1 and (plan.checking or plan.checks) %}
+    <details class="plan-more"{% if plan.checks %} open{% endif %}>
+      <summary>More options</summary>
+    <div class="plan-checks">
+      <div>
+        <p class="setting-label">Ask which add-ons have the song ready</p>
+        <p class="plan-checks-help">Only add-ons built with this check can answer it{% if plan.checking %}: {{ plan.checking|join(", ") }}{% else %}, and none of yours is{% endif %}. When a song starts they are asked whether they have it ready to send. One that has can take over from a slow step, and one that hasn't goes last, so it isn't asked to prepare the song for nothing.{% if plan.checks_locked %} The environment sets this.{% endif %}</p>
+      </div>
+      <button type="button" class="switch plan-checks-switch" role="switch" aria-checked="{{ 'true' if plan.checks else 'false' }}" aria-label="Ask which add-ons have the song ready"{% if plan.readonly or plan.checks_locked %} disabled{% endif %}>
+        <span class="switch-track" aria-hidden="true"></span><span class="switch-text" aria-hidden="true">{{ "On" if plan.checks else "Off" }}</span>
+      </button>
+      <label class="plan-handover"{% if not plan.checks %} hidden{% endif %}>An add-on that says ready takes over after <span class="unit-field"><input type="text" inputmode="decimal" autocomplete="off" value="{{ plan.handover|number }}"{% if plan.readonly or plan.checks_locked %} disabled{% endif %}><span class="unit">s</span></span> without audio (0: it goes first)</label>
+    </div>
+    </details>
+{% endif %}
+    </div>
+    <noscript><p class="plan-noscript">Arranging the steps needs JavaScript. The add-ons below are listed in the plan's order.</p></noscript>
+  </div>
+</section>
+{% endif %}
 <section class="group" aria-labelledby="order-title">
   <div class="group-head">
     <h2 id="order-title">Your add-ons</h2>
 {% if items %}
-    <p class="group-meta"><span class="order-status" id="order-status" role="status"></span>{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on{% if errors %} · <span class="status-error">{{ errors }} with {{ "errors" if errors != 1 else "an error" }}</span>{% endif %}{% if cooling %} · {{ cooling }} cooling down{% endif %}</p>
+    <p class="group-meta">{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on{% if errors %} · <span class="status-error">{{ errors }} with {{ "errors" if errors != 1 else "an error" }}</span>{% endif %}{% if cooling %} · {{ cooling }} cooling down{% endif %}</p>
 {% if not env_list %}
 {% if audio %}
-    <p class="group-help">The order counts for the In order and Ready first routing modes.{% if audio|length > 1 %} Drag an add-on by its number, or use the arrows.{% endif %}</p>
+    <p class="group-help">In the order of the plan above, with the number of each add-on's step.</p>
 {% endif %}
 {% if items|length > 1 %}
     <div class="list-tools">
@@ -155,7 +206,7 @@
 {% endfor %}
   </ol>
 {% elif audio %}
-  <ol class="chain"{% if audio|length > 1 %} data-reorder="{{ prefix }}/addons/order"{% endif %}>
+  <ol class="chain">
 {% for item in audio %}
 {{ row(item) }}
 {% endfor %}
@@ -236,7 +287,7 @@
 </form>
 {% endif %}
 {% endif %}
-{% if audio|length > 1 and not env_list %}
-<script src="{{ prefix }}/static/addons.js" defer></script>
+{% if plan %}
+<script src="{{ prefix }}/static/addon_plan.js" defer></script>
 {% endif %}
 {% endblock %}

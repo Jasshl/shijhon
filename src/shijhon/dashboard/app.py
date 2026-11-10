@@ -106,7 +106,7 @@ from shijhon.delivery.bulk import effective_capacity
 from shijhon.delivery.netpolicy import Reach, Resolver, system_resolver
 from shijhon.delivery.pacing import AddonPace, Limits, origin
 from shijhon.delivery.quality_gate import CHOICES as QUALITY_CHOICES
-from shijhon.delivery.sources import MAX_LIMIT, NameTaken, StoredSource
+from shijhon.delivery.sources import MAX_LIMIT, USUAL_STARTS, NameTaken, StoredSource, usual_seconds
 from shijhon.fill.fills import ChoiceRefused
 from shijhon.locks import KeyedLocks
 from shijhon.navidrome import connect
@@ -231,6 +231,8 @@ ADDON_BUDGET = {"low": 0.0, "high": 600.0}  # SourceRegistry's limits for its ow
 def _page_of(section: str, key: str) -> str:
     """The name of the page a section's setting is on (for the restart banner)."""
     if section == "delivery":
+        if key in PLAN_SETTINGS:
+            return "Add-ons"
         return "Cleanup" if key in DOWNLOAD_LIMITS else "Playback"
     if section == "search":
         return "Catalog"
@@ -355,8 +357,17 @@ ADDON_CATALOG_MORE = Group(
 # The limits that count for a catalog only: what is sent to it, not its audio.
 CATALOG_LIMITS = ("requests_per_second", "request_burst")
 MAX_ADDON_NAME = 100
-# The routing's roles: Playback's settings that name an add-on asked for audio.
-ROLES = {"primary_source": "primary add-on", "reliable_source": "preferred fallback"}
+# The plan's own delivery settings: saved with the plan on Add-ons, not on Playback.
+PLAN_SETTINGS = ("ready_checks", "ready_handover_seconds")
+RECENT_STARTS = USUAL_STARTS  # an add-on's latest attempts that the plan shows its speed from
+# What a routing at byte zero was for, in Diagnostics' words.
+PURPOSES = {
+    "play": "Play",
+    "ahead": "App's fetch ahead",
+    "alone": "App's fetch ahead",
+    "warm": "Next song opened",
+    "download": "Download",
+}
 # Where an add-on runs (its settings, and the form that adds one).
 REACH_HELP = (
     "Where the add-on runs. An address on this machine or your local network is refused"
@@ -494,10 +505,9 @@ class Dashboard:
             Route("/addons", page(self.addons_page), methods=["GET"]),
             Route("/addons", page(self.addon_add), methods=["POST"]),
             Route("/addons/configuration", page(self.addons_hand_back), methods=["POST"]),
-            Route("/addons/order", page(self.addons_order), methods=["POST"]),
+            Route("/addons/plan", page(self.addons_plan), methods=["POST"]),
             Route("/addons/enabled", page(self.addons_enabled), methods=["POST"]),
             Route("/addons/{addon:int}/enabled", page(self.addon_enabled), methods=["POST"]),
-            Route("/addons/{addon:int}/move", page(self.addon_move), methods=["POST"]),
             Route("/addons/{addon:int}/settings", page(self.addon_settings), methods=["POST"]),
             Route("/addons/{addon:int}/remove", page(self.addon_remove), methods=["POST"]),
             Route("/playback", page(self.section_page), methods=["GET", "POST"]),
@@ -1036,13 +1046,8 @@ class Dashboard:
         return waiting
 
     async def _addon_names(self, section: str = "") -> list[str]:
-        """The add-ons a setting of ``section`` that names one may choose: for Playback's
-        (the routing's), those asked for audio - not one that is a catalog only."""
-        addons = await self._stored()
-        if section != "delivery":
-            return [addon.name for addon in addons]
-        audio = self._audio_ids(addons)
-        return [addon.name for addon in addons if addon.id in audio]
+        """The add-ons a setting that names one may choose."""
+        return [addon.name for addon in await self._stored()]
 
     async def _catalog_only_names(self) -> list[str]:
         addons = await self._stored()
@@ -1144,8 +1149,6 @@ class Dashboard:
             extra["wait_saved"] = bool(waited and waited.status)
             # (A saved value that no longer fits is not in use: said, like the page's own.)
             extra["wait_problem"] = self.problems.get("search")
-        if page == "playback":
-            extra = {"missing": self._missing_sources(saved, names, notes)}
         if page == "sound":
             extra = await self._sound_status(saved)
         if page == "agent-access":
@@ -1179,9 +1182,10 @@ class Dashboard:
                                 and form.get("confirm-identity") == extra["identity_confirm"]
                             ),
                         )
-        if page == "playback":  # downloaded audio's limits are on the Cleanup page
+        if page == "playback":  # downloaded audio's limits are on Cleanup, the plan's on Add-ons
+            elsewhere = (*DOWNLOAD_LIMITS, *PLAN_SETTINGS)
             groups = [
-                (group, [row for row in members if row["name"] not in DOWNLOAD_LIMITS])
+                (group, [row for row in members if row["name"] not in elsewhere])
                 for group, members in groups
             ]
         # The rows the notices above the form link to are shown, under "More settings" too;
@@ -1223,25 +1227,6 @@ class Dashboard:
         return await self._render(
             "section.html", session=session, current=page, status_code=status_code, **context
         )
-
-    def _missing_sources(
-        self, saved: Any, names: list[str], catalogs: Mapping[str, str]
-    ) -> list[tuple[str, str, bool]]:
-        """(what is wrong, the environment variable that sets it or "", whether the add-on
-        is in the list as a catalog only): a routing role naming an add-on that is not
-        among ``names`` (those asked for audio). It stays as it is until changed."""
-        delivery = effective(self.host.configured, saved, locked=self.host.locked)[0].delivery
-        env = self.host.locked.get("delivery", {})
-        missing = []
-        for key, label in ROLES.items():
-            name = getattr(delivery, key)
-            if name and name in catalogs:
-                line = f"The {label} “{name}” provides a catalog only: it is not asked for audio."
-                missing.append((line, env.get(key, ""), True))
-            elif name and name not in names:
-                line = f"The {label} “{name}” is not in the add-on list."
-                missing.append((line, env.get(key, ""), False))
-        return missing
 
     async def _section_save(
         self, request: Request, session: Session, page: str, section: str
@@ -1316,14 +1301,6 @@ class Dashboard:
         """Check and save a form's settings of one section, and apply the live ones: (the
         submission, what was written or None when it has problems, the keys applied)."""
         assert self.saved is not None
-        if section == "delivery":
-            # What the add-ons the routing's roles name say now - their manifests, as read
-            # within the minute or read now (each within 5 s) - whatever page was seen
-            # before: one that is a catalog only is not chosen (one already chosen stays).
-            chosen = {form.get(key, "").strip() for key in ROLES} - {""}
-            named = [addon for addon in await self._stored() if addon.name in chosen]
-            if named:
-                await self.checks.check(named)
         async with self._section_saves.hold(section):
             saved = await self.saved.all()
             names = await self._addon_names(section)
@@ -1840,17 +1817,27 @@ class Dashboard:
                 id=f"{prefix}-budget",
                 name="budget_seconds",
                 kind="decimal",
-                label="Time to first audio",
+                label="Time for a download",
                 spoken="seconds",
                 unit="s",
                 text=budget_text,
-                help="How long this add-on has to start a song, in place of Playback's time to"
-                " first audio. Give more to one that prepares whole files first. Playlist"
-                " imports give its catalog at least this long too. Empty: Playback's setting"
-                " applies.",
+                help="How long this add-on has when nobody waits for the song: a download, or"
+                " a song prepared ahead, when the add-ons are asked one at a time. Give more to"
+                " one that prepares whole files first. Its time in a song's start is its step's,"
+                " set in the plan above. Playlist imports give its catalog at least this long"
+                " too. Empty: Playback's setting applies.",
                 default=f"Default {total} s, from Playback",
                 problem=_row(problems.get("budget_seconds")),
                 modified=addon.budget is not None,
+            ),
+            slow_after_row(
+                prefix,
+                running.delivery.slow_after,
+                form.get("slow_after", "")
+                if form is not None
+                else (format_number(addon.slow_after) if addon.slow_after is not None else ""),
+                problem=_row(problems.get("slow_after")),
+                modified=addon.slow_after is not None,
             ),
             *(self._limit_row(addon, limit, form, problems) for limit in ADDON_LIMITS),
             *(
@@ -2056,6 +2043,13 @@ class Dashboard:
         flash = self._flash_for(session, "addons")
         items: list[dict[str, Any]] = []
         audio = self._audio_ids(addons)
+        steps: dict[int, int] = {}  # each audio add-on's step of the plan, counted from 1
+        before: StoredSource | None = None
+        for addon in addons:
+            if addon.id in audio:
+                begins = before is None or addon.step != before.step
+                steps[addon.id] = max(steps.values(), default=0) + (1 if begins else 0)
+                before = addon
         for addon in addons:
             check = self.checks.known(addon)
             mine = form_for == addon.id
@@ -2076,7 +2070,7 @@ class Dashboard:
                     "host": host_of(addon.base_url),
                     # Its place in the order audio is asked for (none: a catalog only).
                     "catalog_only": catalog_only,
-                    "order": 0 if catalog_only else audio.index(addon.id) + 1,
+                    "order": 0 if catalog_only else steps[addon.id],
                     "first": not catalog_only and audio.index(addon.id) == 0,
                     "last": not catalog_only and audio.index(addon.id) == len(audio) - 1,
                     "version": check.manifest.version if check and check.manifest else "",
@@ -2095,7 +2089,6 @@ class Dashboard:
                     "manifest_error": check.error if check is not None else None,
                     # Settings the add-on is not sent (lists or tables from the file).
                     "unsent": sorted(k for k, v in addon.settings.items() if not representable(v)),
-                    "roles": self._roles(addon.name),
                     "form_version": self._addon_version(addon),
                 }
             )
@@ -2152,27 +2145,13 @@ class Dashboard:
             stale=stale,
             handed_back=self.addons_handed_back,
             dash_off=dash_off,
+            plan=self._plan(addons, session),
         )
-
-    def _roles(self, name: str) -> list[str]:
-        running = self.running or self.host.configured
-        roles = []
-        if running.delivery.primary_source == name:
-            roles.append("the primary add-on")
-        if running.delivery.reliable_source == name:
-            roles.append("the preferred fallback")
-        return roles
 
     async def _renamed(self, addon: StoredSource, name: str, naming: list[tuple[str, str]]) -> None:
         """After a rename: the settings that named it, saved with the new name, apply at
-        once - the routing's add-ons, and the running catalog's (its catalog is the add-on's
-        key, which the rename kept, so it is the same catalog: no restart waits)."""
-        assert self.saved is not None
-        applying, _ = effective(
-            self.host.configured, await self.saved.all(), locked=self.host.locked
-        )
-        delivery = [key for section, key in naming if section == "delivery"]
-        await self._running_section("delivery", delivery, applying.delivery)
+        once - the running catalog's (its catalog is the add-on's key, which the rename
+        kept, so it is the same catalog: no restart waits)."""
         services, running = self.services, self.running
         if services is None or running is None or running.catalog.kind != "addon":
             return
@@ -2248,58 +2227,112 @@ class Dashboard:
             )
         return self._see(f"/addons#addon-{addon.id}")
 
-    async def addon_move(self, request: Request, session: Session) -> Response:
-        self._editable_list()
-        assert self.services is not None and self.store is not None
-        addon = await self._addon(int(request.path_params["addon"]))
-        addons = await self._stored()
-        # (Among the add-ons asked for audio: one that is a catalog only has no place.)
-        audio = self._audio_ids(addons)
-        index = audio.index(addon.id) if addon.id in audio else -2
-        step = -1 if request.state.form.get("direction") == "up" else 1
-        if 0 <= index + step < len(audio) and index >= 0:
-            audio[index], audio[index + step] = audio[index + step], audio[index]
-            ids = _placed([item.id for item in addons], audio)
-            await self.services.sources.reorder(ids, also=functools.partial(self._owned, session))
-            log.info(
-                "dashboard: %s moved the add-on %s",
-                printable(session.username),
-                printable(addon.name),
-            )
-        if _wants_json(request):  # addons.js: the page already shows the move
-            return JSONResponse({"saved": True}, headers=HEADERS)
-        return self._see(f"/addons#addon-{addon.id}")
-
-    async def addons_order(self, request: Request, session: Session) -> Response:
-        """The order addons.js saves after an add-on was pulled to another place: a position
-        for every add-on asked for audio (those that are a catalog only keep their places),
-        answered as JSON. Refused (the list changed meanwhile), the page reloads and its
-        notice says so."""
+    async def addons_plan(self, request: Request, session: Session) -> Response:
+        """The plan addon_plan.js saves after a change: its steps (each with its add-ons and
+        its time), whether add-ons are asked which have the song ready, and when one that
+        has takes over; answered as JSON. Every add-on asked for audio is in it once.
+        Refused (the list changed meanwhile, or a value does not fit), the page reloads and
+        its notice says so."""
         self._editable_list()
         assert self.services is not None
-        form: dict[str, str] = request.state.form
-        addons = await self._stored()
-        every = [addon.id for addon in addons]
-        ids = self._audio_ids(addons)
-        sent = {key for key in form if key.startswith("position-")}
-        positions: dict[int, int] = {}
-        for source_id in ids:
-            raw = form.get(f"position-{source_id}", "").strip()
-            if not raw.isdigit():
-                positions = {}
-                break
-            positions[source_id] = int(raw)
-        if not positions or sent != {f"position-{source_id}" for source_id in ids}:
-            refused = "Order not saved: the list changed meanwhile. Here it is as it is now."
+        refused = "Plan not saved: the add-ons changed meanwhile. Here it is as it is now."
+        try:
+            sent = json.loads(request.state.form.get("plan", ""))
+            steps = [
+                ([int(i) for i in step["addons"]], float(step["seconds"])) for step in sent["steps"]
+            ]
+            checks, handover = bool(sent["checks"]), float(sent["handover"])
+        except (ValueError, TypeError, KeyError):
+            steps, checks, handover = [], False, 0.0
+        ids = self._audio_ids(await self._stored())
+        listed = [source_id for addons, _ in steps for source_id in addons]
+        fits = all(addons for addons, _ in steps) and all(
+            ADDON_BUDGET["low"] < seconds <= ADDON_BUDGET["high"] for _, seconds in steps
+        )
+        if sorted(listed) != sorted(ids) or len(set(listed)) != len(listed) or not fits:
             self._remember(session, Flash("addons", words=refused, tone="error"))
             return JSONResponse({"saved": False}, 409, headers=HEADERS)
-        ordered = sorted(ids, key=lambda source_id: (positions[source_id], ids.index(source_id)))
-        if ordered != ids:
-            await self.services.sources.reorder(
-                _placed(every, ordered), also=functools.partial(self._owned, session)
-            )
-            log.info("dashboard: %s changed the add-ons' order", printable(session.username))
+        # The settings first: one that does not fit refuses the plan before its steps are
+        # saved, so nothing of it is.
+        running = self.running or self.host.configured
+        wanted = {"ready_checks": checks, "ready_handover_seconds": handover}
+        env = self.host.locked.get("delivery", {})
+        form = {
+            key: ("true" if value else "false") if isinstance(value, bool) else format_number(value)
+            for key, value in wanted.items()
+            if key not in env and getattr(running.delivery, key) != value
+        }
+        if form:
+            _, written, _ = await self._save(session, "delivery", form, whole=False)
+            if written is None:
+                self._remember(session, Flash("addons", words=refused, tone="error"))
+                return JSONResponse({"saved": False}, 409, headers=HEADERS)
+        try:
+            await self.services.sources.arrange(steps, also=functools.partial(self._owned, session))
+        except ValueError:  # an add-on removed meanwhile
+            self._remember(session, Flash("addons", words=refused, tone="error"))
+            return JSONResponse({"saved": False}, 409, headers=HEADERS)
+        log.info("dashboard: %s changed the add-ons' plan", printable(session.username))
         return JSONResponse({"saved": True}, headers=HEADERS)
+
+    def _plan(self, addons: list[StoredSource], session: Session) -> dict[str, Any] | None:
+        """The plan for addon_plan.js: the add-ons asked for audio in their steps, each with
+        its light and its recent starts."""
+        audio = [addon for addon in addons if not self._catalog_only(addon)]
+        if not audio:
+            return None
+        running = self.running or self.host.configured
+        delivery = running.delivery
+        steps: list[dict[str, Any]] = []
+        for index, addon in enumerate(audio):
+            entry = self._plan_addon(addon)
+            seconds = (
+                addon.step_seconds if addon.step_seconds is not None else delivery.budget_seconds
+            )
+            if index and addon.step == audio[index - 1].step:
+                steps[-1]["addons"].append(entry)
+                steps[-1]["seconds"] = max(steps[-1]["seconds"], seconds)
+            else:
+                steps.append({"seconds": seconds, "addons": [entry]})
+        env = self.host.locked.get("delivery", {})
+        # The add-ons whose manifests declare the ready check (Shijhon's own extension).
+        checking = [
+            addon.name
+            for addon in audio
+            if (c := self.checks.known(addon))
+            and c.manifest
+            and "availability" in c.manifest.resources
+        ]
+        return {
+            "steps": steps,
+            "checking": checking,
+            "count": len(audio),
+            "wait": delivery.max_wait_seconds,
+            "default": delivery.budget_seconds,
+            "checks": delivery.ready_checks,
+            "handover": delivery.ready_handover_seconds,
+            "checks_locked": any(key in env for key in PLAN_SETTINGS),
+            "action": f"{PATH}/addons/plan",
+            "csrf": session.csrf,
+            "readonly": self._env_list() is not None,
+        }
+
+    def _plan_addon(self, addon: StoredSource) -> dict[str, Any]:
+        """One add-on of the plan: its light, and its latest starts - how many sent audio,
+        and the middle of their times."""
+        stats = self.services.sources.stats(addon.id) if self.services is not None else None
+        recent = list(stats.recent)[-RECENT_STARTS:] if stats is not None else []
+        times = [attempt for attempt in recent if attempt.delivered]
+        usual = usual_seconds(stats)
+        return {
+            "id": addon.id,
+            "name": addon.name,
+            "light": self._health(addon)["light"],
+            "off": not addon.enabled,
+            "usual": None if usual is None else round(usual, 1),
+            "played": len(times),
+            "tried": len(recent),
+        }
 
     async def addons_enabled(self, request: Request, session: Session) -> Response:
         """Every add-on on, or every one off."""
@@ -2390,6 +2423,18 @@ class Dashboard:
                     raise Invalid("Enter a number above 0, up to 600.")
             except Invalid as exc:
                 problem("budget_seconds", str(exc), "must be a number above 0, up to 600.")
+        slow_after: float | None = addon.slow_after
+        keep_slow_after = "slow_after" not in form
+        text = form.get("slow_after", "").strip()
+        if not keep_slow_after:
+            slow_after = None
+        if text:
+            try:
+                slow_after = float(parse_number(text, whole=False))
+                if not 1 <= slow_after <= 10:
+                    raise Invalid("Enter a number from 1 to 10.")
+            except Invalid as exc:
+                problem("slow_after", str(exc), "must be a number from 1 to 10.")
         own: dict[str, float | None] = dataclasses.asdict(addon.limits)
         for limit in ADDON_LIMITS:
             if limit.name not in form:
@@ -2576,6 +2621,8 @@ class Dashboard:
                     reach=Reach(reach),
                     budget_seconds=None if keep_budget else budget,
                     clear_budget=not keep_budget and budget is None,
+                    slow_after=None if keep_slow_after else slow_after,
+                    clear_slow_after=not keep_slow_after and slow_after is None,
                     limits=Limits(**own),  # type: ignore[arg-type]  # (whole numbers where they are)
                     downloads=transfers["downloads"],
                     preparations=transfers["preparations"],
@@ -3480,9 +3527,12 @@ class Dashboard:
                 "version": (
                     c.manifest.version if (c := self.checks.known(addon)) and c.manifest else ""
                 ),
+                "starts": self._plan_addon(addon),
             }
             for index, addon in enumerate(addons)
         ]
+        deliverer = services.deliverer if services is not None else None
+        starts = list(reversed(deliverer.recent)) if deliverer is not None else []
         running = self.running or self.host.configured
         return await self._render(
             "diagnostics.html",
@@ -3508,6 +3558,10 @@ class Dashboard:
             storage=self._storage,
             database_private=status.private_mode(self.host.configured.database_path),
             errors=self.errors.recent(),
+            starts=[
+                {**dataclasses.asdict(start), "purpose": PURPOSES.get(start.purpose, start.purpose)}
+                for start in starts
+            ],
         )
 
     async def appearance_page(self, request: Request, session: Session) -> Response:
@@ -3702,6 +3756,25 @@ def _placed(ids: list[int], ordered: list[int]) -> list[int]:
     them; the others stay where they are."""
     chosen, moved = set(ordered), iter(ordered)
     return [next(moved) if source_id in chosen else source_id for source_id in ids]
+
+
+def slow_after_row(prefix: str, general: float, text: str = "", **more: Any) -> dict[str, Any]:
+    """An add-on's own "Slow after": empty, the installation's."""
+    return _setting(
+        id=f"{prefix}-slow-after",
+        name="slow_after",
+        kind="decimal",
+        label="Slow after",
+        spoken="times its usual time",
+        unit="times usual",
+        text=text,
+        help="When another add-on has sent the song while this one is still trying, it counts"
+        " as slow, toward its cooldown, once it is past its step's time and this many times its"
+        " usual time to first audio. Give a higher value to one that is often a little late but"
+        " works. Empty: Playback's setting applies.",
+        default=f"Default {format_number(general)} times usual, from Playback",
+        **more,
+    )
 
 
 def _setting(**values: Any) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""Exercise review, source-refresh and reorder races with the shipped controllers."""
+"""Exercise review and source-refresh races with the shipped controllers."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 
-def test_dashboard_controllers_preserve_edits_and_serialize_moves():
+def test_dashboard_controllers_preserve_edits():
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is needed for the browser controller check.")

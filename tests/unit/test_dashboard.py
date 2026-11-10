@@ -120,9 +120,11 @@ def test_every_setting_of_a_section_has_a_field() -> None:
     assert fields["budget_seconds"].kind == "decimal" and fields["budget_seconds"].unit == "s"
     assert fields["warm_ahead_depth"].kind == "whole"
     assert fields["prepare_when_not_ready"].kind == "switch"
-    assert fields["routing"].kind == "select"
-    assert fields["routing"].options()[0] == ("ordered", "In order")
-    timeouts = fields["primary_cooldown_timeouts"]
+    assert fields["ready_checks"].kind == "switch"
+    assert fields["ready_handover_seconds"].kind == "decimal"
+    assert fields["dash_start"].kind == "select"
+    assert fields["dash_start"].options()[0] == ("at_once", "At once")
+    timeouts = fields["cooldown_timeouts"]
     assert (timeouts.low, timeouts.low_open) == (1.0, False)
     with pytest.raises(Invalid, match=r"^Enter a whole number of at least 1\.$"):
         timeouts.parse("0")
@@ -259,15 +261,16 @@ def test_default_then_file_then_dashboard_then_environment(
 
 
 def test_the_environment_is_read_as_the_settings_read_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("shijhon_delivery__routing", "primary_first")  # any letter case
+    monkeypatch.setenv("shijhon_delivery__dash_start", "complete")  # any letter case
     monkeypatch.setenv("SHIJHON_CATALOG", '{"kind": "sample", "region": "gb"}')  # as JSON
     monkeypatch.setenv("SHIJHON_SERVER__CREDENTIAL_CACHE_SECONDS", "2")  # no dashboard section
-    monkeypatch.setenv("SHIJHON_DELIVERY__RELIABLE_SOURCE", "")  # empty: sets nothing
+    monkeypatch.setenv("SHIJHON_DELIVERY__DASH_QUALITY_TO", "")  # empty: sets nothing
     monkeypatch.setenv("SHIJHON_DELIVERY__COOLDOWN_SECONDS", "5")
     configured, locked = _locked(delivery={"cooldown_seconds": 7})  # an override wins
-    assert configured.delivery.cooldown_seconds == 7 and configured.delivery.reliable_source == ""
+    assert configured.delivery.cooldown_seconds == 7
+    assert configured.delivery.dash_quality_to == "lossless"
     assert locked == {
-        "delivery": {"routing": "shijhon_delivery__routing"},  # the variable as it is named
+        "delivery": {"dash_start": "shijhon_delivery__dash_start"},  # the variable as it is named
         "catalog": {
             "kind": "SHIJHON_CATALOG (JSON)",
             "region": "SHIJHON_CATALOG (JSON)",
@@ -305,20 +308,20 @@ def test_settings_set_by_the_environment_are_shown_and_never_taken_from_a_form(
     import anyio
 
     monkeypatch.setenv("SHIJHON_DELIVERY__COOLDOWN_SECONDS", "50")
-    monkeypatch.setenv("SHIJHON_DELIVERY__ROUTING", "primary_first")
+    monkeypatch.setenv("SHIJHON_DELIVERY__DASH_START", "complete")
     monkeypatch.setenv("SHIJHON_DELIVERY__PREPARE_WHEN_NOT_READY", "true")
     monkeypatch.setenv("SHIJHON_CATALOG__KIND", "sample")
     monkeypatch.setenv("SHIJHON_CATALOG__TOKEN", "from-env")
     configured, locked = _locked()
     saved = _saved(cooldown_seconds=45.0)
     # A failed save re-renders from the form; locked rows keep the environment's values.
-    form = {"cooldown_seconds": "999", "routing": "", "budget_seconds": "abc"}
+    form = {"cooldown_seconds": "999", "dash_start": "", "budget_seconds": "abc"}
     groups = sections.rows("delivery", configured, saved, addon_names=[], form=form, locked=locked)
     cooldown = _row(groups, "cooldown_seconds")
     assert (cooldown["kind"], cooldown["text"], cooldown["hidden"]) == ("locked", "50 s", True)
     assert cooldown["locked"] == "SHIJHON_DELIVERY__COOLDOWN_SECONDS"
     assert not cooldown["restart"] and not cooldown["default"]
-    assert _row(groups, "routing")["text"] == "Primary first"
+    assert _row(groups, "dash_start")["text"] == "When joined"
     assert _row(groups, "prepare_when_not_ready")["text"] == "On"
     token = _row(sections.rows("catalog", configured, {}, addon_names=[], locked=locked), "token")
     assert token["text"] == "Set" and "from-env" not in str(token)
@@ -472,7 +475,7 @@ async def test_startup_uses_the_saved_values(
     monkeypatch.setenv("SHIJHON_DELIVERY__SEEK_TIMEOUT_SECONDS", "50")
     settings = _settings(
         tmp_path,
-        delivery={"budget_seconds": 7, "primary_budget_seconds": 3},
+        delivery={"budget_seconds": 7, "ready_handover_seconds": 3},
         catalog={"kind": "sample", "token": "from-the-file"},
     )
     store = await Store.open(settings.database_path)
@@ -491,7 +494,7 @@ async def test_startup_uses_the_saved_values(
         assert app.services is not None
         deliverer = app.services.deliverer.settings
         assert (deliverer.budget_seconds, deliverer.cooldown_seconds) == (8, 45)
-        assert deliverer.primary_budget_seconds == 3  # the configuration's
+        assert deliverer.ready_handover_seconds == 3  # the configuration's
         assert deliverer.seek_timeout_seconds == 50  # the environment's, over the saved 5
         assert app.settings.catalog.token is not None
         assert app.settings.catalog.token.get_secret_value() == "tok-1"
@@ -536,23 +539,13 @@ async def test_the_files_list_takes_a_renamed_addons_name_back_with_its_settings
     tmp_path: Path,
 ) -> None:
     """The file names Alpha, which the dashboard renamed Beta - and with it the catalog's
-    add-on, the primary add-on and the preferred fallback. Handed back to the file, the
-    next start gives the add-on its name back, and the settings that named it with it."""
+    add-on. Handed back to the file, the next start gives the add-on its name back, and the
+    setting that named it with it."""
     addons = [{"name": "Alpha", "base_url": "https://alpha.example.invalid/cfg"}]
-    roles = {"primary_source": "Alpha", "reliable_source": "Alpha"}
-    settings = _settings(
-        tmp_path,
-        addons=addons,
-        delivery=roles,
-        catalog={"kind": "addon", "addon": "Alpha"},
-    )
+    settings = _settings(tmp_path, addons=addons, catalog={"kind": "addon", "addon": "Alpha"})
 
-    def named(app: ShijhonApp) -> tuple[str, str, str]:
-        return (
-            str(getattr(app.settings.catalog, "addon", "")),
-            app.settings.delivery.primary_source,
-            app.settings.delivery.reliable_source,
-        )
+    def named(app: ShijhonApp) -> str:
+        return str(getattr(app.settings.catalog, "addon", ""))
 
     app = ShijhonApp(settings)
     await app.startup()
@@ -569,9 +562,9 @@ async def test_the_files_list_takes_a_renamed_addons_name_back_with_its_settings
     await saved.take_addons("tester")
     await app.shutdown()
 
-    app = ShijhonApp(settings)  # the dashboard's list: Beta, named by the three settings
+    app = ShijhonApp(settings)  # the dashboard's list: Beta, named by the catalog
     await app.startup()
-    assert named(app) == ("Beta", "Beta", "Beta")
+    assert named(app) == "Beta"
     assert app.dashboard.saved is not None
     await app.dashboard.saved.hand_back_addons("tester")
     await app.shutdown()
@@ -582,14 +575,11 @@ async def test_the_files_list_takes_a_renamed_addons_name_back_with_its_settings
         assert app.services is not None and app.dashboard.saved is not None
         (stored,) = await app.services.sources.stored()
         assert (stored.id, stored.name, stored.key) == (alpha.id, "Alpha", alpha.key)
-        assert named(app) == ("Alpha", "Alpha", "Alpha")
-        playing = app.services.deliverer.settings
-        assert (playing.primary_source, playing.reliable_source) == ("Alpha", "Alpha")
-        assert playing.catalog_addon == "Alpha"
+        assert named(app) == "Alpha"
+        assert app.services.deliverer.settings.catalog_addon == "Alpha"
         # (The file's names: nothing of them stays saved.)
         left = await app.dashboard.saved.all()
         assert "addon" not in left.get("catalog", {})
-        assert not {"primary_source", "reliable_source"} & set(left.get("delivery", {}))
     finally:
         await app.shutdown()
 
@@ -833,8 +823,6 @@ def _changed(value: Any, key: str) -> Any:
     """Another valid value for a setting."""
     if isinstance(value, bool):
         return not value
-    if key == "routing":
-        return "primary_first"
     if isinstance(value, str):
         return "Elsewhere"
     if isinstance(value, int):

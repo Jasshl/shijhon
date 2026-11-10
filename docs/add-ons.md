@@ -42,7 +42,7 @@ name = "My add-on"
 base_url = "https://addon.example.invalid/your-configuration"
 reach = "public"
 settings = {}           # the add-on's own settings, if it has any: single values
-# budget_seconds = 45   # its own time to first audio (and, for playlist imports, to a catalog answer), e.g. for a slow one
+# budget_seconds = 45   # its time for a download (and, for playlist imports, for a catalog answer), e.g. for a slow one
 # downloads = 2         # whole-song transfers at once; omitted: inherit
 # preparations = 1      # new preparations at once; omitted: inherit
 # capacity_group = "shared-worker" # same label for add-ons sharing an account or worker
@@ -60,21 +60,66 @@ settings = {}           # the add-on's own settings, if it has any: single value
 | `"loopback"` | Also Shijhon's own machine. In a container that is the container itself |
 | `"private"` | Also Shijhon's own machine and your network. In a container, an add-on on the Docker host or in another container needs this |
 
-## Routing
+## The plan
 
-`[delivery] routing` picks the add-on for a song:
+The add-ons are asked for a song in steps, shown as a timeline on the dashboard's Add-ons
+page. Add-ons in the same step start together when someone plays a song, and the first to
+send audio plays. Each step has a time: when it has passed without audio, the next step's
+add-ons join, and the add-ons already asked keep trying. When every add-on in the step has
+failed or lacks the song, the next step joins at once. Whichever add-on's audio comes first plays,
+and the others are stopped. Apps stop waiting at `[delivery] max_wait_seconds`, so steps
+that would begin after that are never reached; the page lists their add-ons under the
+timeline. The last step has no time of its own: its add-ons try until apps stop waiting.
 
-- `"ordered"`, the default: the add-ons are tried in your order.
-- `"primary_first"`: `primary_source` starts at once, while the add-ons that can say
-  whether they have a song ready are asked. The others are ordered by how fast they
-  delivered recently (`reliable_source` first, until that is known).
-- `"ready_first"`: the first add-on that says it has the song ready, else
-  `reliable_source`.
+Pull an add-on's bar sideways into another step's column to start with it, or onto the line
+between two columns to make a step of its own, and pull a step's edge to change its time.
+After its step, each bar fades on to the apps' limit, where it keeps trying. An add-on in
+the list under the timeline is pulled up into a column, or up and down in that list. The
+presets arrange them for you: Fastest (all in one step), Fastest three (the three quickest
+right now, then the rest one at a time), Main with backups (the first alone, then the rest
+together), One at a time, and Ready first. The page shows each add-on's recent speed, and
+Diagnostics lists the latest starts with every add-on asked, when each later step joined,
+what each answered and how long it took.
 
-`primary_source` and `reliable_source` take an add-on's `name`, exactly as you gave it.
-Renaming the add-on on the dashboard changes them too. The Playback page offers only
-add-ons that supply audio; one that names a catalog-only add-on is shown as such until
-you choose another.
+An add-on still trying when another's audio comes counts a timeout toward its cooldown
+only when it was slow for itself: past its step's time and past `[delivery] slow_after`
+times (2) its usual time to first audio. An add-on that has no usual time yet counts once
+it is past its step's time. The last step has no time of its own: there the default step
+time (`[delivery] budget_seconds`) counts as its time, from when it joined. Waits at the
+add-on's own request limits are not its slowness. Give one that is often a little late but
+works a higher **Slow after** of its own in its settings. When apps stop waiting with no
+audio at all, every add-on still trying counts a timeout.
+
+Requests that nobody waits on never race. An app's fetch ahead goes to the plan's first
+add-on alone, and warm-ahead and downloads ask one add-on at a time in the plan's order, so
+several add-ons are not asked for the same song. Each add-on then has its **Time for a
+download** (`budget_seconds`, else `[delivery] budget_seconds`), not its step's time. An
+app's probe of a song just before it plays races like the play.
+
+With **Ask which add-ons have the song ready** on, the add-ons that can tell are asked when
+a song starts. One that says it has the song ready joins once a song has had no audio for
+the time you set (0: it goes first), and one that says it doesn't goes last.
+
+In the file, an add-on's `step_seconds` is its step's time, `with_previous = true` puts it
+in the step of the add-on before it, `budget_seconds` is its time for a download and
+`slow_after` its own "slow after":
+
+```toml
+[[addons]]
+name = "First add-on"
+base_url = "https://first.example/manifest.json"
+step_seconds = 5
+
+[[addons]]
+name = "Second add-on"
+base_url = "https://second.example/manifest.json"
+with_previous = true       # starts together with the first
+```
+
+An add-on that times out `cooldown_timeouts` times in a row (2), slow or still trying when
+apps stop waiting, is passed over for
+`cooldown_seconds`, and one that said it doesn't have a song is not asked for it again
+for `miss_hours` (24).
 
 ## Limits
 
@@ -169,10 +214,11 @@ add-ons. Plays, and preparing the next songs in the queue, still use it.
   an hour at most, or 30 seconds when it names none. Songs already playing keep playing,
   and other add-ons at its address are asked as before.
 - **"Not ready yet"** (HTTP 503 with `Retry-After`, while it prepares the song): Shijhon
-  asks for the song's link again after that time, within the add-on's time for the song.
-  This is not an error. When the song is not ready in time, the next add-on is asked, and
-  a retry of the song asks this add-on again. Give an add-on that prepares whole files a
-  `budget_seconds` that covers a usual preparation.
+  asks for the song's link again after that time, within the add-on's time for the song:
+  in a play until apps stop waiting, for a download its time for a download. This is not
+  an error. When the song is not ready in time, a retry of the song asks this add-on again.
+  Give an add-on that prepares whole files a time for a download that covers a usual
+  preparation, and a step whose time lets it be asked first.
 - **Three errors in a row** (HTTP 5xx, no connection, a broken answer), no more than ten
   minutes apart: it is passed over for 30 seconds, and again after each further error
   until it delivers audio.

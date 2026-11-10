@@ -137,21 +137,6 @@
   </div>
 </section>
 {% endif %}
-{% if page == "playback" and extra.missing %}
-<div class="notice notice-warn" role="status">
-{% for line, variable, catalog_only in extra.missing %}
-{% if variable and catalog_only %}
-  <p>{{ line }} <code>{{ variable }}</code> sets it: change it there.</p>
-{% elif variable %}
-  <p>{{ line }} <code>{{ variable }}</code> sets it: change it there, or add the add-on on <a href="{{ prefix }}/addons">Add-ons</a>.</p>
-{% elif catalog_only %}
-  <p>{{ line }} Choose an add-on that supplies audio below.</p>
-{% else %}
-  <p>{{ line }} Choose another below, or add it on <a href="{{ prefix }}/addons">Add-ons</a>.</p>
-{% endif %}
-{% endfor %}
-</div>
-{% endif %}
 {% if page == "catalog" and extra.wait %}
 {# The wait for the catalog is a form of its own; its row is under "Advanced settings". #}
 <form id="catalog-wait" method="post" action="{{ prefix }}/catalog/wait" novalidate>

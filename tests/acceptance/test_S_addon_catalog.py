@@ -362,42 +362,6 @@ def test_a_catalog_song_plays_from_its_own_add_on_by_its_id_and_from_another(
     assert [r["key"] for r in main.requests("stream")] == ["lib:t101", "moved-101"]
 
 
-def test_the_lookup_meanwhile_knows_the_add_on_s_own_id(
-    world: DeliveryWorld, tmp_path_factory: pytest.TempPathFactory, held: FakeCatalog
-) -> None:
-    """Primary first: while the primary's lookup keeps waiting, the likely fallback is
-    looked up - the catalog's add-on needs no lookup for a song of its catalog."""
-    with delivery_world(
-        world.nd,
-        tmp_path_factory.mktemp("primary-first"),
-        catalog_settings={"kind": "addon", "addon": NAME},
-        warm_ahead_depth=0,
-        routing="primary_first",
-        primary_source="Slow",
-        reliable_lookup_after_seconds=0.2,
-    ) as second:
-        prepare_collection(world.nd, second.server)
-        slow = second.addon("Slow")
-        fake = second.addon(NAME, catalog=held)
-        second.add_source(slow)
-        second.add_source(fake)
-        audio = second.audio("meanwhile")
-        slow.add(FakeTrack(isrc="ZZSHA0000301", audio=audio, available=False, lookup_delay=0.8))
-        fake.add(FakeTrack(isrc="ZZSHA0000301", audio=audio, track_id="lib:t301"))
-        client = second.client(headers=HOST)
-        try:
-            client.ok("search3", {"query": "north window"})
-            fake.clear()
-            with collected("shijhon") as lines:
-                played = client.request("stream", {"id": ident("tr", "t301")})
-            assert played.status_code == 200 and played.content == audio.read_bytes()
-            assert [r["key"] for r in fake.requests("stream")] == ["lib:t301"]
-            assert fake.requests("resolve-isrc") == []  # its ID was known without asking
-            assert any("its catalog's track, no lookup" in line for line in lines)
-        finally:
-            client.close()
-
-
 def test_a_song_in_the_library_still_plays_by_the_add_on_s_own_id(
     world: DeliveryWorld, client: SubsonicClient, main: FakeAddon
 ) -> None:

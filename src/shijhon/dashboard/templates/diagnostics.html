@@ -170,9 +170,7 @@
       <span class="led{% if item.health.light %} led-{{ item.health.light }}{% endif %}" aria-hidden="true"></span>
       <div class="source-name">
         <h3>{{ item.addon.name }}</h3>
-{% if item.version %}
-        <p class="source-meta"><span>Version <code>{{ item.version }}</code></span></p>
-{% endif %}
+        <p class="source-meta">{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.starts.tried %}<span>Played {{ item.starts.played }} of its last {{ item.starts.tried }} starts{% if item.starts.usual is not none %}, usually after {{ item.starts.usual|number }} s{% endif %}</span>{% endif %}</p>
       </div>
       <div class="source-health">
         <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}</p>
@@ -187,6 +185,46 @@
   <div class="empty">
     <p class="empty-title">No add-ons yet</p>
     <p>Add-ons supply the audio for catalog songs you don't own. <a href="{{ prefix }}/addons">Add one on Add-ons</a>.</p>
+  </div>
+{% endif %}
+</section>
+
+<section class="group" aria-labelledby="starts-title">
+  <div class="group-head">
+    <h2 id="starts-title">Recent starts</h2>
+    <p class="group-meta">Since Shijhon started, newest first</p>
+    <p class="group-help">How each song's audio was found: the add-ons asked, when each later step joined, what each answered and how long it took. Use it to arrange the plan on <a href="{{ prefix }}/addons#plan">Add-ons</a>.</p>
+  </div>
+{% if starts %}
+  <ol class="starts">
+{% for start in starts %}
+    <li class="start{% if not start.served %} start-failed{% endif %}">
+      <details>
+        <summary>
+          <span class="start-time">{{ start.at|hm }}</span>
+          <span class="start-song"><span class="start-title">{{ start.title }}</span> <span class="muted">{{ start.artist }}</span></span>
+          <span class="start-purpose muted">{{ start.purpose }}</span>
+          <span class="start-result">{% if start.served %}{{ start.served }} after {{ start.seconds|number }} s{% else %}<span class="status-error">No audio after {{ start.seconds|number }} s</span>{% endif %}</span>
+        </summary>
+{% if start.steps or start.ended %}
+        <ol class="start-steps">
+{% for step in start.steps %}
+          <li>{{ step }}</li>
+{% endfor %}
+{% if start.ended %}
+          <li class="status-error">{{ start.ended }}</li>
+{% endif %}
+        </ol>
+{% else %}
+        <p class="start-steps muted">The first add-on asked sent audio.</p>
+{% endif %}
+      </details>
+    </li>
+{% endfor %}
+  </ol>
+{% else %}
+  <div class="rows">
+    <div class="row"><p class="muted">No song has started since Shijhon started. Each start appears here with the add-ons asked and their times.</p></div>
   </div>
 {% endif %}
 </section>

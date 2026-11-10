@@ -52,7 +52,13 @@ def a_and_b(world: DeliveryWorld) -> Iterator[tuple[FakeAddon, FakeAddon]]:
     yield a, b
     world.clear_sources()
     settings = world.services.deliverer.settings
-    settings.routing, settings.primary_source = "ordered", ""
+    settings.ready_checks, settings.ready_handover_seconds = False, 4.5
+
+
+def b_first(world: DeliveryWorld) -> None:
+    """The plan: B, then A (each a step of its own)."""
+    order = [source_id(world, "B"), source_id(world, "A")]
+    world.server.call(lambda: world.services.sources.reorder(order))
 
 
 def stream(world: DeliveryWorld, song: str) -> httpx.Response:
@@ -164,15 +170,16 @@ def test_a_rate_limit_on_its_api_leaves_the_songs_playing_from_it_alone(
 def test_a_rate_limit_on_an_availability_check_names_its_time_too(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
 ) -> None:
-    """Primary-first routing asks the other add-ons whether they have the song ready: a
-    429 there leaves that add-on alone (before: ignored, and asked again with every play)."""
+    """With ready checks, the add-ons of the later steps are asked whether they have the
+    song ready: a 429 there leaves that add-on alone (before: ignored, and asked again with
+    every play)."""
     a, b = a_and_b
-    settings = world.services.deliverer.settings
-    settings.routing, settings.primary_source = "primary_first", "B"
+    b_first(world)
+    world.services.deliverer.settings.ready_checks = True
     song, _, audio = world.placeholder_track("m-check", [a, b], ready=True)
     a.rate_limit_availability = 1
     a.retry_after = "6"
-    assert stream(world, song).content == audio.read_bytes()  # the primary plays it
+    assert stream(world, song).content == audio.read_bytes()  # the first step plays it
     assert [r["endpoint"] for r in a.requests()] == ["manifest", "availability"]
     assert 4.0 <= left_alone_for(world, a) <= 6.5
     assert left_alone_for(world, b) == 0.0
@@ -185,13 +192,13 @@ def test_a_rate_limit_on_an_availability_check_names_its_time_too(
 def test_an_add_on_not_asked_is_asked_again_once_its_time_has_passed(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
 ) -> None:
-    """Not asked is no failure: a song whose only add-on was left alone when it was
-    wanted plays at the client's retry once the time has passed - the add-on is not
-    skipped as one that failed for the song, and nothing of it is measured."""
+    """Not asked is no failure: a song whose only add-on with it was left alone when it
+    was wanted (its check, awaited before the plan, answered 429) plays at the client's
+    retry once the time has passed - the add-on is not skipped as one that failed for the
+    song, and no attempt of its own is recorded."""
     a, _ = a_and_b
-    world.server.call(lambda: world.services.sources.set_enabled(source_id(world, "B"), False))
     settings = world.services.deliverer.settings
-    settings.routing = "ready_first"
+    settings.ready_checks, settings.ready_handover_seconds = True, 0.0
     song, _, audio = world.placeholder_track("m-not-asked", [a], ready=True)
     a.rate_limit_availability = 1
     a.retry_after = "1"
@@ -212,12 +219,12 @@ def source_id(world: DeliveryWorld, name: str) -> int:
 def test_a_preparation_request_s_rate_limit_is_honored_too(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
 ) -> None:
-    """Ready-first routing may ask an add-on that said "not now" to prepare the song, in
-    the background: its 429 leaves the add-on alone like any other answer's (before: the
+    """With ready checks, an add-on that said "not now" may be asked to prepare the song,
+    in the background: its 429 leaves the add-on alone like any other answer's (before: the
     answer was dropped, and the next request went out at once)."""
     a, b = a_and_b
     settings = world.services.deliverer.settings
-    settings.routing, settings.reliable_source = "ready_first", "B"
+    settings.ready_checks, settings.ready_handover_seconds = True, 0.0
     settings.prepare_when_not_ready = True
     try:
         a.rate_limit_prepare, a.retry_after = True, "30"
@@ -236,7 +243,7 @@ def test_a_preparation_request_s_rate_limit_is_honored_too(
         assert stream(world, again).content == audio2.read_bytes()
         assert a.requests() == []  # no check, no preparation request meanwhile
     finally:
-        settings.reliable_source, settings.prepare_when_not_ready = "", False
+        settings.prepare_when_not_ready = False
 
 
 def test_a_routing_under_way_sends_nothing_more_once_the_add_on_says_to_wait(
@@ -280,8 +287,8 @@ def test_every_request_names_shijhon_its_version_and_its_repository(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
 ) -> None:
     a, b = a_and_b
-    settings = world.services.deliverer.settings
-    settings.routing, settings.primary_source = "primary_first", "B"
+    b_first(world)
+    world.services.deliverer.settings.ready_checks = True  # A is asked for its check
     song, _, audio = world.placeholder_track("m-agent", [a, b], ready=False)
     assert stream(world, song).content == audio.read_bytes()
     seen = {r["endpoint"]: r["user_agent"] for r in a.requests() + b.requests()}

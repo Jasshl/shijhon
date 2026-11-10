@@ -57,12 +57,20 @@ def test_placeholder_folder_must_stay_inside_library(folder: str) -> None:
 
 def test_delivery_wait_settings() -> None:
     delivery = load_settings(None).delivery
-    assert delivery.max_wait_seconds == 30.0 and delivery.primary_cooldown_switches == 3
-    assert delivery.primary_cooldown_timeouts == 2
+    assert delivery.max_wait_seconds == 30.0 and delivery.cooldown_timeouts == 2
+    assert (delivery.ready_checks, delivery.ready_handover_seconds) == (False, 4.5)
     with pytest.raises(ValueError, match="max_wait_seconds"):
         load_settings(None, delivery={"budget_seconds": 9.0, "max_wait_seconds": 5.0})
-    with pytest.raises(ValueError):
-        load_settings(None, delivery={"primary_cooldown_switches": 0})
+    for refused in (
+        {"cooldown_timeouts": 0},
+        {"ready_handover_seconds": -1},
+        {"ready_handover_seconds": 601},
+    ):
+        with pytest.raises(ValueError):
+            load_settings(None, delivery=refused)
+    # An add-on starts together with the one before it only when asked.
+    (addon,) = load_settings(None, addons=[{"name": "A", "base_url": "https://a.example"}]).addons
+    assert addon.with_previous is False
 
 
 def test_a_wait_cap_below_the_budget_is_refused_at_startup(
@@ -78,7 +86,7 @@ def test_a_wait_cap_below_the_budget_is_refused_at_startup(
     assert stopped.value.code == 2
     err = capsys.readouterr().err
     assert err.startswith("shijhon: configuration error in delivery: delivery.max_wait_seconds")
-    assert "(5 s) is below the byte-zero budget delivery.budget_seconds (9 s)" in err
+    assert "(5 s) is below a step's time delivery.budget_seconds (9 s)" in err
     assert "hunter2" not in err and "Traceback" not in err
 
 

@@ -251,29 +251,35 @@ class DeliverySettings(BaseModel):
 
     model_config = ConfigDict(allow_inf_nan=False)
 
-    # Time to first audio at byte zero, including one fallback source. With
-    # primary_first routing the primary may use all of it; the fallbacks then get their own.
+    # A new step's time in the add-ons' plan (when the next step's add-ons join a play's
+    # start), and an add-on's time for a download, for one without its own
+    # (``[[addons]] step_seconds``, ``budget_seconds``; the Add-ons page).
     budget_seconds: float = Field(default=9.0, gt=0, le=600)
-    max_attempts: int = Field(default=2, ge=1, le=10)
     pin_ttl_seconds: float = Field(default=1800.0, gt=0)
     cooldown_seconds: float = Field(default=30.0, ge=0)
     seek_timeout_seconds: float = Field(default=15.0, gt=0)
+    # One request to an add-on, outside a play (an add-on's own longer time for a download
+    # counts too); in a play an app waits on, its requests for the song may take until the
+    # app stops waiting.
     request_timeout_seconds: float = Field(default=10.0, gt=0)
     download_timeout_seconds: float = Field(default=180.0, gt=0)
-    # "ordered" tries sources in order. "ready_first" uses the first source that says
-    # it can deliver now, else reliable_source. "primary_first" starts primary_source
-    # at once while the others are asked whether they can deliver now: after
-    # primary_budget_seconds without a first byte, a source that can takes over; otherwise
-    # the primary gets up to budget_seconds (or its own budget), then the fallbacks, ordered by
-    # their recent attempts (reliable_source first until they are measured).
-    routing: Literal["ordered", "ready_first", "primary_first"] = "ordered"
-    reliable_source: str = ""
-    primary_source: str = ""
-    primary_budget_seconds: float = Field(default=4.5, gt=0)
-    # The primary cools down (cooldown_seconds) after this many timeouts, or this many
-    # switches away from it to a source that can deliver now, without a delivery in between.
-    primary_cooldown_timeouts: int = Field(default=2, ge=1)
-    primary_cooldown_switches: int = Field(default=3, ge=1)
+    # The add-ons' plan (their order on the Add-ons page, ``[[addons]] with_previous``)
+    # starts the add-ons of a step together for a song someone waits for; the first to
+    # deliver audio plays and the others are stopped. ``ready_checks``: ask the add-ons
+    # that can tell whether they have the song ready - one that does takes over after
+    # ``ready_handover_seconds`` without audio (0: it goes first), one that does not goes
+    # last.
+    ready_checks: bool = False
+    ready_handover_seconds: float = Field(default=4.5, ge=0, le=600)
+    # An add-on cools down (cooldown_seconds) after this many timeouts without a delivery
+    # in between, and again after each further one until it delivers.
+    cooldown_timeouts: int = Field(default=2, ge=1)
+    # An add-on still trying when another has sent the song counts a timeout (toward its
+    # cooldown) once it is past its step's time and this many times its usual time to first
+    # audio; one with no usual time, past its step's time (the last step, which has no time
+    # of its own, counts budget_seconds as its time). Its own (``[[addons]] slow_after``)
+    # comes first.
+    slow_after: float = Field(default=2.0, ge=1, le=10)
     # Any add-on cools down (cooldown_seconds) after this many errors in a row (an HTTP 5xx,
     # no connection, a broken answer; not a miss, a refusal or a slow answer) without a
     # delivery in between, and again after each further one until it delivers. 0: off.
@@ -282,16 +288,8 @@ class DeliverySettings(BaseModel):
     # budgets: below typical client request timeouts.
     max_wait_seconds: float = Field(default=30.0, gt=0)
     availability_timeout_seconds: float = Field(default=2.0, gt=0)
-    # Under primary_first, the reliable source is looked up (never streamed) when the
-    # primary's lookup has not answered after this long, and at once when the primary is
-    # skipped after a remembered miss. 0: with every primary attempt; the byte-zero
-    # budget or more: never while the primary is asked.
-    reliable_lookup_after_seconds: float = Field(default=0.5, ge=0)
-    # A recording the primary did not have is not asked for there again for this long; for a
-    # release it lacked a song of, the likely fallback is looked up at once for this long,
-    # while the primary still starts first (0: off).
-    primary_miss_hours: float = Field(default=24.0, ge=0)
-    primary_release_miss_minutes: float = Field(default=60.0, ge=0)
+    # A recording an add-on did not have is not asked of it again for this long (0: off).
+    miss_hours: float = Field(default=24.0, ge=0)
     # Delivered audio whose length (read from its first bytes: FLAC, MP3, MP4 with its index
     # first) differs from the catalog's by more than the larger of these is another
     # recording: not used, the next source is tried, and that add-on is not asked for the
@@ -302,7 +300,9 @@ class DeliverySettings(BaseModel):
     # add-ons that failed for it or lacked it within this long, and goes to the others;
     # after it every add-on is tried again. 0: every retry tries them all.
     retry_skip_seconds: float = Field(default=60.0, ge=0)
-    prepare_when_not_ready: bool = False  # ask one source that said "not now" to prepare
+    # With ready_checks: when no add-on has a song ready, ask one that said "not now" to
+    # prepare it for the next play.
+    prepare_when_not_ready: bool = False
     # A song whose whole audio Shijhon received while streaming it to an app replaces its
     # silent placeholder, as a download does (nothing more is asked of the add-ons for it).
     keep_streamed_audio: bool = False
@@ -407,9 +407,9 @@ class DeliverySettings(BaseModel):
             )
         if self.max_wait_seconds < self.budget_seconds:
             raise ValueError(
-                f"delivery.max_wait_seconds ({self.max_wait_seconds:g} s) is below the"
-                f" byte-zero budget delivery.budget_seconds ({self.budget_seconds:g} s):"
-                " a client would give up before one source had its chance; raise"
+                f"delivery.max_wait_seconds ({self.max_wait_seconds:g} s) is below a"
+                f" step's time delivery.budget_seconds ({self.budget_seconds:g} s):"
+                " a client would give up before an add-on had its chance; raise"
                 " max_wait_seconds or lower budget_seconds"
             )
         return self
@@ -612,8 +612,17 @@ class AddonSettings(BaseModel):
     reach: Literal["public", "loopback", "private"] = "public"
     # The add-on's declared settings (may be secret too).
     settings: dict[str, Any] = Field(default_factory=dict, repr=False)
-    # Own time to first audio, e.g. for a worker that prepares complete files.
+    # Its time for a download: how long it has when nobody waits (downloads, songs prepared
+    # ahead, apps' fetches ahead), asked alone - e.g. a worker that prepares complete files;
+    # not given: [delivery] budget_seconds.
     budget_seconds: float | None = Field(default=None, gt=0, le=600)
+    # It starts together with the add-on before it in the list (one step of the plan).
+    with_previous: bool = False
+    # Its step's time in a play: when the next step's add-ons join (the add-ons of a step
+    # have one); not given: [delivery] budget_seconds.
+    step_seconds: float | None = Field(default=None, gt=0, le=600)
+    # Its own [delivery] slow_after (times its usual time to first audio).
+    slow_after: float | None = Field(default=None, ge=1, le=10)
     # Own limits on what Shijhon sends it (not given: [delivery] addon_requests_per_second,
     # addon_request_burst, addon_audio_openings): API requests a second (0: no limit), how
     # many at once after a quiet moment, audio requests being opened at once (0: no limit).

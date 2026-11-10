@@ -304,15 +304,34 @@ def test_fallback_within_budget(world: DeliveryWorld, a_and_b: tuple[FakeAddon, 
     assert b.requests("audio")
 
 
-def test_everything_slow_fails_within_budget(
+def test_slow_add_ons_keep_trying_and_the_first_audio_plays(
+    world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
+) -> None:
+    """Both slower than their steps: A keeps trying when B's step joins it at 2.5 s, and A's
+    audio, which comes first, plays."""
+    a, b = a_and_b
+    song, _, audio = world.placeholder_track("k-slow", [a, b], resolve_delay=4.0)
+    started = time.monotonic()
+    response = stream(world, song)
+    assert response.content == audio.read_bytes()
+    assert 4.0 <= time.monotonic() - started < 5.5  # A's 4 s, not B's 2.5 + 4 s
+    assert b.requests("stream")
+
+
+def test_everything_slow_fails_at_the_wait(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
 ) -> None:
     a, b = a_and_b
-    song, _, _ = world.placeholder_track("k-slow", [a, b], resolve_delay=5.0)
-    started = time.monotonic()
-    response = stream(world, song)
+    song, _, _ = world.placeholder_track("k-slow-wait", [a, b], resolve_delay=4.0)
+    settings = world.services.deliverer.settings
+    saved, settings.max_wait_seconds = settings.max_wait_seconds, 3.0
+    try:
+        started = time.monotonic()
+        response = stream(world, song)
+    finally:
+        settings.max_wait_seconds = saved
     assert failed(response)
-    assert time.monotonic() - started < 4.0  # both would need 5 s
+    assert time.monotonic() - started < 3.0 + 1.0  # apps' wait; both would need 4 s
 
 
 def test_slow_first_byte_counts_against_the_budget(
@@ -556,6 +575,11 @@ async def _forget(world: DeliveryWorld, song: str) -> None:
     world.services.deliverer.forget(song)
 
 
+async def _forget_misses(world: DeliveryWorld) -> None:
+    """As if the add-ons' misses were long ago (``miss_hours``)."""
+    world.services.deliverer._misses.clear()
+
+
 def test_a_late_failure_of_a_link_keeps_the_newer_link_found_meanwhile(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -666,7 +690,6 @@ def test_a_seek_never_takes_a_new_play_s_unanswered_link_to_another_file(
 
     monkeypatch.setattr(deliverer, "_request", request)
     # (The fake add-on ends a link when it hands out the next: the new play gets another.)
-    monkeypatch.setattr(deliverer.settings, "max_attempts", 4)
     with ThreadPoolExecutor(2) as pool:
         play = pool.submit(stream, world, song)  # a new play at byte zero: a new link
         deadline = time.monotonic() + 10
@@ -714,21 +737,18 @@ def test_broken_download_is_not_a_server_error(
     assert row is not None and row["state"] == "placeholder"
 
 
-def test_an_addon_with_its_own_budget_may_take_longer(world: DeliveryWorld) -> None:
-    """For example a worker that prepares complete files on the first request."""
+def test_an_addon_slower_than_its_step_still_plays(world: DeliveryWorld) -> None:
+    """For example a worker that prepares complete files on the first request: in a play
+    it keeps trying past its step's time (2.5 s) until apps stop waiting."""
     world.clear_sources()
     quick, slow = world.addon("Quick"), world.addon("Preparing")
     world.add_source(quick)
-    world.add_source(slow, budget_seconds=6.0)
+    world.add_source(slow)
     song, fakes, audio = world.placeholder_track("k-own-budget", [slow])
-    fakes[slow].resolve_delay = 4.0  # longer than the global 2.5 s budget
+    fakes[slow].resolve_delay = 4.0  # longer than its step's 2.5 s
     started = time.monotonic()
     assert stream(world, song).content == audio.read_bytes()
     assert 4.0 <= time.monotonic() - started < 6.5
-    # Without its own budget the same source would be cut off.
-    other, fakes2, _ = world.placeholder_track("k-no-own-budget", [quick])
-    fakes2[quick].resolve_delay = 4.0
-    assert failed(stream(world, other))
     world.clear_sources()
 
 
@@ -961,6 +981,7 @@ def test_a_continuing_play_takes_another_source_only_with_the_same_file(
     fakes[a].available = False
     assert stream(world, song).content == data  # played from B
     world.server.call(lambda: _forget(world, song))  # the pin expired while paused
+    world.server.call(lambda: _forget_misses(world))  # ... and A's miss long ago
     del b.by_key[fakes[b].key()]  # B no longer has the track
     fakes[b].available = False
     fakes[a].available = True
@@ -983,6 +1004,7 @@ def test_the_play_s_source_with_another_file_now_gives_way_to_one_with_the_same(
     fakes[a].available = False
     assert stream(world, song).content == data  # played from B
     world.server.call(lambda: _forget(world, song))
+    world.server.call(lambda: _forget_misses(world))  # A's miss: long ago
     fakes[b].audio = world.audio("k-gives-way-other", seconds=5)
     fakes[a].available = True
     a.clear()

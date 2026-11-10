@@ -371,6 +371,16 @@ class Dash:
                 removed += 1
         return removed
 
+    def let_go(self, key: str) -> None:
+        """The request that began the join of ``key`` no longer wants it (another add-on's
+        audio came first): stopped, unless another request waits for it."""
+        job = self._jobs.get(key) or self._planning.get(key)
+        stream = self._served.get(key)
+        if job is None and stream is not None and not stream.file.complete:
+            job = stream.job
+        if job is not None and not job.urgency.waiting:
+            job.scope.cancel()
+
     async def joined(
         self,
         link: Link,
@@ -423,7 +433,7 @@ class Dash:
                 if work is not None:
                     if self.spawn is None:
                         await work()
-                    elif self.spawn(work) is False:
+                    elif self.spawn(_background(work)) is False:
                         del self._jobs[link.key]
                         if job.release:
                             job.release()
@@ -546,7 +556,9 @@ class Dash:
             watching = pacing.watching()
             began = job.waits.joined()
             with job.urgency.wanted(mine):
-                if work is not None and (self.spawn is None or self.spawn(work) is False):
+                if work is not None and (
+                    self.spawn is None or self.spawn(_background(work)) is False
+                ):
                     del self._planning[link.key]
                     if job.release:
                         job.release()
@@ -637,7 +649,10 @@ class Dash:
         )
         job.attach(stream.link.lease)
         stream.file.started()
-        if self.spawn is None or self.spawn(partial(self._filling, stream, job)) is False:
+        if (
+            self.spawn is None
+            or self.spawn(_background(partial(self._filling, stream, job))) is False
+        ):
             if job.release:
                 job.release()
             stream.job = None
@@ -1506,6 +1521,19 @@ class _StreamReader(httpx.AsyncByteStream):
 
 def _held(item: Joined | Stream) -> Joined | Served:
     return item.file if isinstance(item, Stream) else item
+
+
+def _background(
+    work: Callable[[], Coroutine[Any, Any, None]],
+) -> Callable[[], Coroutine[Any, Any, None]]:
+    """Work of a join in the background: its requests have the add-on clients' own
+    timeouts, not the longer time of the play that began it (``pacing.lasting``)."""
+
+    async def run() -> None:
+        with pacing.lasting(None):
+            await work()
+
+    return run
 
 
 async def _probed(

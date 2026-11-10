@@ -241,6 +241,53 @@ class Waits:
 
 _URGENCY: ContextVar[Urgency | None] = ContextVar("shijhon_addon_urgency", default=None)
 _WAITS: ContextVar[Waits | None] = ContextVar("shijhon_addon_waits", default=None)
+# In a play an app waits on, an add-on's requests for the song may take until the app stops
+# waiting: the seconds left until then (``lasting``), instead of the client's timeout.
+_LEFT: ContextVar[Callable[[], float] | None] = ContextVar("shijhon_play_left", default=None)
+
+
+class _Started(httpx.AsyncByteStream):
+    """An answer's body whose first bytes may take a request's longer time: each read after
+    them is bounded by ``seconds`` (a stall: ``httpx.ReadTimeout``, as the client's own)."""
+
+    def __init__(
+        self, stream: httpx.AsyncByteStream, seconds: float, request: httpx.Request
+    ) -> None:
+        self._stream, self._seconds, self._request = stream, seconds, request
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        chunks = self._stream.__aiter__()
+        first = True
+        while True:
+            try:
+                if first:
+                    chunk = await chunks.__anext__()
+                else:
+                    with anyio.fail_after(self._seconds):
+                        chunk = await chunks.__anext__()
+            except StopAsyncIteration:
+                return
+            except TimeoutError:
+                raise httpx.ReadTimeout(
+                    "no data within the read timeout", request=self._request
+                ) from None
+            first = False
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+
+@contextmanager
+def lasting(left: Callable[[], float] | None) -> Iterator[None]:
+    """Within, a request to an add-on may take ``left()`` seconds (the time left of a
+    client's wait) when that is longer than its client's own timeout; None: its client's
+    timeout (a request for something else than the song, such as its manifest)."""
+    token = _LEFT.set(left)
+    try:
+        yield
+    finally:
+        _LEFT.reset(token)
 
 
 def current() -> Urgency | None:
@@ -613,9 +660,22 @@ async def send(
     another origin than the request's own. Returns the answer that is no redirect, its body
     still to be read: the caller closes it."""
     home = origin(str(request.url))
+    left = _LEFT.get()
     for _ in range(max_redirects + 1):
         await turn(request.url)
+        own = http.timeout.read
+        lengthened = False
+        if left is not None:  # (only ever longer than the client's own)
+            seconds = left()
+            if seconds > (own or 0.0):
+                # (Its answer only: a host that takes no connection still fails as soon.)
+                request.extensions["timeout"] = {**http.timeout.as_dict(), "read": seconds}
+                lengthened = True
         response = await http.send(request, stream=True, follow_redirects=False)
+        if lengthened and own is not None and isinstance(response.stream, httpx.AsyncByteStream):
+            # Only its start may take the longer time: once its first bytes came, a read
+            # that stalls fails within the client's own read timeout, as any other.
+            response.stream = _Started(response.stream, own, request)
         following = response.next_request  # set for a redirect that says where to
         if following is None:
             return response

@@ -312,7 +312,7 @@ back the same way.
 ## The package alone
 
 ```sh
-nix build github:Jasshl/shijhon/v0.5.1
+nix build github:Jasshl/shijhon/v0.6.0
 ./result/bin/shijhon version
 ```
 

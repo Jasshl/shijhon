@@ -633,11 +633,7 @@ class BulkAcquisition:
                 group.start_soon(check, choice)
         ordered = sorted(
             [*kept, *(c for c in choices if c.permitted)],
-            key=lambda c: (
-                c.rank,
-                self.deliverer._cost(c.source, "ready" if c.ready else "-")[0],
-                c.source.position,
-            ),
+            key=lambda c: (c.rank, c.source.position, c.source.id),  # then the plan's order
         )
         left_out = [c for c in choices if not c.permitted]
         if ruled_out is not None:

@@ -54,16 +54,17 @@ folder = "_shijhon"          # inside the library
 #                            # container itself; "private": also your network, the Docker
 #                            # host and other containers
 # settings = {}
-# budget_seconds = 45        # its own time to first audio, e.g. for a slow one
+# step_seconds = 5           # its step's time: when the next step's add-ons join a play
+# with_previous = true       # starts together with the add-on before it
+# budget_seconds = 45        # its time for a download, e.g. for a slow one
+# slow_after = 3             # slow past its step and 3 times its usual time (default 2)
 # Its own limits, for an add-on you run yourself:
 # requests_per_second = 10   # API requests a second (0: no limit)
 # request_burst = 20         # of which this many at once after a quiet moment
 # audio_openings = 8         # audio requests being opened at once (0: no limit)
 
 # [delivery]
-# routing = "primary_first"  # or "ordered" (the default), "ready_first"
-# primary_source = "First add-on"
-# reliable_source = "First add-on"
+# ready_checks = true        # ask which add-ons have a song ready (the Add-ons page)
 # The limits per add-on, for all users together (the defaults):
 # addon_requests_per_second = 5
 # addon_request_burst = 10

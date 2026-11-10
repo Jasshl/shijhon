@@ -96,17 +96,15 @@ account quotas; configure the limits to suit the account.
 
 | Setting | What it sets |
 |---|---|
-| `max_attempts` (2) | How many add-ons get a timed attempt at a song. One that lacks the song, or fails at once, does not count |
-| `primary_budget_seconds` (4.5) | With `primary_first`: how long the primary has before an add-on that has the song ready takes over |
 | `availability_timeout_seconds` (2) | How long an add-on has to say whether it has a song ready |
-| `reliable_lookup_after_seconds` (0.5) | With `primary_first`: the likely fallback looks the song up, without playing it, once the primary's lookup has taken this long. 0: with every play |
-| `prepare_when_not_ready` (off) | With `ready_first`: when no add-on has a song ready, ask one to prepare it for next time |
-| `primary_miss_hours` (24), `primary_release_miss_minutes` (60) | How long a song the primary lacked is not asked for there again, and how long the other songs of its release look the fallback up at once. 0: off |
+| `prepare_when_not_ready` (off) | With `ready_checks`: when no add-on has a song ready, ask one to prepare it for next time |
+| `miss_hours` (24) | How long a song an add-on lacked is not asked of it again. 0: off |
 | `retry_skip_seconds` (60) | A retry of a song that failed skips the add-ons that failed for it within this time. 0: off |
 | `length_tolerance_seconds` (10), `length_tolerance_percent` (5) | Audio whose length differs from the catalog's by more than the larger of the two is another recording: the next add-on plays. Both 0: no check |
 | `cooldown_seconds` (30), `cooldown_errors` (3) | An add-on that answers with this many errors in a row, no more than ten minutes apart, is passed over for this long. 0 errors: off |
-| `primary_cooldown_timeouts` (2), `primary_cooldown_switches` (3) | The primary is passed over after this many timeouts, or switches away from it, without a delivery in between |
-| `request_timeout_seconds` (10), `seek_timeout_seconds` (15), `download_timeout_seconds` (180) | One request to an add-on; a jump within a playing song; fetching a whole song (for playlist preparation: each transfer, from when it gets its slot) |
+| `cooldown_timeouts` (2) | An add-on is passed over for `cooldown_seconds` after this many timeouts without a delivery in between, and again after each further one until it delivers |
+| `slow_after` (2) | An add-on still trying when another's audio comes counts a timeout once it is past its step's time and this many times its usual time to first audio; with no usual time, once past its step's time. In the last step, which has no time of its own, the default step time (`budget_seconds`) counts as its time. Waits at its own request limits are left out. An add-on's own value comes first |
+| `request_timeout_seconds` (10), `seek_timeout_seconds` (15), `download_timeout_seconds` (180) | One request to an add-on, outside a play (or for as long as its time for a download, when longer; in a play the add-on's requests for the song may take until apps stop waiting); a jump within a playing song; fetching a whole song (for playlist preparation: each transfer, from when it gets its slot) |
 | `pin_ttl_seconds` (1800) | How long a song keeps its add-on and link, for seeks and repeats - also for a play under way when the song is put in the library |
 | `warm_ahead_depth` (2), `warm_ahead_delay_seconds` (2), `warm_ahead_budget_seconds` (60), `warm_ahead_jobs` (2) | Warm-ahead: how many of the next songs (in the app's saved queue, else the album) are opened once a song plays, how long after its first audio, how long one may take, and how many jobs run at once for all listeners. Depth 0: off |
 | `prefetch_memory_seconds` (600) | An app that fetches the next songs itself gets no warm-ahead for this long |

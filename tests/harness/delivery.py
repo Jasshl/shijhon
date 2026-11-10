@@ -83,7 +83,12 @@ class DeliveryWorld:
         settings: dict[str, Any] | None = None,
         base_url: str | None = None,
         budget_seconds: float | None = None,
+        step: int | None = None,
+        step_seconds: float | None = None,
     ) -> int:
+        """``step``: its step of the plan (default: a new last one); add-ons next to each
+        other with one step start together. ``step_seconds``: its step's time;
+        ``budget_seconds``: its time for a download."""
         return self.server.call(
             lambda: self.services.sources.add(
                 addon.name,
@@ -91,6 +96,8 @@ class DeliveryWorld:
                 settings,
                 reach=reach,
                 budget_seconds=budget_seconds,
+                step=step,
+                step_seconds=step_seconds,
             )
         )
 
