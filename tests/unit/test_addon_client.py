@@ -109,6 +109,36 @@ async def test_a_failed_manifest_read_is_shared_and_counted_once() -> None:
 
 
 @pytest.mark.anyio
+async def test_a_shared_manifest_sign_in_keeps_its_page() -> None:
+    """A manifest read that says the operator must sign in: those that waited for it get
+    its page too."""
+    server = Server()
+    server.release = anyio.Event()
+    page = "https://manage.example.invalid/x"
+    server.manifest = httpx.Response(503, json={"error": "needs_sign_in", "url": page})
+    client = addon(server)
+    errors: list[AddonError] = []
+
+    async def use() -> None:
+        try:
+            await client.manifest()
+        except AddonError as exc:
+            errors.append(exc)
+
+    async with anyio.create_task_group() as tg:
+        for _ in range(3):
+            tg.start_soon(use)
+        await anyio.sleep(0.02)
+        server.release.set()
+    assert len(server.requests) == 1
+    assert sorted((e.kind, e.url, e.shared) for e in errors) == [
+        ("sign_in", page, False),
+        ("sign_in", page, True),
+        ("sign_in", page, True),
+    ]
+
+
+@pytest.mark.anyio
 async def test_a_manifest_read_cut_short_is_read_by_the_next_one_waiting() -> None:
     server = Server()
     server.release = anyio.Event()

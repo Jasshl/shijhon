@@ -345,3 +345,55 @@ def test_a_service_account_that_is_no_admin_is_said_once(
     assert "Repairing the service account" in str(stopped.value)
     assert navidrome.logins == ["shijhon"]
     assert (tmp_path / "navidrome-password").read_text() == "ours\n"
+
+
+@pytest.mark.parametrize("account", ["shijhon", "Shijhon"])
+def test_the_service_account_s_name_is_no_person_s_account(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, account: str
+) -> None:
+    # As setup.sh refuses it: otherwise the service account, made first, would be said to
+    # be the person's, "kept", and the person's password never used.
+    seen = served(monkeypatch, Existing({}))
+    own = tmp_path / "own"
+    own.write_text("an invented password")
+    with pytest.raises(accounts.AccountsError, match="name of Shijhon's own account") as stopped:
+        accounts.ensure(
+            "http://navidrome",
+            "shijhon",
+            tmp_path / "navidrome-password",
+            account=account,
+            account_password_file=own,
+            wait=30,
+            say=lambda _: None,
+            names=accounts.Names(account="services.shijhon.account.name"),
+        )
+    assert not isinstance(stopped.value, accounts.Unsettled)  # (not tried again)
+    assert "services.shijhon.account.name" in str(stopped.value)
+    assert seen == []
+    assert not (tmp_path / "navidrome-password").exists()
+
+
+def test_a_missing_account_without_its_password_file_says_so(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The service account signs in, and the person's account is gone from Navidrome (a
+    # rename): creating it again needs the password file, which is not there.
+    (tmp_path / "navidrome-password").write_text("ours\n")
+    navidrome = Existing({"shijhon": ("ours", True)})
+    served(monkeypatch, navidrome)
+    with pytest.raises(accounts.AccountsError) as stopped:
+        accounts.ensure(
+            "http://navidrome",
+            "shijhon",
+            tmp_path / "navidrome-password",
+            account="alex",
+            account_password_file=tmp_path / "gone",
+            wait=30,
+            say=lambda _: None,
+            names=accounts.Names(account_password="services.shijhon.account.passwordFile"),
+        )
+    assert not isinstance(stopped.value, accounts.Unsettled)
+    said = str(stopped.value)
+    assert said.startswith('Navidrome has no account "alex" yet')
+    assert "(services.shijhon.account.passwordFile) cannot be read" in said
+    assert navidrome.created == []

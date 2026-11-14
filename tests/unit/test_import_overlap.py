@@ -344,6 +344,41 @@ def test_unsure_and_not_the_same_song_still_join_the_album_of_their_name() -> No
     assert result.outcome == HELD and "second album" in result.reason
 
 
+def test_an_artist_tag_of_several_values_is_not_split() -> None:
+    # Measured: ARTIST ["Ash feat. Bell", "Cora"] without an album artist shows the album
+    # artist "Ash feat. Bell"; one value "Ash feat. Bell" shows "Ash".
+    tags = {"album": [ALBUM]}
+    base = {"title": "Lantern", "artist": "Ash feat. Bell", "album": ALBUM, "album_tags": tags}
+    several = Incoming("a", {**base, "artist_values": ["Ash feat. Bell", "Cora"]})
+    assert (several.track_artist, several.album_artist) == ("Ash feat. Bell", "Ash feat. Bell")
+    one = Incoming("b", base)
+    assert (one.track_artist, one.album_artist) == ("Ash", "Ash")
+
+
+def test_import_facts_keep_an_artist_tag_s_several_values(tmp_path: Any) -> None:
+    import shutil
+
+    from mutagen.flac import FLAC
+
+    from shijhon.music_imports.facts import first_track_artist, of_mutagen
+    from tests.harness.library import tone
+
+    for values, expected in (
+        (["Ash feat. Bell", "Cora"], "Ash feat. Bell"),
+        (["Ash feat. Bell"], "Ash"),
+    ):
+        path = tmp_path / f"{len(values)}.flac"
+        shutil.copyfile(tone(440, 0.3, "flac"), path)
+        audio = FLAC(path)
+        audio["artist"], audio["title"], audio["album"] = values, "Lantern", ALBUM
+        audio.save()
+        parsed = FLAC(path)
+        facts = of_mutagen(parsed, "flac", parsed.info.length, parsed.info.sample_rate)
+        assert facts["artist"] == "Ash feat. Bell"
+        assert facts.get("artist_values", []) == (values if len(values) > 1 else [])
+        assert first_track_artist(facts) == expected
+
+
 def test_a_file_without_an_album_name_never_joins_an_album() -> None:
     """Shorten has no tags at all (``facts.of_ffprobe``): no album name, so never the
     same album as another - published alone, never held or copied."""

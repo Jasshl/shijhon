@@ -4,7 +4,8 @@ top songs (getTopSongs of an artist the library does not have) the same way.
 A saved list answers an artist page at once; one older than the configured age still does,
 and is refreshed in the background. Only an artist without a saved list waits for the
 catalog. Other catalog answers keep the catalog's in-memory cache. Top songs share
-the table (their keys say ``top``): no schema change.
+the table (their keys say ``top``), and so do the lists a catalog item's radio is made of
+(``views/radio.py``, keys that say ``radio``): no schema change.
 """
 
 from __future__ import annotations
@@ -17,8 +18,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from shijhon.catalog.model import (
+    CatalogArtist,
     CatalogRelease,
     CatalogTrack,
+    artist_data,
+    artist_from_data,
     release_data,
     release_from_data,
     track_data,
@@ -41,6 +45,21 @@ class SavedSongs:
     fresh: bool
 
 
+# A similar artist by name, with the catalog's artist of that name when it has one.
+Named = tuple[str, CatalogArtist | None]
+
+
+@dataclass(frozen=True)
+class SavedArtists:
+    artists: tuple[Named, ...]
+    fresh: bool
+
+
+def _named(item: Any) -> Named:
+    artist = item.get("artist")
+    return str(item["name"]), artist_from_data(artist) if artist else None
+
+
 class Discographies:
     def __init__(
         self, store: Store, *, max_age_seconds: float, clock: Callable[[], float] = time.time
@@ -56,6 +75,10 @@ class Discographies:
     async def get_songs(self, key: str) -> SavedSongs | None:
         found = await self._read(key, track_from_data, "song")
         return SavedSongs(*found) if found is not None else None
+
+    async def get_artists(self, key: str) -> SavedArtists | None:
+        found = await self._read(key, _named, "artist")
+        return SavedArtists(*found) if found is not None else None
 
     async def _read[T](
         self, key: str, read: Callable[[Any], T], what: str
@@ -85,6 +108,11 @@ class Discographies:
         fresh = len(items) == len(data) and self.clock() - float(row["fetched_at"]) < self.max_age
         return tuple(items), fresh
 
+    async def fetched_at(self, key: str) -> float | None:
+        """When the list under ``key`` was saved (None: nothing is saved)."""
+        row = await self.store.fetchone("SELECT fetched_at FROM discographies WHERE key = ?", [key])
+        return float(row["fetched_at"]) if row is not None else None
+
     async def get_name(self, key: str) -> str | None:
         """A name saved with ``save_name`` (a top song list's artist)."""
         row = await self.store.fetchone("SELECT releases FROM discographies WHERE key = ?", [key])
@@ -102,6 +130,12 @@ class Discographies:
 
     async def save_songs(self, key: str, songs: tuple[CatalogTrack, ...]) -> None:
         await self._write(key, [track_data(t) for t in songs])
+
+    async def save_artists(self, key: str, artists: tuple[Named, ...]) -> None:
+        await self._write(
+            key,
+            [{"name": name, "artist": artist_data(a) if a else None} for name, a in artists],
+        )
 
     async def _write(self, key: str, items: list[dict[str, Any]] | str) -> None:
         data = json.dumps(items)

@@ -27,6 +27,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from shijhon.agents.library import LibraryAdditions
 from shijhon.agents.oauth import FLOW_SECONDS, SCOPES, OAuth
 from shijhon.agents.tools import register_tools
 from shijhon.dashboard.auth import Attempts, client_key, same
@@ -142,6 +143,20 @@ class Agents:
                 "their unattended refreshes. list_playlist_requests shows all the user's "
                 "Shijhon playlists, also those made on the dashboard or by other agents. "
                 "Read personal history/library only when the user asks to use it. "
+                "get_new_releases lists new releases of the artists the user follows (their "
+                "favorite and most played), once they turned that on on the dashboard. "
+                "add_to_library adds whole catalog albums, or a bounded number of an "
+                "artist's releases, to the user's library: only on their explicit request, "
+                "with the add permission; find them with search_catalog. Preview an artist "
+                "first, then add what the user agreed to by the preview's album_ids, not by "
+                "the artist_id again (the artist's list can change between two calls); say "
+                "so when a daily limit left releases out. "
+                "get_review_list, settle_review_album and get_server_status are for Navidrome "
+                "administrators with the admin permission; they act for the whole "
+                "installation, so settle an album only as the user decided. A review "
+                "action's idempotency key is remembered for an hour and forgotten by a "
+                "restart: after an uncertain result read the album with get_review_list "
+                "(last_action, in_review_list) before deciding anything again. "
                 "Missing setup blocks only affected features. Preserve all user constraints. "
                 "Creating or changing a playlist authorizes publication; confirm success with "
                 "get_playlist_request. Never repeat a change under a new idempotency key after "
@@ -164,8 +179,20 @@ class Agents:
                 validate_token_resource=True,
             ),
         )
-        register_tools(
-            self.mcp, self.oauth, getattr(getattr(host, "services", None), "downloads", None)
+        services = getattr(host, "services", None)
+        # Catalog releases agents add to their accounts' libraries (its worker: ``run``).
+        self.additions = LibraryAdditions(
+            service,
+            getattr(services, "additions", None),
+            getattr(services, "collection_requests", None),
+        )
+        self.tools = register_tools(
+            self.mcp,
+            self.oauth,
+            getattr(services, "downloads", None),
+            getattr(services, "new_releases", None),
+            adder=self.additions,
+            host=host,
         )
         http = self.mcp.streamable_http_app(
             streamable_http_path="/shijhon/mcp",
@@ -384,14 +411,15 @@ class Agents:
                             409,
                         )
                 flow = await self.oauth.flow(raw)
-            selected = await self.oauth.consent_scopes(flow, flow["owner"]) if flow["owner"] else []
+            offered = await self.oauth.consent_scopes(flow, flow["owner"]) if flow["owner"] else []
+            selected = await self.oauth.preselected(flow, flow["owner"]) if flow["owner"] else []
             signed_in = await self.service.repo.connection(flow["owner"]) if flow["owner"] else None
             template = self.host.dashboard.env.get_template("agent_connect.html")
             response = HTMLResponse(
                 template.render(
                     client_name=(client.client_name or "Connected agent")[:100],
                     callback_host=urlsplit(str(params.redirect_uri)).netloc,
-                    scopes={scope: SCOPES[scope] for scope in selected},
+                    scopes={scope: SCOPES[scope] for scope in offered},
                     selected_scopes=selected,
                     consenting=bool(flow["owner"]),
                     username=signed_in.username if signed_in else "",

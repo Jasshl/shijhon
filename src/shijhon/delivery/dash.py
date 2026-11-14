@@ -74,6 +74,7 @@ from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
 from shijhon.delivery import mpd, pacing, segmented
+from shijhon.delivery.addon import NEEDS_SIGN_IN, sign_in_needed
 from shijhon.delivery.netpolicy import USER_AGENT, denied
 from shijhon.delivery.pacing import AddonPace
 from shijhon.delivery.segmented import Probe, Served
@@ -123,15 +124,24 @@ class DashError(Exception):
     connection or answer, a remux that failed) | failed (another answer) | timeout | paced
     (its time ran out at the add-on's limits) | changed (a segment is not the one its probe
     told: another file) | whole (not to be served at once: joined instead) | capacity
-    (a reused admission cannot start a different job). The reason names no address."""
+    (a reused admission cannot start a different job) | sign_in (the add-on said its
+    operator must sign in again: ``needs_sign_in``, with the page where they do as ``url``
+    when it named one). The reason names no address."""
 
     def __init__(
-        self, kind: str, reason: str, *, status: int | None = None, seconds: float | None = None
+        self,
+        kind: str,
+        reason: str,
+        *,
+        status: int | None = None,
+        seconds: float | None = None,
+        url: str | None = None,
     ) -> None:
         super().__init__(reason)
         self.kind = kind
         self.status = status
         self.seconds = seconds
+        self.url = url
         self.counted = False  # (the deliverer's: counted as the add-on's failure once)
 
 
@@ -163,6 +173,10 @@ class Link:
     name: str  # the add-on's, for the log
     lease: CapacityLease | None = field(default=None, repr=False, compare=False)
     reuse_only: bool = False  # this admission belongs to an existing job, never a new one
+    # Told when one of the link's requests says the add-on's operator must sign in again
+    # (with the page it named) - also a segment's in a fill after the audio began, whose
+    # failure reaches no request for the song.
+    signed_out: Callable[[str | None], None] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(eq=False)
@@ -1329,7 +1343,7 @@ class Dash:
 
         async def read(response: httpx.Response, begun: Callable[[], None]) -> None:
             nonlocal size
-            _check(response, part, limited)
+            await _check(response, part, limited)
             tag = response.headers.get("etag", "")
             if validator is not None and _STRONG.fullmatch(tag) and tag != validator:
                 raise DashError("changed", "a segment changed since its probe")
@@ -1394,6 +1408,10 @@ class Dash:
                 return await read(response, begun)
             finally:
                 await response.aclose()
+        except DashError as exc:
+            if exc.kind == "sign_in" and link.signed_out is not None:
+                link.signed_out(exc.url)
+            raise
         except pacing.Blocked:
             raise DashError("cooling", pacing.BLOCKED) from None
         except httpx.HTTPError as exc:
@@ -1541,7 +1559,7 @@ async def _probed(
 ) -> Probe | None:
     """A probe's answer (one byte asked for): the segment's size and strong ETag, or None
     when it tells no size (the whole segment, 200: no range answered)."""
-    _refused(response, limited)
+    await _refused(response, limited)
     found = _PROBED.fullmatch(response.headers.get("content-range", "").strip())
     if response.status_code != 206 or found is None:
         return None  # (no range answered, or not this one: closed unread)
@@ -1558,22 +1576,26 @@ async def _probed(
     return Probe(size, etag if _STRONG.fullmatch(etag) else None)
 
 
-def _refused(response: httpx.Response, limited: Callable[[float | None], None]) -> None:
-    """An answer that is no audio: an expired link, "too many requests", an error."""
+async def _refused(response: httpx.Response, limited: Callable[[float | None], None]) -> None:
+    """An answer that is no audio: an expired link, "too many requests", an error - or
+    that the add-on's operator must sign in again (a 503 that says so: its small body is
+    read)."""
     status = response.status_code
     if status in (403, 410, 412):
         raise DashError("expired", f"HTTP {status}", status=status)
     if status == 429:
         limited(pacing.retry_after(response.headers.get("retry-after")))
         raise DashError("rate_limited", "rate limited")
+    if status == 503 and (signed_out := await sign_in_needed(response)) is not None:
+        raise DashError("sign_in", NEEDS_SIGN_IN, url=signed_out.url)
     if status >= 500:
         raise _Broken(f"HTTP {status}")
 
 
-def _check(
+async def _check(
     response: httpx.Response, part: mpd.Part, limited: Callable[[float | None], None]
 ) -> None:
-    _refused(response, limited)
+    await _refused(response, limited)
     status = response.status_code
     if part.first is None:
         if status != 200:

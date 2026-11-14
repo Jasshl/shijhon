@@ -130,3 +130,77 @@ def connect_agent(
     reply = http.post(issuer + "/token", data=data)
     assert reply.status_code == 200, reply.text
     return {**reply.json(), "client_id": client_id, "exchange": data}
+
+
+def call_tool(
+    http: httpx.Client, base_url: str, token: str, name: str, arguments: dict[str, Any]
+) -> tuple[int, dict[str, Any]]:
+    """One tool call over HTTP as an agent sends it: (the HTTP status, the tool's
+    structured answer; empty when the request itself was refused)."""
+    reply = http.post(
+        base_url + "/shijhon/mcp",
+        headers={
+            "authorization": "Bearer " + token,
+            "accept": "application/json, text/event-stream",
+            "mcp-protocol-version": "2025-11-25",
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        },
+    )
+    if reply.status_code != 200:
+        return reply.status_code, {}
+    result = reply.json()["result"]
+    # (Arguments the tool's own schema refuses are answered without a structured part.)
+    answer: dict[str, Any] = result.get("structuredContent") or {"ok": False, "invalid": True}
+    assert bool(result.get("isError")) is not bool(answer.get("ok"))
+    return 200, answer
+
+
+def consent_page(
+    http: httpx.Client, base_url: str, username: str, password: str, scopes: str, client_name: str
+) -> tuple[str, str, str]:
+    """Register, authorize and sign in, up to the consent form: (the form's address, its
+    page, its token). Nothing is granted."""
+    issuer = base_url + "/shijhon/agents"
+    registered = http.post(
+        issuer + "/register",
+        json={
+            "client_name": client_name,
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "token_endpoint_auth_method": "none",
+            "scope": scopes,
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(secrets.token_urlsafe(48).encode()).digest())
+        .decode()
+        .rstrip("=")
+    )
+    authorized = http.get(
+        issuer + "/authorize",
+        params={
+            "response_type": "code",
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": "http://127.0.0.1/callback",
+            "scope": scopes,
+            "state": "synthetic-state",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "resource": base_url + "/shijhon/mcp",
+        },
+    )
+    assert authorized.status_code == 302, authorized.text
+    location = authorized.headers["location"]
+    csrf = re.search(r'name="csrf" value="([^"]+)"', http.get(location).text)
+    assert csrf
+    page = http.post(
+        location,
+        data={"username": username, "password": password, "csrf": csrf[1], "action": "allow"},
+    )
+    assert page.status_code == 200 and 'class="agent-permissions"' in page.text, page.text
+    return location, page.text, csrf[1]

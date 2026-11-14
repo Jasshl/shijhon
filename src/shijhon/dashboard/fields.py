@@ -160,6 +160,16 @@ GROUPS: dict[str, list[Group]] = {
     ],
     "cleanup": [Group("cleanup", "Cleanup settings")],
     "agents": [Group("address", "Address")],
+    "notifications": [
+        Group("address", "Where notifications go"),
+        Group(
+            "events",
+            "What is reported",
+            "Each is sent once when it begins, not again while it lasts, and at most once an"
+            " hour about the same thing.",
+            more=True,
+        ),
+    ],
     "audiomuse": [
         Group("connection", "Connection"),
         Group("advanced", "Requests and reading the analysis", more=True),
@@ -168,6 +178,13 @@ GROUPS: dict[str, list[Group]] = {
         Group("connection", "Connection"),
         Group("albums", "Albums and songs"),
         Group("covers", "Covers", more=True),
+        Group(
+            "releases",
+            "New releases",
+            "Each person can follow their favorite and most played artists on their New"
+            " releases page. Their new releases then lead the newest albums in their apps.",
+            more=True,
+        ),
         Group("advanced", "Requests to the catalog", more=True),
     ],
 }
@@ -553,9 +570,17 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "background_pause_seconds": Meta(
             "Pause between background matches",
-            "The pause between albums matched in the background, and after each fill the"
-            " library pass makes.",
+            "The pause between albums matched in the background, and after each fill or"
+            " track list change the library pass writes.",
             "matching",
+        ),
+        "refresh_track_lists": Meta(
+            "Read track lists again",
+            "After its albums, the library pass reads the track lists of releases already in"
+            " your library again, each about once a month and once a week while it is new. It"
+            " adds tracks the catalog has added since and corrects the lengths of songs that"
+            " have no audio yet. A dry run only counts what it would change.",
+            "advanced",
         ),
         "pass_start_seconds": Meta(
             "First pass after",
@@ -635,6 +660,54 @@ META: dict[str, dict[str, Meta]] = {
             "address",
         ),
     },
+    "notifications": {
+        "urls": Meta(
+            "Apprise addresses",
+            "One or more Apprise addresses, separated by spaces, such as ntfy://, discord://,"
+            " tgram:// or mailto:// addresses; Apprise's documentation lists every service it"
+            " can send to. Empty: nothing is sent. "
+            + _WRITE_ONLY
+            + " The addresses hold their services' tokens, so they are never shown or logged.",
+            "address",
+        ),
+        "addon_sign_in": Meta(
+            "An add-on needs sign-in",
+            "An add-on says its operator must sign in again. The notification has the link to"
+            " its page for that when the add-on gave a plain one; a link with a query or a"
+            " user name stays on the Add-ons page.",
+            "events",
+        ),
+        "cleanup_blocked": Meta(
+            "The cleanup is blocked",
+            "The cleanup took nothing out because what it reads as Navidrome's records does not"
+            " match the library, or the library may not be written now.",
+            "events",
+        ),
+        "usage_export": Meta(
+            "The usage export is out of date",
+            "The cleanup asked for a new usage export and none arrived.",
+            "events",
+        ),
+        "import_review": Meta(
+            "A music import waits for review",
+            "Someone's import is checked and waits for their review. The notification names"
+            " the account, not the music.",
+            "events",
+        ),
+        "playlist_refresh": Meta(
+            "A playlist refresh failed",
+            "A scheduled refresh failed, which pauses that playlist's refreshes. The"
+            " notification names the account, not the playlist.",
+            "events",
+        ),
+        "snapshot_skipped": Meta(
+            "An upgrade went on without a snapshot",
+            "Shijhon upgraded its database at a start without the snapshot it takes first,"
+            " because the snapshot could not be written. The notification names the schemas"
+            " and why.",
+            "events",
+        ),
+    },
     "audiomuse": {
         "url": Meta(
             "AudioMuse-AI address",
@@ -686,6 +759,16 @@ META: dict[str, dict[str, Meta]] = {
             "albums",
             options={"explicit": "Explicit", "clean": "Clean", "both": "Both"},
         ),
+        "user_releases_per_day": Meta(
+            "Releases a user may add each day",
+            "How many catalog releases one account may add to the library within 24 hours,"
+            " in any way: from an app, a playlist, an import or an agent. Navidrome"
+            " administrators, and albums Shijhon fills by the fill policy, are not counted."
+            " At the limit, catalog results are still shown and music in the library plays"
+            " as usual. 0: no limit.",
+            "albums",
+            unit="releases",
+        ),
         "artwork_size": Meta(
             "Cover size in the library",
             "The size of the cover saved with each catalog album added to your library.",
@@ -698,6 +781,43 @@ META: dict[str, dict[str, Meta]] = {
             " tend to answer common sizes faster. Empty: the exact size asked for.",
             "covers",
             unit="px",
+        ),
+        "artist_pictures": Meta(
+            "Pictures for artists without one",
+            "When Navidrome finds no picture for an artist in your library, the catalog"
+            " artist's picture is set in Navidrome, as you could set one there yourself. A"
+            " picture you replace or remove in Navidrome stays your choice, and Shijhon's"
+            " goes when Navidrome's external services find one. Off: the pictures Shijhon"
+            " set are removed.",
+            "covers",
+        ),
+        "artist_lists": Meta(
+            "Each artist of a joined credit",
+            'When a file names several artists in one text ("A, B"), Navidrome shows them'
+            " as one artist. When a catalog lists the song's artists and their names are"
+            " exactly that text, Shijhon adds the list to the file, so each artist gets a"
+            " page and a picture; the text the file shows stays as it is. Off: the files"
+            " Shijhon changed, those still as it left them, are given back as they were.",
+            "covers",
+        ),
+        "artist_lists_library": Meta(
+            "Also fix files in your music folder",
+            "With the setting above, also the files in your music folder, not only your"
+            " imports and Shijhon's own songs. Your music folder must be writable for"
+            " Shijhon (it is read-only in the standard setup; Diagnostics says when it is)."
+            " Only the lists of artists are added, every change is recorded and can be"
+            " undone: off, the files Shijhon changed, those still as it left them, are"
+            " given back as they were.",
+            "covers",
+        ),
+        "artist_lists_catalogs": Meta(
+            "More catalogs for artist lists",
+            "Other catalogs also asked for the lists of artists above, after the catalog in"
+            " use: the names of installed catalog adapters, separated by commas, such as"
+            " musicbrainz. Each is used with its adapter's default settings and asked at the"
+            " library pass's pace. One that is not installed or cannot be used is noted in"
+            " the log and passed over. Empty: none.",
+            "covers",
         ),
         "artwork_cache_mb": Meta(
             "Cover cache",
@@ -727,6 +847,27 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "prefetch_burst_seconds": Meta(
             "Pages counted within", "The time window for the count above.", "covers"
+        ),
+        "new_releases_days": Meta(
+            "A release is new for",
+            "How long after its release date a followed artist's release leads the newest"
+            " albums. 0: nobody can turn new releases on, and nothing is checked or shown.",
+            "releases",
+        ),
+        "new_releases_most_played": Meta(
+            "Most played artists followed",
+            "Besides the artists of a person's favorites, this many of the artists they"
+            " played most in the last 90 days are followed. 0: their favorites alone.",
+            "releases",
+            unit="artists",
+        ),
+        "new_releases_artists_per_day": Meta(
+            "Artists checked a day",
+            "How many artists one person's daily check asks the catalog about, those not"
+            " looked at for the longest first. Someone who follows more is covered over"
+            " several days.",
+            "releases",
+            unit="artists",
         ),
         "cache_seconds": Meta(
             "Answers reused for", "How long a catalog answer is kept and reused.", "advanced"
@@ -903,6 +1044,11 @@ class SettingField:
             if not all(re.fullmatch(r"[0-9]+", part) and int(part) > 0 for part in parts):
                 raise Invalid("Enter whole numbers above 0, separated by commas.")
             return sorted({int(part) for part in parts})  # as the setting keeps them
+        if self.kind == "names":  # "first, second" (empty: none), each a plain name
+            parts = [part.lower() for part in re.split(r"[\s,;]+", text) if part]
+            if not all(re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", part) for part in parts):
+                raise Invalid("Enter names of letters, digits, '-' and '_', separated by commas.")
+            return list(dict.fromkeys(parts))  # each once, in the order given
         if self.kind == "select":
             if text not in self.values:
                 raise Invalid("Choose one of the listed values.")
@@ -919,7 +1065,7 @@ class SettingField:
             return ""
         if self.kind in ("decimal", "whole"):
             return format_number(self._shown(value))
-        if self.kind == "numbers":
+        if self.kind in ("numbers", "names"):
             return ", ".join(str(v) for v in value)
         return str(value)
 
@@ -936,6 +1082,8 @@ class SettingField:
             return "On" if value else "Off"
         if self.kind == "numbers":
             return f"{', '.join(str(v) for v in value)} {self.unit}".strip() if value else "none"
+        if self.kind == "names":
+            return ", ".join(value) if value else "none"
         if self.kind == "select":
             return dict(self.options()).get(str(value), str(value))
         if value is None or value == "":
@@ -982,6 +1130,8 @@ def _kind(annotation: Any) -> tuple[str, bool, tuple[str, ...]]:
         return "mapping", optional, ()
     if origin in (list, tuple) and typing.get_args(annotation)[:1] == (int,):
         return "numbers", optional, ()  # "100, 150, 200"
+    if origin in (list, tuple) and typing.get_args(annotation)[:1] == (str,):
+        return "names", optional, ()  # "first, second"
     if annotation is bool:
         return "switch", optional, ()
     if annotation is int:

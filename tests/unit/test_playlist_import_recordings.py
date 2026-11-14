@@ -70,15 +70,68 @@ def test_csv_mapping_and_two_duration_columns() -> None:
         ("duration", "3:65"),
         ("duration", "1:60:00"),
         ("duration", "3 minutes"),
+        ("duration", "3m45s"),
+        ("time", "2026-11-12 08:30:00"),
+        ("isrc", "n/a"),
+        ("isrc", '"ZZSHJ2600001, ZZSHJ2600002"'),
         ("duration,duration_ms", "203,8000"),
     ],
 )
-def test_invalid_evidence_rejects_the_entry_without_dropping_it(header: str, value: str) -> None:
+def test_an_unreadable_hint_is_ignored_and_the_entry_imports(header: str, value: str) -> None:
+    # Owner's decision (2026-11-12): matched without the hint; the other entries import.
+    rows = parse(
+        f"artist,title,{header}\nGlass Orchard,First Light,{',' if ',' in header else ''}\n"
+        f"Tideline,Harbor,{value}\nPale Quill,Ember,{',' if ',' in header else ''}\n"
+    )
+    assert [(r.artist, r.title) for r in rows] == [
+        ("Glass Orchard", "First Light"),
+        ("Tideline", "Harbor"),
+        ("Pale Quill", "Ember"),
+    ]
+    assert (rows[1].isrc, rows[1].isrcs, rows[1].duration_ms) == ("", [], 0)
+
+
+@pytest.mark.parametrize(
+    "source,format",
+    [
+        ("#EXTM3U\n#EXTINF:-2,Tideline - Harbor\nAlbum/Harbor.flac\n", "m3u"),
+        ("[playlist]\nFile1=Album/Harbor.flac\nTitle1=Tideline - Harbor\nLength1=3m\n", "pls"),
+        (
+            "<playlist><trackList><track><location>Album/Harbor.flac</location>"
+            "<duration>-1</duration><identifier>isrc:n/a</identifier></track></trackList>"
+            "</playlist>",
+            "xspf",
+        ),
+        (
+            "<playlist><trackList><track><location>Album/Harbor.flac</location>"
+            "<duration>215000.5</duration></track></trackList></playlist>",
+            "xspf",
+        ),
+        (
+            '{"playlist": {"track": [{"location": "Album/Harbor.flac", "duration": "4 min",'
+            ' "identifier": "urn:isrc:none"}]}}',
+            "jspf",
+        ),
+    ],
+)
+def test_an_unreadable_hint_in_a_playlist_document_is_ignored(source: str, format: str) -> None:
+    [row] = parse(source, format=format)
+    assert row.locations == ["Album/Harbor.flac"]
+    assert (row.isrc, row.duration_ms) == ("", 0)
+
+
+def test_several_detected_columns_of_one_hint_are_not_read_unless_one_is_mapped() -> None:
+    source = "artist,title,Duration,Time\nTideline,Harbor,3:23,08:30\n"
+    assert parse(source)[0].duration_ms == 0
+    assert parse(source, mapping={"duration": "Duration"})[0].duration_ms == 203000
+    # Recording names still need one column each.
+    with pytest.raises(PlaylistError, match="Several columns"):
+        parse("artist,title,name,Time\nTideline,Harbor,Other,3:23\n")
+
+
+def test_a_malformed_music_row_still_rejects_the_document() -> None:
     with pytest.raises(PlaylistError, match="Import entry 2"):
-        parse(
-            f"artist,title,{header}\nGlass Orchard,First Light,{',' if ',' in header else ''}\n"
-            f"Tideline,Harbor,{value}\n"
-        )
+        parse("artist,title,isrc\nGlass Orchard,First Light,\nTideline,,ZZSHJ2600001\n")
 
 
 @pytest.mark.parametrize("format", ["xspf", "jspf"])

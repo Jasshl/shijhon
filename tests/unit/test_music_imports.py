@@ -2166,6 +2166,30 @@ async def test_copy_capacity_and_reservation_share_admission(harness, monkeypatc
     assert competitor.is_set()
 
 
+async def test_a_copy_of_an_imported_album_takes_its_album_artist_as_navidrome_shows_it(harness):
+    # Without an album artist tag, Navidrome shows the first value of the artists list
+    # whole ("Ash / Bell"), else the artist tag split ("Zed").
+    h = harness
+    job = await reviewed(h)
+    item = job["items"][0]
+    source = {"tags_from": "item:" + item["id"]}
+    facts = {
+        "artist": "Zed Feat. Wren",
+        "artists": ["Ash / Bell", "Cora"],
+        "album_tags": {"album": ["Night Letters"]},
+    }
+    query = "UPDATE music_import_items SET facts=? WHERE id=?"
+    await h.store.execute(query, [json.dumps(facts), item["id"]])
+    assert await h.service._copy_source("a", source) == ({"album": ["Night Letters"]}, "Ash / Bell")
+    del facts["artists"]
+    await h.store.execute(query, [json.dumps(facts), item["id"]])
+    assert (await h.service._copy_source("a", source))[1] == "Zed"
+    # An artist tag of several values is not split.
+    facts["artist_values"] = ["Zed Feat. Wren", "Cora"]
+    await h.store.execute(query, [json.dumps(facts), item["id"]])
+    assert (await h.service._copy_source("a", source))[1] == "Zed Feat. Wren"
+
+
 @pytest.mark.parametrize("size", [1024, 2 * 1024**3])
 async def test_album_copy_deadline_allows_time_for_its_bytes(harness, monkeypatch, size):
     h = harness

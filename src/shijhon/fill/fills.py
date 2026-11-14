@@ -38,6 +38,20 @@ The review list's actions: fill an album from a release the owner chose (refused
 owned track is not on it, a new track would take an owned track's position, or the owned
 files say the album is complete), keep it as it is, or match it again.
 
+**Another release for a filled album** (``change``): the owner's choice when the fill is
+the wrong edition. The songs the fill added are taken out as the cleanup takes a release
+out - only when nobody has used any of them, by its rule and its checks; without the
+cleanup's record of it, so its old IDs never bring it back. The same transaction makes the
+chosen release the album's plan - with the album's parts and their owned recordings as
+that release has them - and writes the replacement's own record (``replacements.py``): the
+old songs' IDs, and what is left to finish. From then on the album is shown complete with
+the chosen release, and it is filled from it at once through the ordinary fill. A stop or
+a failure in between leaves the plan and the record: Shijhon finishes the replacement
+itself at its next start, and a few times after a failure (``finish_change``); when that
+keeps failing, the album is filled on its next use - never by the fill policy. A use of
+one of the old songs that reaches Shijhon meanwhile waits, and afterwards goes on only
+where a song has that ID again. A fill that anyone has used stays as it is, whole.
+
 **Automatic picks** (``auto_pick``, on by default): an album the matcher would send to
 review for several plausible editions, or for a release numbered differently from the
 owned files, is matched with the most likely release instead (``matching/matcher.py``),
@@ -73,12 +87,14 @@ review list ("part of …").
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Coroutine, Iterable
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator
+from contextlib import AsyncExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -95,6 +111,8 @@ from shijhon.catalog.model import (
     release_data,
     release_from_data,
 )
+from shijhon.delivery.addon import NEEDS_SIGN_IN
+from shijhon.fill.replacements import Replacements
 from shijhon.locks import KeyedLocks
 from shijhon.matching import covers
 from shijhon.matching.albums import Album, Song, pairs, same_album, same_name
@@ -118,7 +136,14 @@ from shijhon.matching.matcher import (
 )
 from shijhon.matching.normalize import core_title, credit_names, fold, same_artist, title_key
 from shijhon.navidrome.client import NavidromeError, NavidromeService
-from shijhon.placeholders.engine import ApprovalRefused, MaterializeError, PlaceholderEngine
+from shijhon.placeholders.daily_cap import DailyLimitReached
+from shijhon.placeholders.engine import (
+    ApprovalRefused,
+    MaterializeError,
+    PlaceholderEngine,
+    Removal,
+    Statements,
+)
 from shijhon.store import Store
 from shijhon.views.bursts import Burst, Bursts, Client
 
@@ -129,6 +154,11 @@ PER_ANSWER = 5  # albums of one search result or artist page queued
 MAX_RETRY = 30 * 86400.0  # the longest wait before a failed album is tried again
 IDLE_POLL = 0.5  # seconds: how often the library pass checks whether it is its turn
 IN_LIBRARY = "the release is in the library as another album"  # a review reason
+CHOSEN = "chosen from the review list"
+CHANGED = "chosen in place of the release it was filled from"
+# Takes one fill out now if nobody uses it (``Cleanup.take_out_now``): the release, and
+# statements for the removal's transaction.
+TakeOut = Callable[[str, Statements], Awaitable[Removal]]
 # A first use's fill of the same album that has an owned recording the release does not.
 JOINED = "the same album: the release's other songs added beside the owned ones"
 COVER_SIZE = 600  # the catalog cover asked for when two albums' covers are compared
@@ -180,6 +210,57 @@ class ChoiceRefused(Exception):
         self.category = category
 
 
+class Changed(ChoiceRefused):
+    """The album's match is no longer the one the owner was shown when the action was
+    chosen (``match_state``): nothing was done."""
+
+    def __init__(self) -> None:
+        super().__init__("its match has changed since the page was loaded")
+
+
+class Unauthorized(ChoiceRefused):
+    """Whoever asked for the action may no longer have it carried out
+    (``Fills.guard_decisions``): no decision was deleted or recorded since."""
+
+
+def match_state(row: Any, filled: bool) -> str:
+    """A fingerprint of an album's match as a page shows it and its actions depend on it:
+    its outcome, release, reason, listed releases, pick and plan flag, and whether the
+    album is filled. An action chosen from a page names the state it saw, and is carried
+    out only while the match is still in it (``Fills._expect``)."""
+    shown = [
+        str(row["outcome"]),
+        str(row["release_ref"] or ""),
+        str(row["reason"] or ""),
+        str(row["candidates"] or ""),
+        str(row["picked"] or ""),
+        bool(row["planned"]),
+        filled,
+    ]
+    return hashlib.sha256(json.dumps(shown).encode()).hexdigest()[:20]
+
+
+class InUse(ChoiceRefused):
+    """A filled album keeps its release: someone has used a song the fill added
+    (``uses``: the cleanup's reasons). Nothing was changed."""
+
+    def __init__(self, uses: list[str]) -> None:
+        super().__init__("songs its fill added are in use: " + ", ".join(uses))
+        self.uses = uses
+
+
+class FillPending(Exception):
+    """A filled album's old release is out and the chosen one is its plan, but the fill
+    from it did not happen now (``reason``): the album is shown complete with the chosen
+    release, and Shijhon finishes the replacement itself (``Fills.finish_change``) - only
+    when that keeps failing is the album left to be filled on its next use."""
+
+    def __init__(self, reason: str, removed: int) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.removed = removed
+
+
 @dataclass
 class Decision:
     """What happens to one album: from a match, or from a dry run's plan. ``outcome`` is
@@ -200,6 +281,7 @@ class Decision:
     # A track the fill adds may take a disc and number an owned song of the album has: a
     # picked release keeps its numbering, and a fill taken out is added back as it was.
     shares: bool = False
+    removed: int = 0  # songs of the release it was filled from that were taken out first
 
     @classmethod
     def of(cls, match: Match) -> Decision:
@@ -262,12 +344,22 @@ class Fills:
         auto_pick: bool = True,
         clock: Callable[[], float] = time.time,
         negative_seconds: float = NEGATIVE_SECONDS,
+        replacements: Replacements | None = None,
     ) -> None:
         self.store = store
         self.navidrome = navidrome
         self.engine = engine
+        # The record of albums filled from another release, which it finishes through
+        # ``finish_change`` (the application's own, so that requests look IDs up in it).
+        self.replacements = replacements or Replacements(store, engine, navidrome, clock=clock)
+        self.replacements.finish = self.finish_change
         self.matcher = matcher
         self.scope = scope  # catalog and region the matches belong to
+        # Who an owner's action is carried out for, asked again before each decision
+        # (``guard_decisions``): the task's own, as the engine's write guards are.
+        self._decision_guards: ContextVar[tuple[Callable[[], Awaitable[None]], ...]] = ContextVar(
+            "album_decision_guards", default=()
+        )
         self.budget = budget_seconds
         self.retry_seconds = retry_seconds
         self.spawn = spawn
@@ -644,20 +736,21 @@ class Fills:
                 )
             try:
                 await self._materialize(album_id, owned, decision, trigger)
-            except ApprovalRefused:
-                # A playlist's or collection's own approval: the album's fill did not fail
-                # (no wait before it is filled, by this operation or another).
+            except (ApprovalRefused, DailyLimitReached):
+                # A playlist's or collection's own approval, or the account's daily cap on
+                # adding: the album's fill did not fail (no wait before it is filled, by
+                # this operation or another).
                 raise
             except (CatalogError, NavidromeError, MaterializeError):
                 # Preserve the old plan/ref and ordinary failure backoff for recovery.
                 await self._record(
-                    album_id, Decision("failed", "the owned album fill failed"), owned
+                    album_id, Decision("failed", "the owned album fill failed"), owned, begun=True
                 )
                 raise
             if decision.outcome != "filled":
                 raise ChoiceRefused("the owned album could not be filled from the exact release")
-            await self._record(album_id, decision, owned)
-            await self._record_parts(owned, decision, planned=False)
+            await self._record(album_id, decision, owned, begun=True)
+            await self._record_parts(owned, decision, planned=False, begun=True)
             return album_id
 
     async def _same_title(self, release: CatalogRelease) -> list[tuple[dict[str, Any], OwnedAlbum]]:
@@ -1099,6 +1192,7 @@ class Fills:
         # request); a new match waits for the rest to end.
         owned: OwnedAlbum | None = None
         target: OwnedAlbum | None = None
+        written = False  # files may have been written: what follows records, never asks
         row = await self._row(album_id)
         if row is not None and row["outcome"] == "none":
             try:
@@ -1199,6 +1293,7 @@ class Fills:
                     " (dry run)" if planned else "",
                 )
             if decision.outcome == "filled" and not planned:
+                written = True
                 await self._materialize(target.id, target, decision, trigger)
             elif decision.outcome == "review" and not planned:
                 log.info(
@@ -1210,18 +1305,31 @@ class Fills:
         except (CatalogError, NavidromeError, MaterializeError) as exc:
             if isinstance(exc, NavidromeError) and not navidrome_errors:
                 raise
+            if isinstance(exc, DailyLimitReached):
+                # The daily cap of the account whose use this fill is: nothing was written
+                # and the album's fill did not fail (it stays shown complete, with no
+                # wait before its next fill).
+                raise
             reason = getattr(exc, "reason", None) or str(exc)
+            named = f" for {_named(owned)}" if owned is not None else ""
+            if isinstance(exc, CatalogError) and NEEDS_SIGN_IN in exc.reason:
+                # The catalog's add-on needs its operator to sign in (owner's decision
+                # 2026-11-12): no failure recorded, so the album stays due and is matched
+                # once it answers, with no wait doubled; and no rest, the pass goes on.
+                log.debug("album match waits for the catalog's sign-in%s", named)
+                return None
             if isinstance(exc, CatalogError) and exc.kind != "not_found":
                 self.resting_until = self.clock() + self.rest_seconds
-            named = f" for {_named(owned)}" if owned is not None else ""
             log.info("album match failed%s: %s", named, reason)
-            await self._record(album_id, Decision("failed", reason), owned, planned=dry_run)
+            await self._record(
+                album_id, Decision("failed", reason), owned, planned=dry_run, begun=written
+            )
             return Decision("failed", reason)
         planned = dry_run or decision.planned
         await self._check_member_states(member_states)
-        await self._record(target.id, decision, target, planned=planned)
+        await self._record(target.id, decision, target, planned=planned, begun=written)
         if decision.outcome in ("filled", "deferred", "complete"):
-            await self._record_parts(target, decision, planned=planned)
+            await self._record_parts(target, decision, planned=planned, begun=written)
         return decision
 
     async def _materialize(
@@ -1414,17 +1522,30 @@ class Fills:
                 found.append(other)
         return found
 
-    async def _record_parts(self, owner: OwnedAlbum, decision: Decision, *, planned: bool) -> None:
+    async def _record_parts(
+        self,
+        owner: OwnedAlbum,
+        decision: Decision,
+        *,
+        planned: bool,
+        conn: aiosqlite.Connection | None = None,
+        begun: bool = False,
+    ) -> None:
+        """The matches of the release's parts - written, or, with ``conn``, as statements of
+        the caller's transaction."""
         how = {"filled": "filled there", "deferred": "filled with it on first use"}.get(
             decision.outcome, "complete there"
         )
         reason = f"part of {_named(owner)} (album {owner.id}): {how}"
+        query = (
+            "SELECT outcome, planned, reason FROM album_matches WHERE album_id = ? AND scope = ?"
+        )
         for part in decision.parts:
-            row = await self.store.fetchone(
-                "SELECT outcome, planned, reason FROM album_matches"
-                " WHERE album_id = ? AND scope = ?",
-                [part.id, self.scope],
-            )
+            if conn is None:
+                row = await self.store.fetchone(query, [part.id, self.scope])
+            else:
+                async with conn.execute(query, [part.id, self.scope]) as cursor:
+                    row = await cursor.fetchone()
             # The owner's choice, or a real outcome a dry run leaves alone - not a review an
             # automatic pick settles (it would be matched again at every pass).
             real = planned and not row["planned"] if row is not None else False
@@ -1433,7 +1554,9 @@ class Fills:
             part_decision = Decision(
                 "review", reason, None, {}, [str(decision.release_ref)], decision.release_ref
             )
-            await self._record(part.id, part_decision, part, planned=planned)
+            await self._record(
+                part.id, part_decision, part, planned=planned, conn=conn, begun=begun
+            )
             if not planned:
                 log.info("album match needs review: %s (%d owned): %s",
                          _named(part), len(part.songs), reason)  # fmt: skip
@@ -1534,9 +1657,52 @@ class Fills:
 
     # --- the review list's actions --------------------------------------------------------
 
-    async def choose(self, album_id: str, release_ref: str) -> Decision:
+    @contextmanager
+    def guard_decisions(self, authorize: Callable[[], Awaitable[None]]) -> Iterator[None]:
+        """Carry out this task's owner actions (``choose``, ``keep``, ``rematch`` and the
+        match that follows, ``recheck``) only while ``authorize`` agrees: it is asked again
+        after the action's waits - for locks, Navidrome, the catalog - immediately before
+        a decision is deleted or recorded, and refuses by raising; the action then ends
+        with ``Unauthorized`` and that decision stays as it was. What records a write
+        already begun (a fill's result, its failure) never asks: a refusal must not
+        leave the library and its records apart. For someone acting through another's
+        authority - an agent - whose authority can end while the action waits; the
+        dashboard's own actions set none."""
+        token = self._decision_guards.set((*self._decision_guards.get(), authorize))
+        try:
+            yield
+        finally:
+            self._decision_guards.reset(token)
+
+    async def _decidable(self) -> None:
+        """Ask this task's decision guards (``guard_decisions``); ``Unauthorized`` when one
+        refuses."""
+        for authorize in self._decision_guards.get():
+            try:
+                await authorize()
+            except Exception as exc:
+                reason = getattr(exc, "reason", None) or "the action is no longer authorized"
+                raise Unauthorized(str(reason)) from None
+
+    async def _expect(self, album_id: str, expected: str | None) -> None:
+        """Under the album's locks: its match is still in the state the owner was shown
+        (``expected``; None: whatever it is now), else ``Changed``."""
+        if expected is None:
+            return
+        row = await self.store.fetchone(
+            "SELECT outcome, release_ref, reason, candidates, picked, planned FROM album_matches"
+            " WHERE album_id = ? AND scope = ?",
+            [album_id, self.scope],
+        )
+        if row is None or match_state(row, await self._filled(album_id)) != expected:
+            raise Changed
+
+    async def choose(
+        self, album_id: str, release_ref: str, *, expected: str | None = None
+    ) -> Decision:
         """Fill the album from a release the owner chose (the review list). Raises
-        ``ChoiceRefused`` when the release cannot fill it."""
+        ``ChoiceRefused`` when the release cannot fill it, ``Changed`` when its match is no
+        longer in the state the owner was shown (``expected``)."""
         try:
             ref = CatalogRef.parse(release_ref)
         except ValueError:
@@ -1548,6 +1714,7 @@ class Fills:
         # The group's lock, then the album's, as a fill takes them (the pass may be filling
         # this album from the group's release at this moment).
         async with self._locks.hold(group), self._locks.hold(album_id):
+            await self._expect(album_id, expected)
             filled = await self.store.fetchone(
                 "SELECT 1 FROM releases WHERE album_id = ? OR owned_album_id = ?",
                 [album_id, album_id],
@@ -1587,25 +1754,276 @@ class Fills:
                 )
             if await self._in_library(str(release.ref)):
                 raise ChoiceRefused(IN_LIBRARY)
-            reason = "chosen from the review list"
             chosen = str(release.ref)
-            decision = Decision("filled", reason, release, links, [chosen], chosen)
+            # The releases the match considered stay listed: another can be chosen later.
+            considered = await self._considered(album_id, chosen)
+            decision = Decision("filled", CHOSEN, release, links, considered, chosen)
             decision.shares = shares
+            written = False
             if len(links) == len(release.tracks):
                 decision.outcome = "complete"
             else:
+                await self._decidable()  # (and the engine asks its own guards as it writes)
+                written = True
                 await self._materialize(album_id, owned, decision)
                 if decision.reason == IN_LIBRARY:
                     raise ChoiceRefused(IN_LIBRARY)  # filled meanwhile, elsewhere
-            await self._record(album_id, decision, owned)
+            await self._record(album_id, decision, owned, begun=written)
             return decision
 
-    async def keep(self, album_id: str) -> None:
-        """The owner keeps the album as it is: it is not matched again (in this scope).
-        Raises ``ChoiceRefused`` for an album that is filled, a catalog album, or not an
-        owned album."""
+    async def _considered(self, album_id: str, *first: str) -> list[str]:
+        """The releases the album's match lists, ``first`` leading them."""
+        row = await self.store.fetchone(
+            "SELECT release_ref, candidates FROM album_matches WHERE album_id = ? AND scope = ?",
+            [album_id, self.scope],
+        )
+        found = list(first)
+        if row is not None:
+            listed = [row["release_ref"], *str(row["candidates"] or "").split(",")]
+            found += [ref for ref in listed if ref and ref not in found]
+        return list(dict.fromkeys(found))
+
+    async def change(self, album_id: str, release_ref: str, take_out: TakeOut) -> Decision:
+        """Fill a filled album from another release the owner chose (the wrong edition was
+        filled). The chosen release must fit the album as a review choice must
+        (``ChoiceRefused``). Then the songs the fill added are taken out by ``take_out`` -
+        the cleanup's removal of one release: nothing anyone used goes (``InUse``: the
+        album stays as it is) - with the album's match written in the removal's own
+        transaction as the chosen release's plan, and the album is filled from it. When
+        that fill does not happen now (``FillPending``), the plan and the replacement's
+        record stay: the album is shown complete with the chosen release, and Shijhon
+        finishes the replacement itself (``finish_change``). The decision
+        says how many songs went (``removed``); its outcome is ``filled``, ``complete``
+        (the chosen release adds nothing) or ``review`` (its songs did not join the album,
+        or it was added to the library as an album of its own meanwhile)."""
+        try:
+            ref = CatalogRef.parse(release_ref)
+        except ValueError:
+            raise ChoiceRefused("not a catalog release") from None
+        catalog = self.matcher.catalog
+        if ref.catalog != catalog.key:
+            raise ChoiceRefused("a release of another catalog")
+        group = await self._group_key(album_id)
+        # The group's lock, then the album's, as every fill of it takes them: nothing
+        # matches, fills or decides the album between its old release and its new one. The
+        # group's other albums are held too, as a match of the group holds them: which of
+        # them are parts of the chosen release is decided here.
+        async with self._locks.hold(group), self._locks.hold(album_id), AsyncExitStack() as held:
+            filling = await self.store.fetchall(
+                "SELECT ref FROM releases WHERE owned_album_id = ?", [album_id]
+            )
+            if not filling:
+                raise ChoiceRefused("the album is not filled")
+            if len(filling) > 1:
+                raise ChoiceRefused("the album is filled from more than one release")
+            current = str(filling[0]["ref"])
+            if current == str(ref):
+                raise ChoiceRefused("the album is filled from this release")
+            owned = await self._owned(album_id)
+            if owned is None:
+                raise ChoiceRefused("not an owned album")
+            if complete_by_tags(owned):
+                raise ChoiceRefused("the owned files' track totals say every track is there")
+            try:
+                release = await catalog.album(ref.id)
+            except CatalogError as exc:
+                if exc.kind == "not_found":
+                    raise ChoiceRefused("the catalog has no such release") from None
+                raise
+            if release.incomplete:
+                raise ChoiceRefused("the catalog's track list of this release is incomplete")
+            links = confirm(owned, release)
+            if links is None:
+                raise ChoiceRefused("an owned track is not on this release")
+            shares = clashes(owned, release, links)
+            if shares and not self.auto_pick:
+                raise ChoiceRefused("a track it would add takes an owned track's position")
+            if shares and doubled(release, links):
+                raise ChoiceRefused(
+                    "the release has two tracks to add at one disc and track number"
+                )
+            if not release.numbered and displaced(owned, release, links):
+                raise ChoiceRefused(
+                    "the catalog lists this release's tracks without numbers, and the"
+                    " owned files are numbered differently from its order"
+                )
+            chosen = str(release.ref)
+            if await self._in_library(chosen):
+                raise ChoiceRefused(IN_LIBRARY)
+            considered = await self._considered(album_id, chosen, current)
+            decision = Decision("filled", CHANGED, release, links, considered, chosen)
+            decision.shares = shares
+            # One release, one album: the group's other albums whose songs are all on the
+            # chosen release are its parts - their songs play for its tracks here - and
+            # those that were the old release's parts and are not on this one are parts no
+            # longer (matched again, as albums of their own).
+            others = await self._group(owned)
+            for other in sorted(others, key=lambda album: album.id):
+                await held.enter_async_context(self._locks.hold(other.id))
+            for member in others:
+                member_links = confirm(member, release)
+                if member_links is None:
+                    continue
+                decision.parts.append(member)
+                for track, song in member_links.items():
+                    if track not in links and track not in decision.backing:
+                        decision.backing[track] = song
+            parts = {part.id for part in decision.parts}
+            were_parts = [
+                member.id
+                for member in others
+                if member.id not in parts and await self._is_part_of(member.id, album_id)
+            ]
+            complete = len(links) == len(release.tracks)
+            # The album's match once its old release is out, in the removal's transaction:
+            # complete with the chosen release when it adds nothing; else its plan.
+            planned = Decision(
+                "complete" if complete else "deferred",
+                CHANGED if complete else f"{decision.owned_text}: {CHANGED}",
+                release,
+                links,
+                considered,
+                chosen,
+            )
+            planned.shares, planned.backing, planned.parts = (
+                shares,
+                decision.backing,
+                decision.parts,
+            )
+            songs = [
+                str(row["song_id"])
+                for row in await self.store.fetchall(
+                    "SELECT song_id FROM placeholders WHERE release_ref = ?", [current]
+                )
+            ]
+            replacements = self.replacements
+
+            async def also(conn: aiosqlite.Connection) -> None:
+                """With the old release's rows, in one transaction: the album's new match
+                (a plan only this replacement or the album's next use fills, never the fill
+                policy), its parts, and the replacement's record."""
+                await self._record(album_id, planned, owned, conn=conn)
+                await conn.execute(
+                    "UPDATE album_matches SET cleaned_at = ? WHERE album_id = ? AND scope = ?"
+                    " AND outcome = 'deferred'",
+                    [self.clock(), album_id, self.scope],
+                )
+                await self._record_parts(owned, planned, planned=False, conn=conn)
+                for part in were_parts:
+                    await conn.execute(
+                        "DELETE FROM album_matches WHERE album_id = ? AND scope = ?"
+                        " AND outcome = 'review' AND reason LIKE 'part of %'",
+                        [part, self.scope],
+                    )
+                await replacements.record(
+                    conn, album_id, self.scope, current, chosen, songs, unfinished=not complete
+                )
+
+            # From here until the album is filled - or that failed - a use of one of the
+            # old songs that reaches Shijhon waits (``Replacements``).
+            async with replacements.under_way(album_id, songs):
+                try:
+                    taken = await take_out(current, also)
+                except Exception:
+                    # A failure once the removal's transaction was done (its last steps)
+                    # does not undo it: the replacement goes on from its record.
+                    if await self._in_library(current):
+                        raise  # nothing went: as it was
+                    taken = Removal(removed=len(songs))
+                finally:
+                    # Whatever became of it - also a stop right after its transaction -
+                    # what it wrote is known to the requests that look IDs up.
+                    with anyio.CancelScope(shield=True):
+                        await replacements.recorded(album_id)
+                if taken.refused:
+                    raise ChoiceRefused(taken.refused)
+                if taken.kept:
+                    raise InUse(taken.kept)
+                if not taken.removed:
+                    raise ChoiceRefused(
+                        "the release it is filled from added no songs that could be taken out"
+                    )
+                log.info(
+                    "%s: %d song(s) of %s taken out for another release the owner chose (%s)",
+                    _named(owned),
+                    taken.removed,
+                    current,
+                    chosen,
+                )
+                decision.removed = taken.removed
+                if complete:
+                    decision.outcome = "complete"
+                    return decision
+                try:
+                    await self._materialize(album_id, owned, decision)
+                except Exception as exc:
+                    # Whatever went wrong, the old release is out and the plan is written:
+                    # said as that, never as a change that did not happen.
+                    known = isinstance(exc, (CatalogError, NavidromeError, MaterializeError))
+                    reason = (getattr(exc, "reason", None) or str(exc)) if known else ""
+                    reason = reason or f"unexpected {type(exc).__name__}"
+                    log.warning("%s is not filled from %s now: %s", _named(owned), chosen, reason)
+                    await replacements.failed(album_id, reason)
+                    raise FillPending(reason, taken.removed) from exc
+                await self._record(album_id, decision, owned)
+                if decision.outcome == "filled":
+                    await self._record_parts(owned, decision, planned=False)
+                await replacements.finished(album_id)
+                return decision
+
+    async def _is_part_of(self, part_id: str, album_id: str) -> bool:
+        """Whether the album's saved match says it is a part of ``album_id``."""
+        row = await self.store.fetchone(
+            "SELECT reason FROM album_matches WHERE album_id = ? AND scope = ?"
+            " AND outcome = 'review'",
+            [part_id, self.scope],
+        )
+        reason = str(row["reason"] or "") if row is not None else ""
+        return reason.startswith("part of ") and f"(album {album_id})" in reason
+
+    async def finish_change(self, album_id: str) -> str:
+        """Finish a replacement a stop or a failed fill left (``change``): the album is
+        filled from the chosen release, by the plan its removal wrote. Returns "filled",
+        or "gone" when nothing is left to finish - the album is filled, or its match is no
+        longer that plan (the owner decided otherwise, its files changed). Any failure is
+        raised: the caller counts it (``Replacements.settle``: tried again later, a few
+        times; then only the album's next use, or the next start, fills it)."""
+        replacements = self.replacements
         group = await self._group_key(album_id)
         async with self._locks.hold(group), self._locks.hold(album_id):
+            left = await replacements.unfinished(album_id)
+            if left is None:
+                return "gone"
+            row = await self._row(album_id)
+            owned = await self._owned(album_id)
+            decision = None
+            if owned is not None and row is not None and row["release_ref"] == left.new_ref:
+                decision = await self._planned(album_id, owned, recover=True)
+            if decision is not None:
+                decision.reason = CHANGED
+            if await self._filled(album_id):
+                # Filled meanwhile (a use) - or a stop came between the chosen release's
+                # songs and the album's match, which is written now.
+                done = decision is not None and await self._in_library(left.new_ref)
+                if done and decision is not None and row["outcome"] == "deferred":
+                    await self._record(album_id, decision, owned)
+                await replacements.finished(album_id)
+                return "filled" if done else "gone"
+            if decision is None or decision.release is None or owned is None:
+                await replacements.finished(album_id)
+                return "gone"
+            await self._materialize(album_id, owned, decision, "a release change")
+            await self._record(album_id, decision, owned)
+            await replacements.finished(album_id)
+            return "filled" if decision.outcome == "filled" else "gone"
+
+    async def keep(self, album_id: str, *, expected: str | None = None) -> None:
+        """The owner keeps the album as it is: it is not matched again (in this scope).
+        Raises ``ChoiceRefused`` for an album that is filled, a catalog album, or not an
+        owned album; ``Changed`` when its match is no longer as the owner was shown it."""
+        group = await self._group_key(album_id)
+        async with self._locks.hold(group), self._locks.hold(album_id):
+            await self._expect(album_id, expected)
             filled = await self.store.fetchone(
                 "SELECT 1 FROM releases WHERE album_id = ? OR owned_album_id = ?",
                 [album_id, album_id],
@@ -1697,7 +2115,7 @@ class Fills:
 
         return write
 
-    async def recheck(self, album_id: str) -> Decision | None:
+    async def recheck(self, album_id: str, *, expected: str | None = None) -> Decision | None:
         """Recheck only a current negative, without filling or scheduling a fill.
 
         A concurrent keep, positive match, fill or cleanup wins unchanged. This action
@@ -1705,6 +2123,7 @@ class Fills:
         """
         group = await self._group_key(album_id)
         async with self._locks.hold(group), self._locks.hold(album_id), AsyncExitStack() as members:
+            await self._expect(album_id, expected)
             row = await self._row(album_id)
             if row is None or row["outcome"] != "none" or await self._filled(album_id):
                 return None
@@ -1714,15 +2133,17 @@ class Fills:
                 album_id, members=members, group=group, hold=True, recheck=True
             )
 
-    async def rematch(self, album_id: str) -> None:
+    async def rematch(self, album_id: str, *, expected: str | None = None) -> None:
         """Forget the current match for a later view/pass, serialized with owner actions.
 
-        A decision changed while this action waited is never erased. Filled albums and
-        their recovery records stay as they are.
+        A decision changed while this action waited is never erased - nor one changed
+        since the owner was shown it (``expected``: ``Changed``). Filled albums and their
+        recovery records stay as they are.
         """
         before = await self._row(album_id)
         group = await self._group_key(album_id)
         async with self._locks.hold(group), self._locks.hold(album_id), AsyncExitStack() as held:
+            await self._expect(album_id, expected)
             row = await self._row(album_id)
             if row is not None and row["release_ref"]:
                 # Cleanup/restoration owns this release lock, without taking group locks.
@@ -1733,6 +2154,7 @@ class Fills:
                 return
             if (dict(row) if row else None) != (dict(before) if before else None):
                 raise ChoiceRefused("the album match changed; reload Library before matching again")
+            await self._decidable()  # after the waits for the locks, before it is forgotten
             await self.store.execute(
                 "DELETE FROM album_matches WHERE album_id = ? AND scope = ?",
                 [album_id, self.scope],
@@ -1770,7 +2192,16 @@ class Fills:
         owned: OwnedAlbum | None,
         *,
         planned: bool = False,
+        conn: aiosqlite.Connection | None = None,
+        begun: bool = False,
     ) -> None:
+        """The album's match, written - or, with ``conn``, as a statement of the caller's
+        transaction. ``begun``: the decision records a write already begun (a fill, or its
+        failure): it is recorded whatever the task's decision guards say
+        (``guard_decisions``), and so is a statement of a caller's transaction, which
+        belongs to a write under way."""
+        if not begun and conn is None:
+            await self._decidable()
         self._any_shown = None  # asked again at the next list
         plan: str | None = None
         if (planned or decision.outcome == "deferred") and owned is not None:
@@ -1783,7 +2214,8 @@ class Fills:
                 if decision.shares:
                     data["shares"] = True
             plan = json.dumps(data)
-        await self.store.execute(
+        execute = self.store.execute if conn is None else conn.execute
+        await execute(
             "INSERT INTO album_matches (album_id, scope, outcome, release_ref, reason,"
             " candidates, attempts, checked_at, planned, plan, title, artist, owned_songs,"
             " release_tracks, picked, match_revision, owned_fingerprint) VALUES"

@@ -282,7 +282,9 @@ choice, and **Check again**, gives the review a new revision.
 At publication the catalog's release must be exactly the reviewed one. When the library
 refuses it (it would join an album that cannot take it, or the catalog no longer has or
 changed it), those files are not added and their rows say why; any other failure pauses
-the import, and **Resume import** tries again.
+the import, and **Resume import** tries again. The catalog's release counts toward your
+[daily cap on adding](how-it-works.md#the-daily-cap-on-adding) when an administrator has
+set one: at the cap the import pauses, saying so, and goes on when you resume it later.
 
 ### Your audio for catalog songs
 
@@ -346,6 +348,21 @@ suffix), and only when a scan and your own native read show the same song ID at 
 path - with the song's details as they were - does the import record it. Anything else
 puts the original back, and Navidrome must show it again (scan and your own exact read)
 before the intent goes; such a roll back is finished later when it cannot be at once.
+
+### Each artist of a joined credit
+
+A file whose artist text names several artists ("Lumen Vale, Orrin Pike") is published
+with the list of those artists when a catalog gives one within a few seconds and **Each
+artist of a joined credit** is on ([how it works](how-it-works.md#each-artist-of-a-joined-credit)).
+The import publishes a copy of your file with the list and the album artist Navidrome
+would show (the files of a new album of the import that all get one list also get the
+album artists list, all of them or none); your received file stays retained privately and
+unchanged, and the copy counts against your storage as well. A file published without a
+list may get it later in the same way, unless it was edited since it was imported: the copy
+takes the published file's place only once Navidrome shows the song with its ID and album,
+and the import's records then name the copy, so removing and restoring the import, and an
+upgrade, work on it. Turning the setting off puts your
+retained file back in the copy's place, unless the published file changed since.
 
 ## Bounds
 

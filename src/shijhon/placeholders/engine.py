@@ -38,17 +38,26 @@ import sqlite3
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import (
     AbstractAsyncContextManager,
     AsyncExitStack,
     asynccontextmanager,
     contextmanager,
+    nullcontext,
 )
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 import anyio
@@ -73,6 +82,9 @@ from shijhon.placeholders.backing import OwnedRecordings
 from shijhon.placeholders.layout import Layout, LayoutError
 from shijhon.placeholders.silence import SilenceMaker, samples_for
 from shijhon.store import Store
+
+if TYPE_CHECKING:
+    from shijhon.placeholders.daily_cap import DailyCap, Hold
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +125,9 @@ COMPENSATION_SECONDS = 5.0
 # their write is refused; such a request waits less for Navidrome's answer to start
 # (``delivery/intercept.py``), so only requests one after another make a write wait it out.
 LISTING_WAIT_SECONDS = 60.0
+# How long tracks' artist items are asked for by default, and how many at once.
+CREDITS_SECONDS = 3.0
+CREDITS_AT_ONCE = 10
 
 
 @dataclass
@@ -121,6 +136,9 @@ class Removal:
     kept: list[str] = field(default_factory=list)  # why they stay (in use): nothing removed
     # Kept once its files were gone, and not confirmed back yet: the repairs finish it.
     unfinished: bool = False
+    # Why nothing could be decided, for a caller that asks who uses it (the cleanup's
+    # removal of one release): no records of use to read, or not this library's.
+    refused: str = ""
 
 
 @dataclass
@@ -200,8 +218,27 @@ class PlaceholderEngine:
         )
         # New placeholders of recordings the owner has on other albums play those files.
         self.backing = backing
+        # The daily cap on adding (``placeholders.daily_cap``), asked where a release's
+        # row is written: a release added, and one added back from its record. None: no
+        # cap (tests of the engine alone).
+        self.daily_cap: DailyCap | None = None
+        # The cap's place for the release being written, by release: one for all the
+        # steps of one write (added back from its record, else added anew), which run
+        # under the release's lock - (the place, the steps that asked for it).
+        self._places: dict[str, tuple[Hold | None, int]] = {}
         # Test hook: adjust tags before writing, e.g. to force a split.
         self.tag_hook: Callable[[dict[str, list[str]]], None] | None = None
+        # The artist items of tracks the catalog listed with neither artists nor their items
+        # (``Catalog.artists_of``; track -> its items, the unknown left out), so that a credit
+        # naming several artists is written as each of them (``tags.listed_artists``): asked
+        # by the background repair (``placeholders.credits``), never while writing - a
+        # write keeps to the catalog requests it makes. None: not asked.
+        self.credits: (
+            Callable[
+                [Sequence[CatalogTrack]], Awaitable[Mapping[CatalogRef, tuple[CatalogRef, ...]]]
+            ]
+            | None
+        ) = None
         # Releases taken out: old song IDs (and catalog albums' album IDs) -> the
         # release; loaded on first use.
         self._removed: dict[str, str] | None = None
@@ -622,22 +659,28 @@ class PlaceholderEngine:
         # Taken out as unused: back from its record first (the same song IDs); a record
         # that does not fit is dropped, and its old IDs stay known until the release is made
         # anew (a stream of one waits for it: never Navidrome's silent file meanwhile).
-        await self._restore_held(
-            ref,
-            cover,
-            added_as=(owned_album_id,),
-            owned_now=set(links),
-            keep_ids=True,
-            anew=anew,
-            share_positions=share_positions,
-        )
+        # One place under the daily cap for both steps: refused here, nothing is touched,
+        # and a record is never dropped for a release that may then not be added anew.
+        await self._place(ref)
         try:
-            return await self._materialize(
-                release, owned_album_id, links, only, cover, share_positions
+            await self._restore_held(
+                ref,
+                cover,
+                added_as=(owned_album_id,),
+                owned_now=set(links),
+                keep_ids=True,
+                anew=anew,
+                share_positions=share_positions,
             )
+            try:
+                return await self._materialize(
+                    release, owned_album_id, links, only, cover, share_positions
+                )
+            finally:
+                if ref in self._removed_refs and await self.removed_record(ref) is None:
+                    await self._forget_removed(ref, in_database=False)
         finally:
-            if ref in self._removed_refs and await self.removed_record(ref) is None:
-                await self._forget_removed(ref, in_database=False)
+            self._give_up(ref)
 
     async def _fits_owned(
         self,
@@ -697,6 +740,27 @@ class PlaceholderEngine:
         if self.writes_refused is None:
             return None
         return await self.writes_refused(fresh=True)
+
+    async def credited(
+        self, tracks: Sequence[CatalogTrack], seconds: float = CREDITS_SECONDS
+    ) -> list[CatalogTrack]:
+        """The tracks, with the artist items ``credits`` finds for those that need them
+        (``tags.needs_credits``), asked for a few at a time within ``seconds`` in all:
+        those not answered in time stay as they are."""
+        wanting = [t for t in tracks if tagging.needs_credits(t)]
+        if not wanting or self.credits is None:
+            return list(tracks)
+        found: dict[CatalogRef, tuple[CatalogRef, ...]] = {}
+        with anyio.move_on_after(seconds) as waited:
+            for start in range(0, len(wanting), CREDITS_AT_ONCE):
+                found.update(await self.credits(wanting[start : start + CREDITS_AT_ONCE]))
+        if waited.cancelled_caught:
+            log.info(
+                "artists of %d of %d song(s) not found in time; written as credited",
+                sum(1 for t in wanting if t.ref not in found),
+                len(wanting),
+            )
+        return [replace(t, artist_refs=found[t.ref]) if found.get(t.ref) else t for t in tracks]
 
     async def _writable(self) -> None:
         if why := await self.refused():
@@ -813,7 +877,16 @@ class PlaceholderEngine:
         before = await self._album_state(owned_album_id or result.album_id or None)
         write_cover = cover is not None and owned is None and not existing
         ref = str(release.ref)
-        pending = await self._intend(ref, folder, planned, write_cover, new_folder=not existing)
+        # A release new to the library, added for an account under a daily cap: its place
+        # first, or it is refused here, before anything is written.
+        placed = existing is None
+        hold = await self._place(ref) if placed else None
+        try:
+            pending = await self._intend(ref, folder, planned, write_cover, new_folder=not existing)
+        except BaseException:
+            if placed:
+                self._give_up(ref)
+            raise
         started = time.monotonic()
         recorded = False
         moved: list[bool] = []  # (set once the first file moves into the library)
@@ -833,7 +906,7 @@ class PlaceholderEngine:
                 if not s.get("missing")
             }
             result.created = {item.track.ref: songs[item.relative] for item in planned}
-            await self._record(release, result, planned, owned_album_id, existing is None)
+            await self._record(release, result, planned, owned_album_id, existing is None, hold)
             recorded = True
             self._ended(pending)
             await self._at("recorded")
@@ -855,7 +928,39 @@ class PlaceholderEngine:
                 log.warning("materialize failed: %s", type(exc).__name__)
                 raise MaterializeError(f"unexpected {type(exc).__name__}") from exc
             raise
+        finally:
+            if placed:
+                self._give_up(ref)
         return result, planned, [*known.values(), *links.values()]
+
+    async def _place(self, ref: str) -> Hold | None:
+        """The daily cap's place for the release ``ref``, about to be written (None: not
+        counted); every call is paired with a ``_give_up``. Raises the cap's refusal, a
+        ``MaterializeError``: nothing may be written. The steps of one write share one
+        place (they run under the release's lock, one write at a time)."""
+        taken = self._places.get(ref)
+        if taken is not None:
+            self._places[ref] = (taken[0], taken[1] + 1)
+            return taken[0]
+        if self.daily_cap is None or not self.daily_cap.on:
+            return None  # no cap is set: nothing is asked or kept
+        hold = await self.daily_cap.reserve(ref)
+        self._places[ref] = (hold, 1)
+        return hold
+
+    def _give_up(self, ref: str) -> None:
+        """A step of the release's write ended: with its last one, the place is free.
+        (Nothing was kept for a write that began while no cap was set.)"""
+        taken = self._places.get(ref)
+        if taken is None:
+            return
+        hold, steps = taken
+        if steps > 1:
+            self._places[ref] = (hold, steps - 1)
+            return
+        del self._places[ref]
+        if self.daily_cap is not None:
+            self.daily_cap.release(hold)
 
     async def back_placeholders(
         self,
@@ -1122,9 +1227,12 @@ class PlaceholderEngine:
         planned: list[_Planned],
         owned_album_id: str | None,
         new_release: bool,
+        hold: Hold | None = None,
     ) -> None:
         now = self.clock()
         async with self.store.transaction() as conn:
+            if self.daily_cap is not None:
+                await self.daily_cap.record(conn, hold)  # counted with its record
             if new_release:
                 await conn.execute(
                     "INSERT INTO releases (ref, folder, album_id, owned_album_id, title, artist,"
@@ -1242,6 +1350,7 @@ class PlaceholderEngine:
                 self._removing_albums.add(str(release["album_id"]))
                 try:
                     await self._take_out(release, rows)
+                    await self._at("taken out")
                     if check is not None and (
                         why := await check(await self._release_rows(ref), True)
                     ):
@@ -1284,6 +1393,7 @@ class PlaceholderEngine:
                         self._removed[old] = ref
                     if catalog:
                         self._removed_albums.add(str(release["album_id"]))
+        await self._at("removed")
         await anyio.to_thread.run_sync(self._discard_cover, str(release["folder"]))
         log.info("took out %d placeholder(s) of %s - %s (%s)", len(rows), release["artist"],
                  release["title"], ref)  # fmt: skip
@@ -1671,6 +1781,43 @@ class PlaceholderEngine:
         anew: Callable[[], Awaitable[None]] | None = None,
         share_positions: bool = False,
     ) -> str | None:
+        """``_restore_counted`` with the daily cap's place: a release added back for an
+        account under a cap is refused here (``MaterializeError``), before its record is
+        looked at - nothing is written and the record stays. A record that is dropped
+        instead of used gives the place up again (the release, added anew, asks for its
+        own). While no cap is set, nothing here is asked or read."""
+        capped = self.daily_cap is not None and self.daily_cap.on
+        if capped and ref not in self._places and await self.removed_record(ref) is None:
+            return None  # nothing to add back: no place is asked for
+        hold = await self._place(ref)
+        try:
+            return await self._restore_counted(
+                ref,
+                cover,
+                added_as=added_as,
+                owned_now=owned_now,
+                also=also,
+                keep_ids=keep_ids,
+                anew=anew,
+                share_positions=share_positions,
+                hold=hold,
+            )
+        finally:
+            self._give_up(ref)
+
+    async def _restore_counted(
+        self,
+        ref: str,
+        cover: bytes | None,
+        *,
+        added_as: tuple[str | None] | None = None,
+        owned_now: set[CatalogRef] | None = None,
+        also: Statements | None = None,
+        keep_ids: bool = False,
+        anew: Callable[[], Awaitable[None]] | None = None,
+        share_positions: bool = False,
+        hold: Hold | None = None,
+    ) -> str | None:
         """``restore_release`` under the release's lock. ``added_as`` (a commit or a fill of
         the release: the owned album it fills, or None): the record is used only if it was
         that - a catalog album, or a fill of that album -, else it is dropped (the release
@@ -1803,6 +1950,8 @@ class PlaceholderEngine:
             ids = {str(r["song_id"]): present[str(r["placeholder_path"])] for r in rows}
             async with self.store.transaction() as conn:
                 await self._restore_rows(conn, record, album_id, ids)
+                if self.daily_cap is not None:
+                    await self.daily_cap.record(conn, hold)  # counted with its rows
                 if also is not None:
                     await also(conn)
             self._ended(pending)
@@ -1914,45 +2063,31 @@ class PlaceholderEngine:
             row = await self._placeholder(song_id)
             if row["state"] != "placeholder":
                 raise ReplaceError("delivered audio is kept as it is")
+            if row["track_ref"] != str(track.ref) or row["release_ref"] != str(release.ref):
+                # The song ID stands for another track now (its album was filled from
+                # another release, whose song Navidrome gave this ID): never rewritten with
+                # the track a caller read before that.
+                raise ReplaceError("the song is another release's track now")
             stored = await self.store.fetchone(
                 "SELECT album_tags FROM releases WHERE ref = ?", [row["release_ref"]]
             )
             if stored is None:
                 raise ReplaceError("the release is not recorded")
             comments = tagging.placeholder_tags(json.loads(stored["album_tags"]), track, release)
+            previous = json.loads(row["tags"])
+            if (
+                "artists" not in comments
+                and "artists" in previous
+                and row["artist"] == track.artist
+            ):
+                # (The same credit, from an answer without its artists: they stay listed.)
+                comments["artists"] = previous["artists"]
             if comments == json.loads(row["tags"]) and track.duration_ms == row["duration_ms"]:
                 return False
-            await self._swappable()
-            path: str = row["placeholder_path"]
-            try:
-                before = await self.navidrome.song(song_id)
-            except NavidromeError as exc:
-                raise ReplaceError(f"Navidrome could not be asked ({exc})") from None
-            album_id = before.get("albumId") if before else None
-            target = self._inside(path)
-            try:
-                self.layout.ensure()
-                await self._reconcile_placeholder(row, json.loads(row["tags"]))
-                staged = await self._silent_file(
-                    track.duration_ms, comments, not_size=target.stat().st_size
-                )
-            except (OSError, ValueError) as exc:
-                raise ReplaceError(f"cannot write the placeholder ({type(exc).__name__})") from None
-            backup = self._backup_path(song_id, ".flac")
-
-            def swap() -> None:
-                os.replace(target, backup)
-                os.replace(staged, target)
-                durable.sync_dirs(target.parent, self.layout.staging)
-
-            await self._swap(
-                song_id,
-                "retag",
-                swap=swap,
-                at=path,
-                album_id=album_id,
-                staged=staged,
-                backup=backup,
+            await self._rewrite(
+                row,
+                comments,
+                track.duration_ms,
                 update=(
                     "UPDATE placeholders SET title = ?, artist = ?, isrc = ?, disc = ?,"
                     " track = ?, duration_ms = ?, tags = ?, backing_song_id = ? WHERE song_id = ?",
@@ -1970,13 +2105,158 @@ class PlaceholderEngine:
                         song_id,
                     ],
                 ),
-                done=lambda r: (
-                    json.loads(r["tags"]) == comments and r["duration_ms"] == track.duration_ms
-                ),
-                unconfirmed="the song ID or album changed; the placeholder was restored",
-                failed="retagging failed ({}); the placeholder was restored",
             )
             return True
+
+    async def correct_length(self, song_id: str, duration_ms: int) -> bool:
+        """A silent placeholder's length corrected in place (the library pass's reading of
+        its release's track list): silence of the new length under the same name, with the
+        tags it has - its title, credits, ISRC, position, the recording that plays for it
+        and its song ID stay (checked as a retag's are). Returns whether it changed;
+        delivered audio is left as it is (``ReplaceError``)."""
+        async with self.lock_for(f"song:{song_id}"):
+            await self._recover(song_id)  # a swap of it a stop interrupted, first
+            row = await self._placeholder(song_id)
+            if row["state"] != "placeholder":
+                raise ReplaceError("delivered audio is kept as it is")
+            if duration_ms == row["duration_ms"]:
+                return False
+            await self._rewrite(
+                row,
+                json.loads(row["tags"]),
+                duration_ms,
+                update=(
+                    "UPDATE placeholders SET duration_ms = ? WHERE song_id = ?",
+                    [duration_ms, song_id],
+                ),
+            )
+            return True
+
+    async def recredit(self, song_id: str, track: CatalogTrack) -> bool:
+        """Only a silent placeholder's credits rewritten in place (the credits' repair):
+        each artist of its credit listed (``artists``), as ``track`` names them or their
+        items, and its album's listed artists (``albumartists``, from the release's album
+        tags). Everything is read again here, under the song's lock: the song as its row
+        has it now gets the lists, and its title, ISRC, length, position and other tags
+        stay the row's - whatever ``track`` says of them (it was read before the catalog
+        was asked, and the song may have been corrected since). Not done (False) when the
+        row's credit is no longer the one ``track`` was resolved for, or nothing changes.
+        Delivered audio is left as it is (``ReplaceError``)."""
+        async with self.lock_for(f"song:{song_id}"):
+            await self._recover(song_id)  # a swap of it a stop interrupted, first
+            row = await self._placeholder(song_id)
+            if row["state"] != "placeholder":
+                raise ReplaceError("delivered audio is kept as it is")
+            if row["artist"] != track.artist:
+                return False  # (another credit by now: asked about at a later pass)
+            stored = await self.store.fetchone(
+                "SELECT album_tags, data FROM releases WHERE ref = ?", [row["release_ref"]]
+            )
+            if stored is None:
+                raise ReplaceError("the release is not recorded")
+            try:
+                release = release_from_data(json.loads(stored["data"]))
+                album_tags = json.loads(stored["album_tags"])
+            except (ValueError, KeyError, TypeError):
+                raise ReplaceError("the release's record cannot be read") from None
+            previous: dict[str, list[str]] = json.loads(row["tags"])
+            comments = dict(previous)
+            credited = replace(
+                _row_track(row), artists=track.artists, artist_refs=track.artist_refs
+            )
+            if listed := tagging.track_artists(credited, release):
+                comments["artists"] = listed
+            if album := album_tags.get("albumartists"):
+                comments[tagging.VORBIS_KEY["albumartists"]] = album
+            if comments == previous:
+                return False
+            # (The credit's artists listed where they were not: the same recording.)
+            relisted = "artists" in previous and previous["artists"] != comments.get("artists")
+            await self._rewrite(
+                row,
+                comments,
+                int(row["duration_ms"]),
+                update=(
+                    "UPDATE placeholders SET tags = ?, backing_song_id = ? WHERE song_id = ?",
+                    [json.dumps(comments), None if relisted else row["backing_song_id"], song_id],
+                ),
+            )
+            return True
+
+    async def _rewrite(
+        self,
+        row: Any,
+        comments: dict[str, list[str]],
+        duration_ms: int,
+        *,
+        update: tuple[str, list[Any]],
+    ) -> None:
+        """Under the song's lock: a silent placeholder written anew at its path - silence
+        of ``duration_ms`` with ``comments`` - and its row's ``update`` once a targeted
+        scan shows the same song ID in the same album there; otherwise the old file is
+        put back and :class:`ReplaceError` raised (``_swap``; its steps are a retag's)."""
+        song_id = str(row["song_id"])
+        await self._swappable()
+        path: str = row["placeholder_path"]
+        try:
+            before = await self.navidrome.song(song_id)
+        except NavidromeError as exc:
+            raise ReplaceError(f"Navidrome could not be asked ({exc})") from None
+        album_id = before.get("albumId") if before else None
+        target = self._inside(path)
+        try:
+            self.layout.ensure()
+            await self._reconcile_placeholder(row, json.loads(row["tags"]))
+            staged = await self._silent_file(duration_ms, comments, not_size=target.stat().st_size)
+        except (OSError, ValueError) as exc:
+            raise ReplaceError(f"cannot write the placeholder ({type(exc).__name__})") from None
+        backup = self._backup_path(song_id, ".flac")
+
+        def swap() -> None:
+            os.replace(target, backup)
+            os.replace(staged, target)
+            durable.sync_dirs(target.parent, self.layout.staging)
+
+        await self._swap(
+            song_id,
+            "retag",
+            swap=swap,
+            at=path,
+            album_id=album_id,
+            staged=staged,
+            backup=backup,
+            update=update,
+            done=lambda r: json.loads(r["tags"]) == comments and r["duration_ms"] == duration_ms,
+            unconfirmed="the song ID or album changed; the placeholder was restored",
+            failed="retagging failed ({}); the placeholder was restored",
+        )
+
+    async def list_album_artists(self, ref: str, artists: list[str]) -> str | None:
+        """Add the album artists (``albumartists``) to a catalog-only release's album tags,
+        which its placeholders get when retagged and its later tracks when written: the
+        album stays the album (Navidrome's album ID is from the one ``albumartist``). Returns
+        the album tags before, to put back (``set_album_tags``) if a retag finds the album
+        changed after all; None: nothing to do (a filled owned album keeps its owned files'
+        album tags; the tag is there already)."""
+        async with self.lock_for(ref):
+            row = await self.store.fetchone(
+                "SELECT album_tags, owned_album_id FROM releases WHERE ref = ?", [ref]
+            )
+            if row is None or row["owned_album_id"]:
+                return None
+            tags = json.loads(row["album_tags"])
+            if "albumartists" in tags:
+                return None
+            await self.set_album_tags(ref, {**tags, "albumartists": artists}, held=True)
+            return str(row["album_tags"])
+
+    async def set_album_tags(
+        self, ref: str, tags: Mapping[str, list[str]], *, held: bool = False
+    ) -> None:
+        async with nullcontext() if held else self.lock_for(ref):
+            await self.store.execute(
+                "UPDATE releases SET album_tags = ? WHERE ref = ?", [json.dumps(tags), ref]
+            )
 
     async def placeholder_row(self, song_id: str) -> Any:
         """A catalog song's placeholder row (None: the song is no placeholder)."""
@@ -2000,6 +2280,7 @@ class PlaceholderEngine:
         source_fd: int | None = None,
         suffix: str | None = None,
         pin: str | None = None,
+        fits: Callable[[Any], Awaitable[str | None]] | None = None,
     ) -> str:
         """Put delivered audio where the placeholder is, keeping the delivered format.
         Returns the new library-relative path. On any failure before the row says so, the
@@ -2007,12 +2288,17 @@ class PlaceholderEngine:
         ``suffix``: the audio read from an open descriptor instead of ``delivered``
         (a music import's retained file, never opened by name). ``pin``: the music
         import item whose own audio this is - never expired as a cache, reverted only for
-        that import (``revert_to_placeholder``)."""
+        that import (``revert_to_placeholder``). ``fits``: asked with the song's row as it
+        is now, under the song's lock, before anything is touched - why the audio is not
+        this song's after all (its row changed while the audio was fetched: a length
+        corrected since), or None; refused, the placeholder stays as it is."""
         async with self.lock_for(f"song:{song_id}"):
             await self._recover(song_id)  # a swap of it a stop interrupted, first
             row = await self._placeholder(song_id)
             if row["state"] != "placeholder":
                 raise ReplaceError("already replaced")
+            if fits is not None and (why := await fits(row)) is not None:
+                raise ReplaceError(why)
             await self._swappable()
             comments: dict[str, list[str]] = json.loads(row["tags"])
             old: str = row["placeholder_path"]
@@ -2871,7 +3157,8 @@ def _recording_changed(row: Any, track: CatalogTrack, comments: dict[str, list[s
         or row["title"] != track.title
         or row["artist"] != track.artist
         or row["duration_ms"] != track.duration_ms
-        or previous.get("artists") != comments.get("artists")
+        # (The credit's artists listed where they were not: the same recording.)
+        or ("artists" in previous and previous.get("artists") != comments.get("artists"))
         or previous.get("itunesadvisory") != comments.get("itunesadvisory")
     )
 

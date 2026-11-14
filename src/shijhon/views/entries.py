@@ -30,7 +30,7 @@ from shijhon.catalog.model import (
     artwork_url,
     item_artist,
 )
-from shijhon.matching.normalize import credit_names, featured_names, fold
+from shijhon.matching.normalize import credited_names, featured_names, fold
 from shijhon.views.ids import album_id, artist_id, song_id
 
 log = logging.getLogger(__name__)
@@ -99,12 +99,15 @@ def _people(
     source: CatalogRef,
     kind: str,
     owner: tuple[str, tuple[CatalogRef, ...]] | None = None,
+    title: str = "",
 ) -> list[dict[str, str]]:
     """Artist references, each with a name and an ID: the library artist of that name, else
     the catalog's artist item - paired by position when the catalog lists as many as
     the credit names, split on "feat." or else on every separator - else a reference through
     ``source``, the song ("t") or album ("a") crediting it. ``owner``: the album artist
-    (credit and items) of a song, whose name gets its item."""
+    (credit and items) of a song, whose name gets its item. ``title``: a song's, which
+    keeps the credit whole when it names a featured artist, as its placeholder's tags do
+    (``credited_names``)."""
 
     def person(name: str, ref: CatalogRef | None, index: int) -> dict[str, str]:
         if ref is None and owner is not None and len(owner[1]) == 1:
@@ -117,10 +120,9 @@ def _people(
         return [person(n, refs[i] if paired else None, i) for i, n in enumerate(names)]
     if not credit:
         return [person("", refs[0], 0)] if refs else []
+    if parts := credited_names(credit, len(refs), title):
+        return [person(n, r, i) for i, (n, r) in enumerate(zip(parts, refs, strict=True))]
     featured = featured_names(credit) or [credit]
-    for parts in (featured, credit_names(credit)):
-        if len(parts) > 1 and len(parts) == len(refs):
-            return [person(n, r, i) for i, (n, r) in enumerate(zip(parts, refs, strict=True))]
     if refs:  # one artist item for the credit ("Salt, Ash & Ember", or "A & B" as one)
         ident = library.get(fold(credit)) or library.get(fold(featured[0]))
         return [{"id": ident or artist_id(refs[0]), "name": credit}]
@@ -212,7 +214,9 @@ def song_entry(
     if not refs and release and track.artist == release.artist:
         refs = release.artist_refs
     owner = (release.artist, release.artist_refs) if release else None
-    artists = _people(track.artists, refs, track.artist, library, track.ref, "t", owner)
+    artists = _people(
+        track.artists, refs, track.artist, library, track.ref, "t", owner, track.title
+    )
     album_artists = (
         _people(release.artists, release.artist_refs, release.artist, library, release.ref, "a")
         if release

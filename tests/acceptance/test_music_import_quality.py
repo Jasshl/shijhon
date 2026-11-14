@@ -41,6 +41,7 @@ IN_CATALOG = {
     "glass": demo_release("9100002", "Glass Hours", "Tide Paper", 2),
     "paper": demo_release("9100003", "Paper Garden", "Glass Orchard", 2),
     "salt": demo_release("9100004", "Salt Lines", "Glass Orchard", 2),
+    "capped": demo_release("9100005", "Capped Tides", "Quiet Limit", 2),
 }
 # Not in the catalog.
 EMBER = Album("Quiet Hollow", "Ember Road",
@@ -243,3 +244,62 @@ def test_each_persons_own_minimum(world: World) -> None:
     assert all(item["outcome"] == "new" for item in reviewed["items"])
     done = importer.approve(reviewed)
     assert done["complete_files"] == 2 and len(importer.published(done["id"])) == 2
+
+
+def test_the_catalogs_version_is_added_for_the_importer_and_waits_at_their_daily_cap(
+    world: World,
+) -> None:
+    """The catalog's version of a low-quality album is added for the person whose import
+    it is: at their daily cap on adding the import pauses, saying why, with nothing added;
+    resumed once there is room, it goes on, and the release is counted for them."""
+    importer = world.importer(GATED[0])
+    delivery = world.delivery
+    cap, store = delivery.app.services.daily_cap, delivery.app.services.store
+    assert cap is not None
+    release = IN_CATALOG["capped"]
+
+    async def earlier() -> None:
+        await store.execute(
+            "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+            [importer.owner, "demo:earlier", time.time() - 3600],
+        )
+
+    async def state() -> tuple[bool, list[str]]:
+        added = await store.fetchone("SELECT 1 FROM releases WHERE ref = ?", [str(release.ref)])
+        rows = await store.fetchall(
+            "SELECT release_ref FROM release_additions WHERE user_id = ? ORDER BY added_at",
+            [importer.owner],
+        )
+        return added is not None, [str(r["release_ref"]) for r in rows]
+
+    def wait(job: str, wanted: str) -> dict[str, Any]:
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            status = importer.status(job)
+            if status["state"] == wanted:
+                return status
+            time.sleep(0.1)
+        pytest.fail(f"the import did not reach {wanted}: {status}")
+
+    reviewed = importer.review(files_of(release, "mp3"), "capped")
+    assert {i["state"] for i in reviewed["items"]} == {"catalog"}
+    delivery.server.call(earlier)
+    cap.limit = 1
+    try:
+        path = f"{importer.base}/{reviewed['id']}"
+        importer.post(path + "/approve", {"revision": reviewed["revision"], "request_key": "go"})
+        paused = wait(reviewed["id"], "paused")
+        assert paused["error"] == "daily_limit"
+        assert delivery.server.call(state) == (False, ["demo:earlier"])
+        assert {i["state"] for i in paused["items"]} == {"catalog"}  # nothing given up
+        # The page has the code's words.
+        words = importer.browser.http.get("/shijhon/static/music_imports.js").text
+        assert "daily_limit: 'The daily limit of added releases is reached" in words
+        cap.limit = 2
+        importer.post(path + "/resume", {})
+        done = wait(reviewed["id"], "done")
+        assert {i["state"] for i in done["items"]} == {"linked"}
+        assert delivery.server.call(state) == (True, ["demo:earlier", str(release.ref)])
+    finally:
+        cap.limit = 0
+        delivery.server.call(lambda: store.execute("DELETE FROM release_additions"))

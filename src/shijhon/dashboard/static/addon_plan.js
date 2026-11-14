@@ -45,7 +45,8 @@
   const seconds = (value) => `${number(value)} s`;
   const listed = (names) =>
     names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-  const live = (addon) => !addon.off;
+  // (An add-on whose operator must sign in is passed over in plays while that lasts.)
+  const live = (addon) => !addon.off && !addon.passed;
   const sum = (steps) => steps.reduce((total, step) => total + step.seconds, 0);
   const stepOf = (addon) => plan.steps.findIndex((step) => step.addons.includes(addon));
   // When each step begins.
@@ -95,6 +96,11 @@
     const line = make("span", "plan-name-line", words);
     if (addon.off) {
       line.textContent = "Off: passed over";
+    } else if (addon.attention) {
+      // It said it needs its operator (to sign in): passed over until it answers otherwise.
+      const tag = make("span", "tag tag-misses", line);
+      tag.textContent = addon.attention;
+      tag.title = "Passed over for now: see its row under Your add-ons";
     } else if (!addon.tried) {
       line.textContent = "No plays yet";
     } else {

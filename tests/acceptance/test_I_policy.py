@@ -18,6 +18,7 @@ that album goes to review as its part. Log lines name the album and its owned so
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,6 +28,7 @@ import anyio
 import pytest
 
 from shijhon.fill.fills import ChoiceRefused
+from shijhon.placeholders.daily_cap import MESSAGE, DailyLimitReached, adding_for
 from tests.acceptance.test_J_contract import check
 from tests.conftest import NavidromeFactory
 from tests.harness.collection import prepare_collection
@@ -34,6 +36,7 @@ from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
 from tests.harness.replay import Replay
+from tests.harness.subsonic import SubsonicClient
 
 # The one catalog release: "Northern Letters (Remastered)", 17 tracks (demo:900000021).
 PART = Album(
@@ -317,6 +320,66 @@ def test_a_shown_album_owned_enough_is_filled(
     filled = wait_for(world, enough, "filled")
     assert (filled["owned_songs"], filled["release_tracks"]) == (3, 14)
     assert songs(world, enough) == 14
+
+
+def test_a_first_use_at_the_daily_cap_fills_nothing_and_is_no_failed_fill(
+    policy_world: tuple[DeliveryWorld, Replay],
+) -> None:
+    """An album filled on its first use is added for the account that uses it. At that
+    account's daily cap on adding, a use of one of its catalog songs is answered with the
+    cap's error and a use of the album itself goes on without the fill; nothing is
+    written, and the album's fill has not failed: it stays shown complete, with its plan
+    and no wait, for the next use."""
+    world, _ = policy_world
+    cap, fills = world.services.daily_cap, world.services.fills
+    assert cap is not None and fills is not None
+    account = world.nd.create_user("lena", "lena-password")
+    lena = SubsonicClient(world.server.base_url, "lena", "lena-password", client="capped")
+    stones = album_id(world, STONES.title)
+    assert lena.ok("getAlbum", {"id": stones})["album"]["songCount"] == 9  # shown complete
+    deferred = wait_for(world, stones, "deferred")
+    album = lena.ok("getAlbum", {"id": "sh.al.demo.900000133"})["album"]
+    track = next(s for s in album["song"] if s["id"].startswith("sh.tr."))
+
+    async def earlier() -> None:
+        await world.services.store.execute(
+            "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+            [account, "demo:earlier", time.time() - 3600],
+        )
+
+    async def state() -> tuple[list[str], list[str]]:
+        store = world.services.store
+        releases = await store.fetchall("SELECT ref FROM releases")
+        counted = await store.fetchall("SELECT release_ref FROM release_additions")
+        return [str(r["ref"]) for r in releases], [str(r["release_ref"]) for r in counted]
+
+    async def fill_for_the_account() -> None:
+        with adding_for(account, admin=False):
+            await fills.fill_album(stones, "a test")
+
+    world.server.call(earlier)
+    cap.limit = 1
+    try:
+        with collected("shijhon.views.commits") as lines:
+            refused = lena.request("star", {"id": track["id"]}).json()["subsonic-response"]
+            assert refused["error"] == {"code": 0, "message": MESSAGE}
+            # The album itself: the action goes on, the fill does not.
+            lena.ok("star", {"albumId": stones})
+            lena.ok("setRating", {"id": stones, "rating": "3"})
+        assert not [line for line in lines if "failed" in line]  # said, not as a failure
+        assert any("the daily limit of added releases is reached" in line for line in lines)
+        with pytest.raises(DailyLimitReached):  # the fill itself, behind both
+            world.server.call(fill_for_the_account)
+        assert songs(world, stones) == 1 and row(world, stones) == deferred
+        releases, counted = world.server.call(state)
+        assert "demo:900000133" not in releases and counted == ["demo:earlier"]
+        assert lena.ok("getAlbum", {"id": stones})["album"]["songCount"] == 9
+        assert lena.ok("getAlbum", {"id": stones})["album"]["userRating"] == 3
+    finally:
+        cap.limit = 0
+        lena.ok("unstar", {"albumId": stones})
+        world.server.call(lambda: world.services.store.execute("DELETE FROM release_additions"))
+        lena.close()
 
 
 def test_a_pending_album_s_catalog_ids_show_it_and_the_queue_fills_it_during_a_rest(

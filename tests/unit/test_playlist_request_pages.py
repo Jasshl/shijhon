@@ -28,7 +28,7 @@ from shijhon.dashboard.playlists import Pages as MixPages
 from shijhon.playlists import edits as owner_edits
 from shijhon.playlists.model import Definition, PlaylistError, Track
 from shijhon.playlists.requests import PlaylistRequest
-from shijhon.playlists.service import Playlists
+from shijhon.playlists.service import POSTPONED, Playlists
 from tests.harness.dashboard import forms
 from tests.unit.test_playlist_edits import PUBLISHED, Model, publish, refresh, refreshing, titles
 from tests.unit.test_playlist_requests import connected, service_at
@@ -72,7 +72,7 @@ def dashboard(service: Playlists) -> SimpleNamespace:
         )
 
     return SimpleNamespace(
-        services=SimpleNamespace(playlists=service),
+        services=SimpleNamespace(playlists=service, catalog=None, radio=None),
         _render=render,
         _see=lambda where: RedirectResponse(f"/shijhon{where}", 303),
         agent_access=lambda: ("", False),  # no agent address
@@ -744,5 +744,59 @@ def test_mix_preview_action_queues_a_reviewed_run(tmp_path: Path) -> None:
             response = await pages.action(request, SESSION)
             assert response.status_code == 303
             assert service.repo.enqueue.await_args.kwargs.get("review") is True
+
+    anyio.run(run)
+
+
+def test_the_mix_page_says_how_many_songs_the_daily_cap_left_out(tmp_path: Path) -> None:
+    """A discovery mix published without the songs over its account's daily cap on adding
+    says so on its page; a run that left none out says nothing."""
+
+    async def run() -> None:
+        async with service_at(tmp_path / "db") as service:
+            store = service.repo.store
+            mix = Definition(name="Evening discovery", count=3)
+            for ident, data in (("capped", {"daily_limit": 2}), ("whole", {})):
+                await store.execute(
+                    "INSERT INTO playlist_mixes(id,owner,definition) VALUES (?,?,?)",
+                    [ident, "owner", mix.model_dump_json()],
+                )
+                await store.execute(
+                    "INSERT INTO playlist_runs(id,mix,created,state,data)"
+                    " VALUES (?,?,?,'published',?)",
+                    [f"run-{ident}", ident, time.time(), json.dumps(data)],
+                )
+            said = "left out of this playlist because the daily limit of added releases"
+            async with web(service, MixPages) as client:
+                capped = plain((await client.get("/shijhon/playlists/capped")).text)
+                assert f"2 songs were {said} was reached. The rest was published." in capped
+                assert said not in plain((await client.get("/shijhon/playlists/whole")).text)
+
+    anyio.run(run)
+
+
+def test_the_mix_page_shows_a_refresh_the_daily_cap_put_off_as_that(tmp_path: Path) -> None:
+    """A scheduled refresh the account's daily cap on adding left nothing of is put off:
+    its page says so in plain words, not as an error, and offers no retry of a failure."""
+
+    async def run() -> None:
+        async with service_at(tmp_path / "db") as service:
+            store = service.repo.store
+            mix = Definition(name="Evening discovery", count=3)
+            await store.execute(
+                "INSERT INTO playlist_mixes(id,owner,definition,enabled) VALUES (?,?,?,1)",
+                ["capped", "owner", mix.model_dump_json()],
+            )
+            await store.execute(
+                "INSERT INTO playlist_runs(id,mix,created,state,automatic,data,error)"
+                " VALUES (?,?,?,'postponed',1,?,?)",
+                ["run-capped", "capped", time.time(), json.dumps({}), POSTPONED],
+            )
+            async with web(service, MixPages) as client:
+                html = (await client.get("/shijhon/playlists/capped")).text
+                text = plain(html)
+                assert "Put off until the next refresh" in text and POSTPONED in text
+                assert "notice-error" not in html and "Needs attention" not in text
+                assert "Retry publication" not in text
 
     anyio.run(run)

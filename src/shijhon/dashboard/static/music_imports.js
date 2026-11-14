@@ -57,6 +57,7 @@
     identity: 'A library identity needs checking. Ask your administrator before resuming.',
     storage: 'Import storage is unavailable. Ask your administrator to check it.',
     catalog: 'The catalog\'s version of an album could not be added yet. Resume to retry.',
+    daily_limit: 'The daily limit of added releases is reached, so the catalog\'s version of an album was not added. Resume later to add it.',
     space: 'There is not enough free space. Ask your administrator, then resume.',
     collision: 'An existing file blocks this import. Ask your administrator to check it.',
     path_collision: 'Selected names or folders conflict. Use separate imports or choose distinct paths.',

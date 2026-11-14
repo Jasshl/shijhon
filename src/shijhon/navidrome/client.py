@@ -25,12 +25,21 @@ from shijhon.navidrome import connect
 
 
 class NavidromeError(RuntimeError):
-    """A failed call to Navidrome. Messages never contain URLs (they carry credentials)."""
+    """A failed call to Navidrome. Messages never contain URLs (they carry credentials).
+    ``unsent``: the native request never reached Navidrome (no connection, no sign-in)."""
 
-    def __init__(self, message: str, code: int | None = None, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        code: int | None = None,
+        status: int | None = None,
+        *,
+        unsent: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.status = status
+        self.unsent = unsent
 
 
 class NavidromeService:
@@ -116,9 +125,13 @@ class NavidromeService:
                         json={"username": self.user, "password": self._password},
                     )
                 except httpx.HTTPError as exc:
-                    raise NavidromeError(f"service login: {type(exc).__name__}") from None
+                    raise NavidromeError(
+                        f"service login: {type(exc).__name__}", unsent=True
+                    ) from None
                 if response.status_code != 200:
-                    raise NavidromeError(f"service login failed ({response.status_code})")
+                    raise NavidromeError(
+                        f"service login failed ({response.status_code})", unsent=True
+                    )
                 body = response.json()
                 if not body.get("isAdmin"):
                     raise NavidromeError("the Shijhon service account must be a Navidrome admin")
@@ -139,7 +152,11 @@ class NavidromeService:
                     **kwargs,
                 )
             except httpx.HTTPError as exc:
-                raise NavidromeError(f"native {method}: {type(exc).__name__}") from None
+                # (no connection made: the request was never sent)
+                unsent = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+                raise NavidromeError(
+                    f"native {method}: {type(exc).__name__}", unsent=unsent
+                ) from None
             if response.status_code == 401 and attempt == 0:
                 self._jwt = None
                 continue
@@ -151,7 +168,7 @@ class NavidromeService:
                     f"native {method}: HTTP {response.status_code}", status=response.status_code
                 )
             return response
-        raise NavidromeError("native API authentication failed")
+        raise NavidromeError("native API authentication failed", unsent=True)
 
     async def native_json(self, method: str, path: str, **kwargs: Any) -> Any:
         response = await self.native(method, path, **kwargs)
@@ -307,6 +324,76 @@ class NavidromeService:
         except (NavidromeError, KeyError):
             return []
         return [str(a["id"]) for a in artist.get("album", []) if isinstance(a, dict)]
+
+    async def artists(self) -> list[dict[str, Any]]:
+        """Every present artist of the library, with what Navidrome says of its picture
+        (``imageAbsent``, ``uploadedImage``, ``largeImageUrl``)."""
+        return await self._pages("artist", {"library_id": self.library_id, "missing": "false"})
+
+    async def artist(self, artist_id: str) -> dict[str, Any] | None:
+        try:
+            artist = await self.native_json("GET", f"artist/{segment(artist_id)}")
+        except NavidromeError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        return artist if isinstance(artist, dict) else None
+
+    async def every_artist_song(self, artist_id: str) -> list[dict[str, Any]]:
+        """Every song of the library crediting the artist (as an artist or album artist),
+        page by page (``artist_songs`` reads only the first page)."""
+        return await self._pages(
+            "song", {"artists_id": artist_id, "library_id": self.library_id, "missing": "false"}
+        )
+
+    async def artist_songs(self, artist_id: str, limit: int = 500) -> list[dict[str, Any]]:
+        """Songs of the library crediting the artist (as an artist or album artist), the
+        first ``limit`` by title."""
+        songs = await self.native_json(
+            "GET",
+            "song",
+            params={
+                "artists_id": artist_id,
+                "library_id": self.library_id,
+                "missing": "false",
+                "_start": 0,
+                "_end": limit,
+                "_sort": "title",
+            },
+        )
+        if not isinstance(songs, list):
+            raise NavidromeError("native song list: unexpected answer")
+        return [s for s in songs if isinstance(s, dict)]
+
+    async def set_artist_image(self, artist_id: str, image: bytes, content_type: str) -> None:
+        """Upload an artist's image, as setting one in Navidrome does (it outranks the
+        artist's folder and the external services until removed)."""
+        await self.native(
+            "POST",
+            f"artist/{segment(artist_id)}/image",
+            files={"image": ("artist", image, content_type)},
+        )
+
+    async def remove_artist_image(self, artist_id: str) -> None:
+        await self.native("DELETE", f"artist/{segment(artist_id)}/image")
+
+    async def _pages(self, resource: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        found: dict[str, dict[str, Any]] = {}
+        start = 0
+        while True:
+            page = await self.native_json(
+                "GET",
+                resource,
+                params={**params, "_start": start, "_end": start + 500, "_sort": "id"},
+            )
+            if not isinstance(page, list):
+                raise NavidromeError(f"native {resource} list: unexpected answer")
+            for item in page:
+                if isinstance(item, dict) and item.get("id"):
+                    found.setdefault(str(item["id"]), item)
+            if len(page) < 500:
+                return list(found.values())
+            start += 500
 
     async def config(self) -> dict[str, Any] | None:
         """Navidrome's configuration as shown to admins, if this version exposes it."""

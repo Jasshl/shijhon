@@ -5,6 +5,7 @@ log line."""
 
 from __future__ import annotations
 
+import calendar
 import html
 import importlib.metadata
 import json
@@ -52,6 +53,7 @@ PAGES = {
     "cleanup": "Cleanup",
     "diagnostics": "Diagnostics",
     "appearance": "Appearance",
+    "new-releases": "New releases",
 }
 QUALITY = {
     "key": "quality",
@@ -62,6 +64,15 @@ QUALITY = {
 }
 # Declared as a plain string: its key name makes it write-only.
 API_KEY = {"key": "apiKey", "label": "API key", "type": "string"}
+TIME = re.compile(r'<time datetime="\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ" data-time="\w+">|</time>')
+
+
+TIME_SCRIPT = f'<script src="{PATH}/static/times.js" defer></script>'
+
+
+def shown(page: str) -> str:
+    """The page's text with its times as the server writes them (without their elements)."""
+    return TIME.sub("", page)
 
 
 @pytest.fixture(scope="module")
@@ -318,7 +329,7 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.6.1"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.8.0"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 
@@ -355,7 +366,8 @@ def test_every_page_renders(admin: Browser) -> None:
         assert '<span class="visually-hidden">Signed in as </span>admin</span>' in html
         assert response.headers["cache-control"] == "no-store"
         assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
-        assert "<script" not in html
+        # (The one script: times in the browser's zone, the server's without it.)
+        assert "<script" not in html.replace(TIME_SCRIPT, "")
         assert "built-in method" not in html and "bound method" not in html  # no Python objects
         # Every form that changes something carries the session's token.
         for action, fields in forms(html).items():
@@ -665,6 +677,33 @@ def test_restart_only_settings_say_so(world: DeliveryWorld, admin: Browser) -> N
         admin.submit("catalog", {"region": "xx", "artwork_size": "1200"})
     assert saved_rows(world, "catalog") == {}
     assert "Restart needed" not in admin.get("addons").text
+
+
+def test_the_daily_cap_on_adding_is_set_on_the_catalog_page_and_applies_at_once(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """An administrator sets how many releases an account may add in a day on the Catalog
+    page, among the settings shown first; no limit by default, applied without a restart,
+    and a value that is no count is refused."""
+    cap = world.services.daily_cap
+    assert cap is not None and cap.limit == 0  # the default: nothing is limited
+    page = admin.get("catalog").text
+    row = row_of(page, "catalog-user-releases-per-day")
+    assert "Releases a user may add each day" in row and "tag-restart" not in row
+    assert "0: no limit." in row and 'value="0"' in row
+    assert "catalog-user-releases-per-day" in folds(page).outside  # not under Advanced
+    try:
+        assert admin.submit("catalog", {"user_releases_per_day": "25"}).status_code == 303
+        assert saved_rows(world, "catalog")["user_releases_per_day"] == "25"
+        assert cap.limit == 25  # live
+        assert "Restart needed" not in admin.get("addons").text
+        refused = admin.submit("catalog", {"user_releases_per_day": "-1"})
+        assert refused.status_code == 400 and cap.limit == 25
+        refused = admin.submit("catalog", {"user_releases_per_day": "many"})
+        assert refused.status_code == 400 and cap.limit == 25
+    finally:
+        assert admin.submit("catalog", {"user_releases_per_day": "0"}).status_code == 303
+    assert cap.limit == 0 and saved_rows(world, "catalog") == {}
 
 
 def test_the_catalog_page_checks_and_keeps_its_token_secret(
@@ -1733,7 +1772,8 @@ def test_the_addon_chain_shows_health(world: DeliveryWorld, admin: Browser) -> N
             r'led-ok" aria-hidden="true"></span>\s*<div class="source-name">\s*<h3>Healthy', page
         )
         assert "source source-attention" in page and "Manifest unreachable:" in page
-        assert re.search(r"Cooling down until \d\d:\d\d", page)
+        # (Near midnight its end is tomorrow's: "11 November, 00:05".)
+        assert re.search(r"Cooling down until (?:\d+ \w+, )?\d\d:\d\d", shown(page))
         assert "source source-off" in page
         assert "6 add-ons, 5 on" in page
         # The list is in the plan's order, which says how add-ons are used.
@@ -1755,7 +1795,7 @@ def test_the_addon_chain_shows_health(world: DeliveryWorld, admin: Browser) -> N
             summary,
             re.S,
         )
-        assert re.search(r"Last audio delivered \d\d:\d\d", diagnostics)
+        assert re.search(r"Last audio delivered \d\d:\d\d", shown(diagnostics))
         assert "3 failures in a row, the last at" in diagnostics
     finally:
         world.app.dashboard.checks.every = 60
@@ -1767,8 +1807,30 @@ def test_diagnostics_shows_the_last_scan_as_a_time(world: DeliveryWorld, admin: 
     at = scan_time(raw)  # Navidrome's own format is read
     assert raw and at is not None and abs(time.time() - at) < 86400, raw
     diagnostics = admin.get("diagnostics").text
-    assert re.search(r"songs; last scan (\d{1,2} \w+, )?\d\d:\d\d</dd>", diagnostics)
+    assert re.search(r"songs; last scan (\d{1,2} \w+, )?\d\d:\d\d</dd>", shown(diagnostics))
     assert raw not in diagnostics
+
+
+def test_times_carry_their_instant_for_the_browsers_zone(admin: Browser) -> None:
+    """Each time is a <time> element with the exact instant around the server's text; a page
+    with one loads the script that writes it in the browser's zone, a page without none."""
+    page = admin.get("diagnostics")
+    started = re.search(
+        r'<dt>Running since</dt><dd><time datetime="([^"]+)" data-time="day">\d{1,2} \w+</time>,'
+        r' <time datetime="\1" data-time="hm">\d\d:\d\d</time></dd>',
+        page.text,
+    )
+    assert started, page.text
+    at = calendar.timegm(time.strptime(started.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+    assert 0 <= time.time() - at < 3600  # (Shijhon started for this module)
+    assert f"{TIME_SCRIPT}\n</body>" in page.text
+    assert "; script-src 'self'" in page.headers["content-security-policy"]
+    assert "&lt;time" not in page.text
+    script = admin.get("static/times.js")
+    assert script.status_code == 200 and "data-time" in script.text
+    plain = admin.get("appearance")
+    assert "<time " not in plain.text and "times.js" not in plain.text
+    assert "script-src" not in plain.headers["content-security-policy"]
 
 
 def test_diagnostics_shows_recent_starts(world: DeliveryWorld, admin: Browser) -> None:
@@ -2350,3 +2412,83 @@ def test_head_on_every_combined_page_is_read_only(world: DeliveryWorld, admin: B
         )
         assert answer.status_code < 500, path
         assert world.server.call(saved_state) == before, path
+
+
+def test_an_add_on_that_needs_its_operator_to_sign_in_says_so(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """On the Add-ons page (its row and the plan) and in Diagnostics: "Needs sign-in", with
+    a link to the page the add-on named - not an error code."""
+    world.clear_sources()
+    signed_out = world.add_source(world.addon("Signed-Out"))
+    world.add_source(world.addon("Fine"))
+    try:
+        registry = world.services.sources
+        registry.needs(signed_out, "sign_in", "https://signed-out.example.invalid/manage", 600)
+        page = admin.get("addons").text
+        at = page.index("<h3>Signed-Out</h3>")
+        row = page[at - 400 : at + 900]
+        assert "led-error" in row and "Needs sign-in" in row
+        assert (
+            '<a class="source-link" href="https://signed-out.example.invalid/manage"'
+            ' rel="noreferrer noopener">Sign in</a>'
+        ) in row
+        assert "HTTP 503" not in row
+        assert html.unescape(page).count('"attention": "Needs sign-in"') == 1  # (the plan)
+        # The header counts it apart from add-ons with errors.
+        assert "1 needs sign-in" in page and "with an error" not in page
+        diagnostics = admin.get("diagnostics").text
+        assert "Needs sign-in" in diagnostics and "signed-out.example.invalid/manage" in diagnostics
+        assert re.search(
+            r"It said so at (?:\d+ \w+, )?\d\d:\d\d; passed over until (?:\d+ \w+, )?\d\d:\d\d",
+            shown(diagnostics),
+        )
+        # The sidebar counts it on the Add-ons link of every page (wide, and behind "Menu"
+        # with a dot on it), in words for a screen reader.
+        links = re.findall(rf'<li><a href="{PATH}/addons"[^>]*>(.*?)</a></li>', diagnostics)
+        assert len(links) == 2 and all(
+            '<span class="nav-count" aria-hidden="true">1</span>'
+            '<span class="visually-hidden">, 1 add-on needs sign-in</span>' in link
+            for link in links
+        )
+        assert '<span class="nav-dot" aria-hidden="true"></span>' in diagnostics
+        # "Check again": its operator signed in - asked again, nothing else changes.
+        again = admin.post(f"addons/{signed_out}/check-again", {"csrf": admin.csrf()})
+        assert again.status_code == 303
+        assert registry.attention(signed_out) is None and not registry.cooling(signed_out)
+        page = admin.get("addons").text
+        assert "Needs sign-in" not in page and "needs sign-in</span>" not in page
+        assert [s.enabled for s in world.server.call(registry.stored)] == [True, True]
+        assert admin.post(f"addons/{signed_out}/check-again", {"csrf": "bad"}).status_code == 403
+    finally:
+        world.clear_sources()
+
+
+def test_a_manifest_that_says_its_operator_must_sign_in_is_shown_so(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    """The page's own read of the manifest answers ``needs_sign_in``: "Needs sign-in" with
+    the add-on's page, not "Manifest unreachable: HTTP 503"."""
+    world.clear_sources()
+    addon = world.addon("Signed-Out-Manifest")
+    world.add_source(addon)
+    try:
+        addon.manifest_status = 503
+        addon.manifest_body = {
+            "error": "needs_sign_in",
+            "url": "https://manifest.example.invalid/m",
+        }
+        checks = world.app.dashboard.checks
+        every, checks.every = checks.every, 0  # read the manifests again
+        page = admin.get("addons").text
+        at = page.index("<h3>Signed-Out-Manifest</h3>")
+        row = page[at - 400 : at + 900]
+        assert "Needs sign-in" in row and "Manifest unreachable" not in row
+        assert 'href="https://manifest.example.invalid/m"' in row
+        # (The page's own read: what plays know of the add-on is theirs.)
+        enabled = world.server.call(world.services.sources.enabled)
+        assert world.services.sources.attention(enabled[0].id) is None
+    finally:
+        checks.every = every
+        addon.manifest_status = addon.manifest_body = None
+        world.clear_sources()

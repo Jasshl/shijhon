@@ -6,7 +6,7 @@
 {% endmacro %}
 
 {# One setting row. row: id, name, kind (decimal | whole | text |
-   path | numbers | select | switch | secret | mapping | locked), label, help, unit, spoken, default,
+   path | numbers | names | select | switch | secret | mapping | locked), label, help, unit, spoken, default,
    problem, modified, restart, saved; per kind: text, options/chosen, checked, state/clear_label;
    a select's pair (another select's row, shown after the word joiner: a range's two ends);
    locked (set by the environment): text (its value), locked (the variable), hidden (a value
@@ -58,7 +58,7 @@
     <span class="unit-field"><input{{ owner }} id="{{ row.id }}" name="{{ row.name }}" type="text" inputmode="{{ 'numeric' if row.kind == 'whole' else 'decimal' }}" autocomplete="off" spellcheck="false" value="{{ row.text }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}><span class="unit" aria-hidden="true">{{ row.unit }}</span></span>
 {% elif row.kind in ("decimal", "whole") %}
     <input{{ owner }} id="{{ row.id }}" name="{{ row.name }}" type="text" inputmode="{{ 'numeric' if row.kind == 'whole' else 'decimal' }}" autocomplete="off" spellcheck="false" value="{{ row.text }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}>
-{% elif row.kind in ("text", "path", "numbers") %}
+{% elif row.kind in ("text", "path", "numbers", "names") %}
     <input{{ owner }}{% if row.short %} class="input-short" autocapitalize="none"{% endif %}{% if row.max_length is defined and row.max_length %} maxlength="{{ row.max_length }}"{% endif %} id="{{ row.id }}" name="{{ row.name }}" type="text" autocomplete="off" spellcheck="false" value="{{ row.text }}"{% if described %} aria-describedby="{{ described|join(' ') }}"{% endif %}{% if row.problem %} aria-invalid="true"{% endif %}>
 {% elif row.kind == "select" %}
 {% if pair %}
@@ -195,6 +195,7 @@
   "collection": '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="2"/>',
   "playlists": '<path d="M3 5h11M3 9.5h11M3 14h6"/><path d="M16 9v5.5"/><circle cx="14.5" cy="14.5" r="1.5"/>',
   "downloads": '<path d="M10 3v9M6 8.5l4 4 4-4M4 16.5h12"/>',
+  "new-releases": '<circle cx="9" cy="11" r="6"/><circle cx="9" cy="11" r="1.5"/><path d="M15.5 2.5v4M13.5 4.5h4"/>',
   "addons": '<path d="M7.5 3v3.5M12.5 3v3.5M5 6.5h10V9a5 5 0 0 1-10 0zM10 14v3"/>',
   "playback": '<circle cx="10" cy="10" r="7"/><path d="M8.5 7.4v5.2l4-2.6z"/>',
   "catalog": '<rect x="3" y="3" width="5.5" height="5.5" rx="1"/><rect x="11.5" y="3" width="5.5" height="5.5" rx="1"/><rect x="3" y="11.5" width="5.5" height="5.5" rx="1"/><rect x="11.5" y="11.5" width="5.5" height="5.5" rx="1"/>',
@@ -202,6 +203,7 @@
   "agent-access": '<circle cx="5.5" cy="10" r="2.5"/><circle cx="14.5" cy="5" r="2.5"/><circle cx="14.5" cy="15" r="2.5"/><path d="M7.8 8.9l4.4-2.6M7.8 11.1l4.4 2.6"/>',
   "sound": '<path d="M3 10h1M6.5 6.5v7M10 3.5v13M13.5 7v6M17 10h-.5"/>',
   "cleanup": '<path d="M4 6h12M8 6V4h4v2M5.5 6l.8 10.5h7.4l.8-10.5"/>',
+  "notifications": '<path d="M5.5 14.5V9a4.5 4.5 0 0 1 9 0v5.5l1.5 1.5H4z"/><path d="M8.5 17.5a1.6 1.6 0 0 0 3 0"/>',
   "diagnostics": '<path d="M2.5 10h3.5l2-5 4 10 2-5h3.5"/>',
   "appearance": '<circle cx="10" cy="10" r="7"/><path d="M10 3a7 7 0 0 1 0 14z" fill="currentColor"/>',
   "quality": '<path d="M4 16.5V12M8 16.5V8M12 16.5V5M16 16.5V3.5"/>',

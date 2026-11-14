@@ -268,9 +268,40 @@ def test_import_migration_preserves_existing_owner_and_cascades_private_evidence
     db.execute("INSERT INTO playlist_mixes(id,owner,definition) VALUES('mix','owner','{}')")
     assert apply_migrations(db) == len(migrations)
     assert db.execute("SELECT id FROM playlist_mixes").fetchone()[0] == "mix"
-    db.execute("INSERT INTO playlist_imports VALUES('mix','owner','1','key','hash','{}')")
+    db.execute(
+        "INSERT INTO playlist_imports(id,owner,library,request_key,input_hash,input)"
+        " VALUES('mix','owner','1','key','hash','{}')"
+    )
     db.execute("DELETE FROM playlist_owners WHERE id='owner'")
     assert db.execute("SELECT count(*) FROM playlist_imports").fetchone()[0] == 0
+
+
+def test_imports_and_discovery_mixes_made_before_their_creator_was_kept_have_none() -> None:
+    """Migration 0038: rows made before it keep no creator (NULL), and so run as the
+    account's work, as they did."""
+    db = sqlite3.connect(":memory:", isolation_level=None)
+    db.execute("PRAGMA foreign_keys=ON")
+    migrations = _bundled_migrations()
+    apply_migrations(db, migrations[:37])
+    db.execute(
+        "INSERT INTO playlist_owners(id,username,connection,generation)"
+        " VALUES('owner','owner','{}','generation')"
+    )
+    for ident in ("import", "discovery"):
+        db.execute(
+            "INSERT INTO playlist_mixes(id,owner,definition) VALUES(?,'owner','{}')", [ident]
+        )
+    db.execute(
+        "INSERT INTO playlist_imports(id,owner,library,request_key,input_hash,input)"
+        " VALUES('import','owner','1','key-1','hash','{}')"
+    )
+    db.execute(
+        "INSERT INTO playlist_discovery_requests(id,owner,request_key,input_hash)"
+        " VALUES('discovery','owner','key-2','hash')"
+    )
+    assert apply_migrations(db) == len(migrations)
+    assert db.execute("SELECT creator FROM playlist_imports").fetchall() == [(None,)]
+    assert db.execute("SELECT creator FROM playlist_discovery_requests").fetchall() == [(None,)]
 
 
 def test_failed_native_authorization_does_not_render_private_import_evidence(
@@ -317,5 +348,33 @@ def test_import_without_a_run_shows_the_normal_error_notice(tmp_path: Path) -> N
             values = dashboard._render.call_args.kwargs
             assert values["shown"] is None
             assert "no current run" in values["error"]
+
+    anyio.run(run)
+
+
+def test_the_owner_acts_on_a_revoked_agent_s_import_on_the_dashboard(tmp_path: Path) -> None:
+    """An agent's import runs under that agent's grant; the owner's action on its page is
+    the owner's own, also after that agent was disconnected."""
+
+    async def run() -> None:
+        async with service_at(tmp_path / "db") as service:
+            ident = await service.imports.create(
+                "owner", "agent-import", "Quiet", "A — One", creator="revoked-grant"
+            )
+            mix = await service.repo.mix(ident, "owner")
+            with pytest.raises(PlaylistError):
+                await service.imports.guard(mix)
+            dashboard = SimpleNamespace(
+                services=SimpleNamespace(playlists=service),
+                _render=AsyncMock(return_value=HTMLResponse("Imports")),
+                _see=lambda path: HTMLResponse("", 303, headers={"location": path}),
+            )
+            request = Request({"type": "http", "method": "POST", "path_params": {"ident": ident}})
+            current = (await service.repo.runs(ident))[0]
+            request.state.form = {"run": current["id"], "action": "stop"}
+            response = await Pages(dashboard).detail(request, SimpleNamespace(user_id="owner"))
+            assert response.status_code == 303
+            stopped = await service.repo.run(current["id"])
+            assert stopped["state"] == "discarded" and stopped["data"]["actor"] == ""
 
     anyio.run(run)

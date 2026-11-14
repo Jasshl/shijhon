@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -11,6 +12,7 @@ from shijhon.catalog.model import release_from_data
 from shijhon.collection.contracts import Actor, CollectionError
 from shijhon.collection.history import History
 from shijhon.collection.reader import CallerLibrary
+from shijhon.placeholders.daily_cap import reached
 from shijhon.playlists.model import Connection, Definition, Track
 from shijhon.proxy.auth import subsonic_answer
 from shijhon.views.collection_requests import CollectionRequests, CollectionRestorer
@@ -296,6 +298,78 @@ def test_cleaned_release_restores_from_personal_snapshot_and_keeps_ids(
                 await restorer(actor, library, [cid.ref] * 251, authorize=authorize)
         finally:
             commits.catalog = latest
+            await reader.aclose()
+
+    world.server.call(restore)
+    client.close()
+
+
+def test_a_restore_is_added_for_its_account_and_refused_at_its_daily_cap(
+    world: DeliveryWorld,
+) -> None:
+    """What a collection change brings back is added for the account whose change it is:
+    at its daily cap on adding nothing comes back; a release the account used a place for
+    within the last 24 hours is not counted again."""
+    owner, client = _owner(world, "restore-capped")
+    song = _songs("album-ep-without-suffix")[0]
+    client.ok("star", {"id": song})
+    login = world.nd.login("restore-capped", "synthetic-password")
+    cap = world.services.daily_cap
+    assert cap is not None
+
+    async def restore() -> None:
+        commits, playlists = world.services.commits, world.services.playlists
+        assert commits is not None and playlists is not None
+        store = world.services.store
+        reader = CallerLibrary(playlists)
+        principal = await reader.access.verify_native(login["token"])
+        reader.remember(principal, login["token"])
+        actor = Actor(owner, frozenset(str(i) for i in principal.library_ids))
+        library = str(reader.library_id)
+        history = History(store)
+        cid = CatalogId.parse(song)
+        assert cid is not None
+        original = await commits.materialized.song(cid.ref)
+        snapshot = (await history.snapshots(actor, library, [cid.ref]))[str(cid.ref)]
+        release = str(snapshot.album)
+        assert (await commits.engine.remove_release(release)).removed > 0
+        restorer = CollectionRestorer(commits, reader, history)
+
+        async def authorize() -> None:
+            return None
+
+        async def count(ref: str, age: float) -> None:
+            await store.execute(
+                "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+                [owner, ref, time.time() - age],
+            )
+
+        await count("demo:earlier", 3600)
+        cap.limit = 1
+        try:
+            with pytest.raises(Exception) as refused:
+                await restorer(actor, library, [cid.ref], authorize=authorize)
+            assert reached(refused.value)
+            assert await commits.materialized.song(cid.ref) is None
+            assert await commits.engine.removed_record(release) is not None  # kept
+            assert not commits.engine.writing()
+            # Added by this account long ago: its place is over, it needs a new one.
+            await count(release, 40 * 86400)
+            with pytest.raises(Exception) as again:
+                await restorer(actor, library, [cid.ref], authorize=authorize)
+            assert reached(again.value) and await commits.materialized.song(cid.ref) is None
+            # The same release with a place this account used within these 24 hours:
+            # back, and not counted a second time.
+            await count(release, 7200)
+            restored = await restorer(actor, library, [cid.ref], authorize=authorize)
+            assert restored[str(cid.ref)]["id"] == original
+            rows = await store.fetchall(
+                "SELECT release_ref FROM release_additions WHERE user_id = ?", [owner]
+            )
+            assert sorted(str(r["release_ref"]) for r in rows) == sorted(["demo:earlier", release])
+        finally:
+            cap.limit = 0
+            await store.execute("DELETE FROM release_additions")
             await reader.aclose()
 
     world.server.call(restore)

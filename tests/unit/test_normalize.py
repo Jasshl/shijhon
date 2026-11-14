@@ -6,6 +6,7 @@ from shijhon.matching.normalize import (
     artist_names,
     close_duration,
     core_title,
+    credited_names,
     edition_marked,
     fold,
     same_artist,
@@ -198,3 +199,32 @@ def test_artist_credits_with_a_period_need_no_space(credit):
     from shijhon.matching.normalize import credit_names
 
     assert credit_names(credit) == ["A", "B"]
+
+
+@pytest.mark.parametrize(
+    ("credit", "items", "names"),
+    [
+        ("Lumen Vale & Orrin Pike", 2, ["Lumen Vale", "Orrin Pike"]),
+        (
+            "Corva Lune, Brisk Avalon & Ilse Marrow",
+            3,
+            ["Corva Lune", "Brisk Avalon", "Ilse Marrow"],
+        ),
+        ("Salt, Ash & Ember feat. Wren Hollow", 2, ["Salt, Ash & Ember", "Wren Hollow"]),
+        ("Salt, Ash & Ember", 1, []),  # one item: one band
+        ("Pale Arcade, Mossline & Juno Reef", 2, []),  # not as many names as items
+        ("Lumen Vale & Orrin Pike", 0, []),
+        ("", 2, []),
+    ],
+)
+def test_credited_names_split_only_as_many_as_the_items(
+    credit: str, items: int, names: list[str]
+) -> None:
+    assert credited_names(credit, items) == names
+
+
+def test_a_featured_artist_in_the_title_keeps_the_credit_whole() -> None:
+    # The two items may be the duo and the featured artist: no split by count.
+    assert credited_names("Salt & Ember", 2, "Harbor Song (feat. Wren Hollow)") == []
+    assert credited_names("Salt & Ember", 2, "Harbor Song [with Wren Hollow]") == []
+    assert credited_names("Salt & Ember", 2, "Harbor Song") == ["Salt", "Ember"]

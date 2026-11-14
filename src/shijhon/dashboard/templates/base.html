@@ -11,14 +11,17 @@
 <a class="skip-link" href="#main">Skip to content</a>
 {% from "_macros.html" import legal, icon %}
 {# The navigation, the account, Appearance and Audio quality: in the sidebar on wide screens, behind
-   "Menu" on narrow ones. The two copies are never shown together (display: none). #}
+   "Menu" on narrow ones. The two copies are never shown together (display: none). A page with
+   something waiting for an administrator (``attention``: albums to review, add-ons to sign in
+   to) carries its count; "Menu" a dot while it is closed. #}
 {% macro navigation(where) %}
+{% set counts = attention|default({}) %}
 <nav class="sections" aria-label="Sections">
 {% for heading, items in nav %}
   <p class="sections-heading" id="{{ where }}-{{ heading|lower }}">{{ heading }}</p>
   <ul aria-labelledby="{{ where }}-{{ heading|lower }}">
 {% for key, label in items %}
-    <li><a href="{{ prefix }}/{{ key }}"{% if key == current %} aria-current="page"{% endif %}>{{ icon(key) }}<span>{{ label }}</span></a></li>
+    <li><a href="{{ prefix }}/{{ key }}"{% if key == current %} aria-current="page"{% endif %}>{{ icon(key) }}<span>{{ label }}</span>{% if key in counts %}<span class="nav-count" aria-hidden="true">{{ counts[key][0]|count }}</span><span class="visually-hidden">, {{ counts[key][1] }}</span>{% endif %}</a></li>
 {% endfor %}
   </ul>
 {% endfor %}
@@ -40,7 +43,7 @@
 {{ navigation("wide") }}
   </div>
   <details class="menu">
-    <summary>{{ icon("menu") }}<span>Menu</span></summary>
+    <summary>{{ icon("menu") }}<span>Menu</span>{% if attention|default({}) %}<span class="nav-dot" aria-hidden="true"></span><span class="visually-hidden">, with items that need attention</span>{% endif %}</summary>
     <div class="menu-body">
 {{ navigation("narrow") }}
     </div>
@@ -59,6 +62,16 @@
 {% else %}
   <a href="{{ prefix }}/diagnostics#restart">How to restart</a>
 {% endif %}
+</div>
+{% endif %}
+{% if upgraded|default(none) %}
+<div class="banner" role="status">
+  <p><strong>{{ "The database may be damaged." if upgraded.damaged else "Upgraded without a snapshot." }}</strong> Shijhon upgraded its database from schema {{ upgraded.from_schema }} to {{ upgraded.to_schema }} at {{ upgraded.at|when }} without a snapshot: {{ upgraded.why() }}. {{ upgraded.advice() }}</p>
+  <form method="post" action="{{ prefix }}/upgrade-alert">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="next" value="{{ prefix }}/{{ current or 'diagnostics' }}">
+    <button class="btn-small">Dismiss</button>
+  </form>
 </div>
 {% endif %}
 <main class="page" id="main">

@@ -184,6 +184,34 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
     ("catalog", "artwork_size"): (
         Target("commits.artwork_size", _same("artwork_size"), optional=True),
     ),
+    # The daily cap on adding: read before every counted write.
+    ("catalog", "user_releases_per_day"): (
+        Target("daily_cap.limit", _same("user_releases_per_day"), optional=True),
+    ),
+    # (A pass follows at once: off removes the pictures Shijhon set.)
+    ("catalog", "artist_pictures"): (
+        Target("artist_pictures.enabled", _same("artist_pictures"), optional=True),
+    ),
+    # (A pass follows at once: off gives the files Shijhon changed back.)
+    ("catalog", "artist_lists"): (
+        Target("artist_lists.enabled", _same("artist_lists"), optional=True),
+    ),
+    # (A pass follows at once: off gives the music folder's files Shijhon changed back.)
+    ("catalog", "artist_lists_library"): (
+        Target("artist_lists.library", _same("artist_lists_library"), optional=True),
+    ),
+    # Read at every check and for every newest list.
+    ("catalog", "new_releases_days"): (
+        Target("new_releases.days", _same("new_releases_days"), optional=True),
+    ),
+    ("catalog", "new_releases_most_played"): (
+        Target("new_releases.most_played", _same("new_releases_most_played"), optional=True),
+    ),
+    ("catalog", "new_releases_artists_per_day"): (
+        Target(
+            "new_releases.artists_per_day", _same("new_releases_artists_per_day"), optional=True
+        ),
+    ),
     # [fill]: the fills and the library pass read these on every use (None without a
     # catalog or with filling off).
     ("fill", "auto_min_songs"): (Target("fills.policy", _policy, optional=True),),
@@ -210,6 +238,10 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
         Target("fills.pause", _same("background_pause_seconds"), optional=True),
         Target("library_pass.pause", _same("background_pause_seconds"), optional=True),
     ),
+    # Read before every release the pass reads again.
+    ("fill", "refresh_track_lists"): (
+        Target("library_pass.track_lists.enabled", _same("refresh_track_lists"), optional=True),
+    ),
     # [cleanup]: the daily check reads these at every check.
     **{
         ("cleanup", key): (Target(f"cleanup.{key}", _same(key), optional=True),)
@@ -221,6 +253,19 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
             "library_pass.interval_seconds", lambda s: s.pass_interval_hours * 3600, optional=True
         ),
     ),
+    # [notifications]: read at every decision and every send (the whole section at once).
+    **{
+        ("notifications", key): (Target("notices.settings", lambda s: s, optional=True),)
+        for key in (
+            "urls",
+            "addon_sign_in",
+            "cleanup_blocked",
+            "usage_export",
+            "import_review",
+            "playlist_refresh",
+            "snapshot_skipped",
+        )
+    },
     # [playlists]: the playlist services and their curator share one settings object, and
     # read this at every API request.
     ("playlists", "allow_private_api"): (

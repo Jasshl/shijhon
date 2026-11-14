@@ -44,7 +44,13 @@
         <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.no_downloads and not item.catalog_only %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}</p>
       </div>
       <div class="source-health">
-        <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}</p>
+        <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}{% if item.health.link %} <a class="source-link" href="{{ item.health.link }}" rel="noreferrer noopener">Sign in</a>{% endif %}</p>
+{% if item.health.words == "Needs sign-in" %}
+        <form class="source-again" method="post" action="{{ prefix }}/addons/{{ item.addon.id }}/check-again">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn-small" type="submit">Check again</button>
+        </form>
+{% endif %}
       </div>
     </li>
 {% endmacro %}
@@ -62,7 +68,15 @@
     <h3>{{ addon.name }}</h3>
     <p class="source-meta"><code>{{ item.host }}</code>{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.catalog_only %}{% if addon.budget is not none %}<span>Time for catalog answers {{ addon.budget|number }} s</span>{% endif %}{% else %}{% if addon.budget is not none %}<span>Time for a download {{ addon.budget|number }} s</span>{% endif %}{% if item.no_downloads %}<span>Not used for downloads (the add-on asks this)</span>{% endif %}{% endif %}</p>
   </div>
-  <p class="source-health{% if health.light == 'error' %} status-error{% endif %}">{{ health.words }}{% if health.code %} <code>{{ health.code }}</code>{% endif %}</p>
+  <div class="source-health">
+    <p class="{% if health.light == 'error' %}status-error{% endif %}">{{ health.words }}{% if health.code %} <code>{{ health.code }}</code>{% endif %}{% if health.link %} <a class="source-link" href="{{ health.link }}" rel="noreferrer noopener">Sign in</a>{% endif %}</p>
+{% if health.words == "Needs sign-in" %}
+        <form class="source-again" method="post" action="{{ prefix }}/addons/{{ addon.id }}/check-again">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="btn-small" type="submit">Check again</button>
+        </form>
+{% endif %}
+  </div>
   <form class="source-switch" method="post" action="{{ prefix }}/addons/{{ addon.id }}/enabled">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <button class="switch" role="switch" aria-checked="{{ 'true' if addon.enabled else 'false' }}" aria-label="{{ addon.name }} enabled" name="enabled" value="{{ 'false' if addon.enabled else 'true' }}">
@@ -182,7 +196,7 @@
   <div class="group-head">
     <h2 id="order-title">Your add-ons</h2>
 {% if items %}
-    <p class="group-meta">{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on{% if errors %} · <span class="status-error">{{ errors }} with {{ "errors" if errors != 1 else "an error" }}</span>{% endif %}{% if cooling %} · {{ cooling }} cooling down{% endif %}</p>
+    <p class="group-meta">{{ items|length }} add-on{{ "s" if items|length != 1 }}, {{ enabled }} on{% if errors %} · <span class="status-error">{{ errors }} with {{ "errors" if errors != 1 else "an error" }}</span>{% endif %}{% if signing_in %} · <span class="status-error">{{ signing_in }} need{{ "s" if signing_in == 1 }} sign-in</span>{% endif %}{% if cooling %} · {{ cooling }} cooling down{% endif %}</p>
 {% if not env_list %}
 {% if audio %}
     <p class="group-help">In the order of the plan above, with the number of each add-on's step.</p>

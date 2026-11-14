@@ -66,9 +66,33 @@ limits. Of several tracks that match:
   This is no error: it counts toward no cooldown, and a retry of the song, or a routing
   that continues it, asks that add-on again. An attempt that waited until its time ran
   out counts as a timeout; one whose first answer named more time than was left moves on
-  at once and counts as none. Either way its time counts against the add-on's place in
-  the measured order. Elsewhere such an answer is not counted as an
-  error either and is not asked again. A 503 without a valid `Retry-After` is an error.
+  at once and counts as none. Either way it is kept among the add-on's recent attempts
+  as one without audio. At the add-on's other requests such an answer is not counted as
+  an error either and is not asked again. At the audio link's own address, a 503 is an
+  error, with or without `Retry-After`. A 503 without a valid `Retry-After` is an error,
+  unless it says the add-on needs sign-in (next).
+- HTTP 503 with a JSON object whose `error` is `"needs_sign_in"` means the add-on can't
+  answer until its operator signs in again (or verifies an account). It may add `"url"`,
+  an `http` or `https` address of the add-on's own page where they do. For example:
+  `{"error": "needs_sign_in", "url": "https://addon.example/manage"}`. A user name or
+  password in the address is left out, and an address that isn't `http` or `https` is
+  not shown. Shijhon reads this answer from any request: a song's lookup, its link, its
+  availability check, its audio (a DASH manifest and its segments too), the reads of the
+  add-on's manifest and the catalog's requests, whether or not the answer has a
+  `Retry-After`. It is no error, counts toward no cooldown and is no failed start of the
+  add-on. Plays and downloads pass an add-on that streams over for 10 minutes at a time
+  and ask it again after them; a playlist preparation waits for it as for a rate limit.
+  An add-on with a catalog only is not passed over. When a play or a download reads the
+  manifest of an add-on with a catalog only and that read itself answers that it needs
+  sign-in, the add-on is passed over like any other, because Shijhon can't yet tell that
+  it has a catalog only. The Add-ons page, the plan, Diagnostics and a play's steps show
+  "Needs sign-in", with a link to that page, until the add-on delivers audio again (one
+  with a catalog only: until its catalog answers again). Its operator tells Shijhon they
+  signed in with **Check again** beside it on the Add-ons page; saving its settings does
+  the same, and so does turning it off and on, though that also ends playlist
+  preparations that wait for it alone. Album matching does not rest on such an answer
+  from the catalog's add-on. Keep that body small (16 KiB at most); a longer one is read
+  as a plain 503.
 - HTTP 429 is a rate limit: nothing new is asked of that add-on until its `Retry-After`
   (seconds, a fraction accepted, or an HTTP date; an hour at most; 30 seconds when it
   names none). Other add-ons at its address are asked as before. A later 429 can only make
@@ -202,8 +226,8 @@ keeps the known manifest; age-based retries wait five minutes. A confirmed ident
 that no longer matches a successfully read manifest stops catalog requests
 with an `invalid` error asking for confirmation on the Catalog page. Nothing is
 silently re-keyed; declaration changes between checks cannot be detected immediately.
-Saved discographies and top songs remain usable after restart while the manifest
-cannot be read: an unchecked identity is not a confirmed change.
+Saved discographies, top songs and radio lists remain usable after restart while the
+manifest cannot be read: an unchecked identity is not a confirmed change.
 With confirmation, item IDs are used unchanged: letters, digits and dots, at most 190
 characters; `.` and `..` are not path segments. Invalid IDs are left
 out. Playlist imports' other add-on catalogs always keep their add-ons' keys; the

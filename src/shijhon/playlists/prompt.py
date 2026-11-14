@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
@@ -288,6 +288,10 @@ REASONS = {
     "unconfirmed": "The catalog lists this recording, but its release could not be confirmed.",
     "catalog_unavailable": "The catalog did not answer: add this track again later.",
     "duplicate": "An earlier track of this playlist is the same recording.",
+    "artist_limit": (
+        "The playlist already has as many songs by this recording's artist (`artist`) as "
+        "max_per_artist allows (`limit`): send a higher max_per_artist, or choose another."
+    ),
     "not_checked": "Not looked up within the run's time: add this track again.",
     "removed_by_user": (
         "The user removed this song from the playlist, so it stays out. Choose another, or "
@@ -376,10 +380,18 @@ async def explicit_tracks(
     ``library``: whether the requester may read the library; else the report does not
     say which songs the library has, nor shows its songs as candidates. ``kept``: tracks
     already published at these positions (added tracks), with their report entries:
-    taken as they are, not looked up again. ``edits``: the owner's edits of the playlist;
-    a song the owner removed from it is left out, as refreshes leave it out."""
+    taken as they are, not looked up again, also where the playlist repeats them (an edit
+    kept the owner's repeat); a new track repeats none of them. ``edits``: the owner's
+    edits of the playlist; a song the owner removed from it is left out, as refreshes
+    leave it out. A resolved track that would take its artist over ``max_per_artist`` is
+    left out (``artist_limit``): a credit can resolve to another, such as a featured
+    artist's credit to the main artist's recording."""
     selected: list[Track] = []
     positions: dict[str, int] = {}  # recording -> the position that has it
+    # The kept tracks stay wherever they are: new tracks are checked against all of them.
+    for at, (track, _) in sorted((kept or {}).items(), reverse=True):
+        positions[track.key] = at
+    by_artist = Counter(fold(track.artist) for track, _ in (kept or {}).values())
     report: list[dict[str, Any]] = []
     retries = RETRIES
     # Leave time to save the report and publish within the run's own deadline.
@@ -441,9 +453,13 @@ async def explicit_tracks(
             }
             if candidates := explanation.candidates():
                 entry["candidates"] = candidates
+        elif kept and position in kept:
+            assert found is not None
+            selected.append(found)
         else:
             assert found is not None
-            if not (kept and position in kept) and edits and edits.leaves_out(found.key, found.id):
+            artist = fold(found.artist)
+            if edits and edits.leaves_out(found.key, found.id):
                 entry = {
                     "position": position,
                     "input": entry["input"],
@@ -460,8 +476,19 @@ async def explicit_tracks(
                     "detail": REASONS["duplicate"],
                     "same_as": positions[found.key],
                 }
+            elif by_artist[artist] >= definition.max_per_artist:
+                entry = {
+                    "position": position,
+                    "input": entry["input"],
+                    "outcome": "unresolved",
+                    "reason": "artist_limit",
+                    "detail": REASONS["artist_limit"],
+                    "artist": found.artist,
+                    "limit": definition.max_per_artist,
+                }
             else:
                 positions[found.key] = position
+                by_artist[artist] += 1
                 selected.append(found)
                 if "outcome" not in entry:
                     outcome = "catalog" if CatalogId.parse(found.id) else "library"
@@ -486,8 +513,18 @@ async def explicit_tracks(
             "require_all is set, so nothing was published. The request's tracks say why.",
             report,
         )
-    validate(selected, definition)
-    return Curated(selected, left_out, definition.name, {"tracks": report})
+    repeats = kept_repeats(kept)
+    validate(selected, definition, repeats=repeats)
+    # (the publication's check allows the kept repeats too)
+    curation: dict[str, Any] = {"tracks": report} | ({"kept_repeats": True} if repeats else {})
+    return Curated(selected, left_out, definition.name, curation)
+
+
+def kept_repeats(kept: Mapping[int, tuple[Track, Any]] | None) -> bool:
+    """Whether the published tracks an addition keeps repeat a recording (the owner's
+    repeat, kept by an agent's edit)."""
+    keys = [track.key for track, _ in (kept or {}).values()]
+    return len(set(keys)) < len(keys)
 
 
 async def generate(

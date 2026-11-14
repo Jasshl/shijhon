@@ -43,7 +43,16 @@ from shijhon.collection.repository import (
     rule_sql,
     selection_of,
 )
+from shijhon.placeholders.daily_cap import reached
 from shijhon.store import Store
+
+# Why a change stopped, as the Collection page says it (fixed: an error's own text may
+# hold credentials).
+STOPPED = "The change stopped. Verify library access and retry."
+LIMIT_REACHED = (
+    "The daily limit of added releases is reached, so the change stopped before adding "
+    "more. Retry it later."
+)
 
 
 class Collection:
@@ -420,12 +429,11 @@ class Collection:
                         await self.repo.freeze(op)
                     else:
                         await self._batch(op)
-                except Exception:
+                except Exception as exc:
                     # Upstream exceptions may contain credentials. Store only a fixed message.
                     await self.store.execute(
-                        "UPDATE collection_operations SET state='failed',"
-                        "error='The change stopped. Verify library access and retry.' WHERE id=?",
-                        [op["id"]],
+                        "UPDATE collection_operations SET state='failed',error=? WHERE id=?",
+                        [LIMIT_REACHED if reached(exc) else STOPPED, op["id"]],
                     )
 
     async def _batch(self, op: dict[str, Any]) -> None:

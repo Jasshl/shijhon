@@ -1177,6 +1177,43 @@ class CatalogAdditions:
             return own.reply(document=document, compress=accepts_gzip(call))
         return subsonic_ok(call, {"topSongs": {"song": added}}, self.server())
 
+    # --- the same rules, for lists made in the background (``new_releases.py``) -----------
+
+    async def discography(
+        self, catalog: Catalog, name: str, owned: list[dict[str, Any]]
+    ) -> tuple[CatalogRelease, ...]:
+        """The releases of the catalog artist a library artist's page shows releases of:
+        the artist of that name, among several the one whose releases share the most
+        titles with ``owned``, the artist's albums in the library (Navidrome's entries).
+        Asked of ``catalog`` (the caller's: at its pace)."""
+        return await self._discography(catalog, name, owned)
+
+    async def not_in_library(
+        self,
+        releases: Iterable[CatalogRelease],
+        owned: list[dict[str, Any]],
+        shown: Shown | None = None,
+    ) -> list[CatalogRelease]:
+        """Of ``releases``, one card per album the library does not have, as an artist
+        page adds them to ``owned``, the library's albums it shows (Navidrome's entries).
+        ``shown``: the caller's selection, as for a selected search - a release in the
+        library whose album it hides keeps its card."""
+        open_ = await self._unsettled([a.get("id") for a in owned])
+        known = [library_album(a) for a in owned if a.get("id") not in open_]
+        return await self._missing_releases(releases, known, shown)
+
+    async def in_library(self, refs: list[str]) -> set[str]:
+        """The releases among these the library has (committed, or filled into an album)."""
+        return set(await self._committed(refs))
+
+    async def library_ids(self) -> Mapping[str, str]:
+        """The library's artists by folded name, for the artist references of entries."""
+        return await self._library()
+
+    def this_library(self, call: RestCall) -> bool:
+        """Whether a list or search is one of the configured library."""
+        return self._this_library(call)
+
     def _quiet(self, client: Client) -> bool:
         """The client is walking artist pages or searching in a burst: no catalog work."""
         guards = (self.artist_sync, self.top_sync, self.search_guard)
@@ -1434,6 +1471,11 @@ class CatalogAdditions:
 
 
 # --- helpers ------------------------------------------------------------------------------
+
+
+def nobody(name: str) -> bool:
+    """A name that stands for no one artist ("Various Artists"), or none at all."""
+    return not fold(name) or fold(name) in _NOBODY
 
 
 def _copy_of(track: CatalogTrack) -> dict[str, Any]:

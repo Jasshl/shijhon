@@ -73,6 +73,15 @@ The request's page shows what the AI worked with and what it chose:
 
 A request with explicit tracks, and songs without facts, show only what they have.
 
+When an administrator has set a
+[daily cap on adding](how-it-works.md#the-daily-cap-on-adding), a playlist is published
+without the songs whose releases would pass your cap, and its page says how many were
+left out. The cap's room goes to the releases in the order of the playlist's songs. This
+holds for described playlists, discovery mixes and agents' explicit tracks alike; songs
+already in the library are never left out for it. A scheduled refresh that would have no
+song left is put off instead of failing: the playlist keeps its songs, refreshes stay
+enabled, and the next one tries again.
+
 Requests are one-off by default. Their instructions and run state remain in private
 state for status and recovery, but no schedule is enabled. **Save these instructions for
 reuse** also allows an explicit manual refresh from the request page. Daily or weekly
@@ -193,6 +202,11 @@ The temporary native login and callback token used while reading Navidrome's API
 are discarded. On later saves, a blank Navidrome password keeps the saved key; enter
 the password again to pick up a changed key. Switching key sources requires a new
 manual key or a password to read Navidrome's key.
+
+The same key answers a [radio from a catalog item](how-it-works.md#radio-from-catalog-items)
+in your apps: the similar songs and similar artists of music that is not in your library.
+For those requests Shijhon sends Last.fm an artist's name, or an artist and a title, with
+the key. It sends neither your Last.fm username nor anything about what you listened to.
 
 Fill in **New discovery mix** and choose **Create and publish**, then listen and review
 the playlist in your music app.

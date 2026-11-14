@@ -16,6 +16,15 @@ from mcp.server.auth.routes import build_resource_metadata_url
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import AnyHttpUrl, Field, ValidationError
 
+from shijhon.agents.admin import AdministratorRequired, AdminTools, register_admin_tools
+from shijhon.agents.library import (
+    ARTIST_RELEASES,
+    CATALOG_SETUP,
+    MAX_RELEASES,
+    LibraryAdditions,
+    LibraryTools,
+    register_library_tools,
+)
 from shijhon.agents.oauth import OAuth
 from shijhon.agents.playlists import IMPORT_TEXT, PlaylistTools, register_playlist_tools
 from shijhon.agents.songs import (
@@ -26,6 +35,7 @@ from shijhon.agents.songs import (
     summary,
     unique,
 )
+from shijhon.catalog.model import CatalogRelease
 from shijhon.downloads import Preparation
 from shijhon.downloads.model import (
     MAX_AGENT_REQUESTS,
@@ -34,6 +44,7 @@ from shijhon.downloads.model import (
     ConnectionRequired,
     PreparationError,
 )
+from shijhon.new_releases import NewReleases, released
 from shijhon.playlists.edits import forget
 from shijhon.playlists.facts import Facts, tag_key
 from shijhon.playlists.import_formats import MAX_ROWS
@@ -54,6 +65,8 @@ from shijhon.playlists.requests import (
 )
 from shijhon.playlists.resolve import native_track
 from shijhon.playlists.sound import SongSound, Sound, SoundUnavailable
+from shijhon.views.entries import album_name
+from shijhon.views.ids import album_id
 
 log = logging.getLogger(__name__)
 
@@ -97,11 +110,23 @@ class PermissionRequired(RequestError):
 
 
 class Tools:
-    def __init__(self, oauth: OAuth, preparation: Preparation | None = None) -> None:
+    def __init__(
+        self,
+        oauth: OAuth,
+        preparation: Preparation | None = None,
+        releases: NewReleases | None = None,
+        *,
+        adder: LibraryAdditions | None = None,
+        host: Any = None,
+    ) -> None:
         self.oauth, self.service = oauth, oauth.service
         self.preparation = preparation
+        self.releases = releases  # new releases of the artists accounts follow
+        self.adding = LibraryTools(self, adder)  # catalog releases added to the library
+        self.admin = AdminTools(self, host)  # the review list and the server's status
         self.setup_url = oauth.base + "/shijhon/playlists"
         self.sound_url = oauth.base + "/shijhon/sound"
+        self.releases_url = oauth.base + "/shijhon/new-releases"
         self.managed = PlaylistTools(self)
 
     async def auth(self, *scopes: str) -> AccessToken:
@@ -157,6 +182,9 @@ class Tools:
                     data["error"]["setup_url"] = self.oauth.base + "/shijhon/downloads"
                 if exc.feature == "sound_analysis":
                     data["error"]["setup_url"] = self.sound_url
+            if isinstance(exc, AdministratorRequired):
+                # No permission is missing: connecting again would not help.
+                data["error"]["code"] = "administrator_required"
             if isinstance(exc, PermissionRequired):
                 data["error"]["missing_permissions"] = exc.scopes
                 metadata = build_resource_metadata_url(AnyHttpUrl(self.oauth.resource))
@@ -210,6 +238,7 @@ class Tools:
             else ["Connect a Last.fm profile and application key."]
         )
         audio_missing = [] if self.preparation else ["Audio services are starting."]
+        adding = await self.service.daily_standing(connection.user_id)
         if self.preparation:
             saved = await self.preparation.repo.owner(str(token.subject))
             if saved and (
@@ -241,10 +270,45 @@ class Tools:
 
         sound_feature = feature(("library",), sound_missing)
         sound_feature["ready"] = sound_feature["ready"] and sound_reachable
+        releases = self.releases
+        releases_on = (
+            releases is not None
+            and releases.available
+            and (await releases.status(connection.user_id)).enabled
+        )
+        releases_missing = (
+            ["A Navidrome administrator chooses a catalog on the Catalog page."]
+            if releases is None or not releases.available
+            else []
+            if releases_on
+            else ["The user turns on following their artists on the New releases page."]
+        )
+        adder = self.adding.adder
+        adding_missing = (
+            []
+            if adder is not None and self.service.catalog is not None and adder.recorder
+            else [CATALOG_SETUP]
+        )
+        # Asked of Navidrome now, and only for a connection that holds the permission.
+        administrator = "admin" in token.scopes and await self.oauth.administrator(
+            connection.user_id
+        )
+        administration = feature(("admin",), [])
+        administration["ready"] = administration["ready"] and administrator
         return {
             "permissions": token.scopes,
             "features": {
                 "library": feature(("library",), []),
+                "library_additions": {
+                    **feature(("add",), adding_missing),
+                    "tools": ["search_catalog", "add_to_library", "get_library_addition"],
+                },
+                "server_administration": {
+                    **administration,
+                    # (Not asked, and so not said, for a connection without the permission.)
+                    **({"administrator": administrator} if "admin" in token.scopes else {}),
+                    "tools": ["get_review_list", "settle_review_album", "get_server_status"],
+                },
                 "native_playlists": feature(("library",), []),
                 "song_facts": {
                     **feature(("library",), []),
@@ -259,6 +323,11 @@ class Tools:
                     "setup_url": self.sound_url,
                 },
                 "listening_history": feature(("history",), history_missing),
+                "new_releases": {
+                    **feature(("library", "history"), releases_missing),
+                    "tools": ["get_new_releases"],
+                    "setup_url": self.releases_url,
+                },
                 "agent_curated_playlist": {
                     **feature(("create",), []),
                     "tools": [
@@ -325,6 +394,7 @@ class Tools:
                     "your model choice among administrator-approved server AI models",
                 ],
                 "browser_required": [
+                    "Following your artists for new releases (New releases page)",
                     "AI connection credentials and endpoint",
                     "Last.fm account and history application key",
                     "AudioMuse-AI connection (Navidrome administrators, Sound analysis page)",
@@ -348,6 +418,10 @@ class Tools:
                 "audio_preparation_entries": self.audio_entries,
                 "audio_preparation_jobs": MAX_BATCHES,
                 "audio_preparation_keys": MAX_AGENT_REQUESTS,
+                "library_addition_releases": MAX_RELEASES,
+                "library_addition_artist_releases": ARTIST_RELEASES,
+                # Only while an administrator has set a daily cap on adding for this account.
+                **({"added_releases_per_day": adding} if adding else {}),
             },
             "notes": [
                 "Agent curation is the main path: you choose the songs and Shijhon resolves "
@@ -362,6 +436,21 @@ class Tools:
                 "never a reason to drop a song.",
                 "Explicit tracks publish what resolves; the request's tracks report each "
                 "one's outcome and why any was left out (require_all publishes all or none).",
+                *(
+                    [
+                        "This account may add a limited number of catalog releases to the "
+                        "library within 24 hours (limits.added_releases_per_day). Songs "
+                        "whose releases are over the limit are left out of a playlist with "
+                        "that reason; songs already in the library are never limited."
+                    ]
+                    if adding
+                    else []
+                ),
+                "add_to_library adds whole catalog albums to the user's library, only on "
+                "their request and with the add permission; an artist is bounded "
+                "(limits.library_addition_artist_releases unless the call says otherwise).",
+                "The review list and the server's status are for Navidrome administrators "
+                "with the admin permission, checked at every call.",
                 "Configured AI has not been tested by a model call. Failures report an error.",
                 "OAuth authorizes music access, without delegating the agent's AI subscription.",
             ],
@@ -664,6 +753,67 @@ class Tools:
             "source": "connected_lastfm_history",
             "window_days": self.service.settings.history_days,
             "format": "recording_listen_counts",
+        }
+
+    async def new_releases(self, limit: int) -> dict[str, Any]:
+        """The account's new releases as its apps' newest list starts with them. They come
+        from its favorites and its plays: both permissions, as for reading either."""
+        token = await self.auth("library", "history")
+        if not 1 <= limit <= 100:
+            raise RequestError("Read 1 to 100 new releases at a time.")
+        connection = await self.service.connection(str(token.subject))
+        service = self.releases
+        if service is None or not service.available:
+            return {
+                "enabled": False,
+                "releases": [],
+                "message": "New releases need a catalog, which a Navidrome administrator "
+                "chooses on the Catalog page.",
+            }
+        status = await service.status(connection.user_id)
+        if not status.enabled:
+            return {
+                "enabled": False,
+                "releases": [],
+                "setup_url": self.releases_url,
+                "message": "The user has not turned on following their artists. Only they "
+                "can, on the New releases page of the dashboard.",
+            }
+        listed = await service.listed(connection.user_id, connection.username)
+        await self.auth("library", "history")
+
+        def item(release: CatalogRelease) -> dict[str, Any]:
+            day = released(release.release_date)
+            return {
+                "album_id": album_id(release.ref),
+                "title": album_name(release),
+                "artist": release.artist,
+                "type": release.kind.value,
+                "release_date": day.isoformat() if day is not None else "",
+                "tracks": release.track_count or len(release.tracks),
+            }
+
+        return {
+            "enabled": True,
+            "releases": [item(release) for release in listed[:limit]],
+            "total": len(listed),
+            "has_more": len(listed) > limit,
+            "window_days": service.days,
+            "artists_followed": status.artists,
+            "last_checked": (
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(status.checked_at))
+                if status.checked_at is not None
+                else None
+            ),
+            "last_check": {
+                "": "finished",
+                "sign_in": "not_run: the user signs in on the dashboard again",
+                "unavailable": "not_finished: tried again within the hour",
+            }[status.state]
+            if status.checked_at is not None or status.state
+            else "first check pending",
+            "source": "the user's favorite and most played artists, checked daily against "
+            "the catalog; releases not in their library",
         }
 
     async def playlists(
@@ -994,8 +1144,17 @@ class Tools:
         return {"updated": ["model"], "capabilities": await self.capabilities()}
 
 
-def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None = None) -> None:
-    tools = Tools(oauth, preparation)
+def register_tools(
+    mcp: MCPServer,
+    oauth: OAuth,
+    preparation: Preparation | None = None,
+    releases: NewReleases | None = None,
+    *,
+    adder: LibraryAdditions | None = None,
+    host: Any = None,
+) -> Tools:
+    """Register the tools; returns what they share (kept by the app for its lifetime)."""
+    tools = Tools(oauth, preparation, releases, adder=adder, host=host)
     read = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
     write = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 
@@ -1026,6 +1185,17 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         the user's request to use history; library data cannot substitute for it.
         """
         return await tools.guarded(lambda: tools.history(limit))
+
+    @mcp.tool(annotations=read)
+    async def get_new_releases(limit: int = 30) -> CallToolResult:
+        """New releases of the artists the user follows: their favorite and most played
+        artists' albums, singles and EPs from the last weeks that are not in their library,
+        the newest first, as their music apps' newest albums start with them. Requires
+        library and history permission and the user's request to use them. Says when the
+        user has not turned following on (only they can, on the dashboard); the list is
+        from Shijhon's daily check and may be empty.
+        """
+        return await tools.guarded(lambda: tools.new_releases(limit))
 
     @mcp.tool(annotations=read)
     async def get_native_playlists(
@@ -1262,6 +1432,8 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         return await tools.guarded(lambda: tools.request(request_id, action, song_ids))
 
     register_playlist_tools(mcp, tools)
+    register_library_tools(mcp, tools)
+    register_admin_tools(mcp, tools)
 
     @mcp.tool(
         annotations=ToolAnnotations(
@@ -1277,3 +1449,5 @@ def register_tools(mcp: MCPServer, oauth: OAuth, preparation: Preparation | None
         belongs on the server. Never ask for credentials in chat.
         """
         return await tools.guarded(lambda: tools.configure(choices))
+
+    return tools

@@ -53,6 +53,14 @@ let
     services.shijhon.navidrome.passwordFile = "/etc/shijhon/navidrome-password";
   };
   accountsUnit = through.systemd.services.shijhon-accounts;
+  withPassword = configured {
+    imports = [ own ];
+    services.shijhon.account = {
+      name = "alex";
+      passwordFile = "/etc/shijhon/alex-password";
+    };
+  };
+  passwordUnit = withPassword.systemd.services.shijhon-account-password;
   # A services.navidrome as people ran it before Shijhon.
   before = settings: {
     services.navidrome = {
@@ -60,12 +68,20 @@ let
       inherit settings;
     };
   };
+  # The library bound read-only into Shijhon's service, or read-write when allowed.
+  shijhonBinds = config: config.systemd.services.shijhon.serviceConfig;
+  writable = configured { services.shijhon.libraryWritable = true; };
   kept = configured (before {
     MusicFolder = "/srv/music";
     Port = 4533;
     ReverseProxyUserHeader = "X-Invented-User";
   });
 in
+# The music folder: read-only unless libraryWritable.
+assert lib.elem "/srv/music:/music" (shijhonBinds through).BindReadOnlyPaths;
+assert !(lib.elem "/srv/music:/music" (shijhonBinds through).BindPaths);
+assert lib.elem "/srv/music:/music" (shijhonBinds writable).BindPaths;
+assert !(lib.elem "/srv/music:/music" (shijhonBinds writable).BindReadOnlyPaths);
 # Their own Navidrome, the service account made through their admin account.
 assert accepted through;
 assert lib.elem "shijhon-accounts.service" through.systemd.services.shijhon.requires;
@@ -74,6 +90,26 @@ assert through.systemd.services.shijhon.serviceConfig.LoadCredential == [ ];
 assert !accountsUnit.serviceConfig.PrivateNetwork;
 assert lib.elem "AF_INET" accountsUnit.serviceConfig.RestrictAddressFamilies;
 assert lib.hasInfix " --account alex" accountsUnit.serviceConfig.ExecStart;
+# Its tries end, so that a switch or Shijhon's start fails instead of waiting for good.
+assert accountsUnit.unitConfig.StartLimitIntervalSec == "30min";
+assert accountsUnit.unitConfig.StartLimitBurst == 5;
+# The person's password copied again at each start of shijhon-accounts, not only by
+# shijhon-prepare at boot; and only with a password file.
+assert accepted withPassword;
+assert lib.elem "shijhon-accounts.service" passwordUnit.requiredBy;
+assert lib.elem "shijhon-accounts.service" passwordUnit.before;
+assert !(passwordUnit.serviceConfig.RemainAfterExit or false);
+assert lib.hasInfix "shijhon-account-password" passwordUnit.serviceConfig.ExecStart;
+assert
+  !(lib.hasInfix "shijhon-account-password" (
+    builtins.toJSON withPassword.systemd.services.shijhon-prepare.serviceConfig.ExecStart
+  ));
+assert !(through.systemd.services ? shijhon-account-password);
+# The service account's name is no person's account, as setup.sh refuses it.
+assert refusedWith "the name of Shijhon's own account" (configured {
+  imports = [ own ];
+  services.shijhon.account.name = "Shijhon";
+});
 # Or with a service account they made.
 assert accepted byHand;
 assert !(byHand.systemd.services ? shijhon-accounts);

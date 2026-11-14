@@ -154,8 +154,8 @@ stream request. If it fails, another source is tried in turn. Playback has prior
 Playlist preparation also works with slow add-ons. Its songs wait for a free slot, and
 the download timeout (`download_timeout_seconds`, 180 seconds) counts only from the
 moment a song gets its slot. When every add-on that could provide a song is paused
-(rate limited with HTTP 429 and `Retry-After`, or cooling down after errors), the song
-waits for the pause to end instead of failing. Nothing is sent to a paused add-on until
+(rate limited with HTTP 429 and `Retry-After`, cooling down after errors, or needing its
+operator to sign in again), the song waits for the pause to end instead of failing. Nothing is sent to a paused add-on until
 then; a 429 pauses only that add-on, not the others in its shared group, which still share
 its transfer slots. A song fails when no enabled add-on permits
 downloads or has it, or after waiting an hour in all for paused add-ons. A waiting song
@@ -219,6 +219,13 @@ add-ons. Plays, and preparing the next songs in the queue, still use it.
   an error. When the song is not ready in time, a retry of the song asks this add-on again.
   Give an add-on that prepares whole files a time for a download that covers a usual
   preparation, and a step whose time lets it be asked first.
+- **"Needs sign-in"** (an add-on that says its operator must sign in again): the Add-ons
+  page and Diagnostics show "Needs sign-in", with a link to the add-on's own page for it
+  when it names one. This is not an error. Plays and downloads pass it over for 10
+  minutes at a time and ask it again after them, and playlist preparations wait for it.
+  It is shown so until it delivers audio again (an add-on with a catalog only: until its
+  catalog answers again). Once you've signed in, choose **Check again** beside it: it is
+  asked again at once. Saving its settings does the same.
 - **Three errors in a row** (HTTP 5xx, no connection, a broken answer), no more than ten
   minutes apart: it is passed over for 30 seconds, and again after each further error
   until it delivers audio.

@@ -107,6 +107,9 @@ schema:
     FLAC placeholder) plays.
 11. What Navidrome does alone stays as it is: lyrics, genres, random and starred lists,
     your own covers.
+12. A radio started from a catalog song and from a catalog artist, with Last.fm set up
+    on the Playlists page: it has songs, they play, and one of them can be added to a
+    playlist. Similar artists on a catalog artist's page open.
 
 ## The development instance
 
@@ -133,17 +136,20 @@ Under `src/shijhon/`:
 | `proxy/` | The app-facing proxy: forwarding, credentials first, who the client is, Subsonic answers in JSON and XML |
 | `navidrome/` | Shijhon's own calls to Navidrome, startup checks, scans, usage and the usage export |
 | `catalog/` | The catalog interface, adapters as plugins, the contract kit, caching, edition de-duplication, covers, the catalog of an add-on |
-| `views/` | Catalog items as apps see them: IDs, entries shaped like Navidrome's, additions to searches and artist pages, albums shown complete, actions that add a release |
+| `views/` | Catalog items as apps see them: IDs, entries shaped like Navidrome's, additions to searches and artist pages, albums shown complete, radio from catalog items (similar songs and artists), actions that add a release |
 | `placeholders/` | Writing releases into the library and recovering interrupted writes; the silent files and their tags |
-| `matching/`, `fill/` | Matching an owned album with a catalog release; fills and the library pass |
+| `matching/`, `fill/` | Matching an owned album with a catalog release; fills, the library pass, and the track lists of added releases read again |
 | `delivery/` | Add-ons: the protocol client, routing and streaming, DASH, download-first, limits, warm-ahead, the network policy |
-| `playlists/` | Discovery mixes, described playlists and playlist imports: frozen previews, listening-history and AI connections, verified publication to Navidrome |
-| `agents/` | OAuth sign-in and the MCP tools for remote agents ([agent access](agent-access.md)) |
+| `playlists/` | Discovery mixes, described playlists and playlist imports: frozen previews, listening-history and AI connections, Last.fm's similar songs and artists, verified publication to Navidrome |
+| `agents/` | OAuth sign-in and the MCP tools for remote agents ([agent access](agent-access.md)): playlists, song facts, catalog releases added to an account's library (`library.py`), and an administrator's review list and server status (`admin.py`) |
 | `music_imports/` | Private reviewed imports of retained original music files: staging, header checks, publication, removal and restore ([music imports](music-imports.md)) |
 | `downloads/` | Account-scoped playlist audio preparation, saved jobs and progress; uses the ordinary verified download path |
+| `artist_lists/` | Each artist of files that name several in one text: the exact-names check, the catalogs' lists, the stop-safe write of library files, the background pass ([how it works](how-it-works.md#each-artist-of-a-joined-credit)) |
 | `audiomuse/` | The optional AudioMuse-AI connection ([sound analysis](sound-analysis.md)): its client, the sync of its analysis into `sound_facts`, and the sound-facts interface for playlists |
 | `collection/` | Per-user libraries and hand choices, the favorites, imported playlists and recorded activity that bring albums into them, structural local index (and the songs Shijhon wrote since its last refresh), frozen bulk changes and Undo |
+| `new_releases.py` | Each account's followed artists (its favorites and most played), the daily check of their catalog releases and the list saved for the newest albums ([how it works](how-it-works.md#new-releases)); the list in apps is `views/newest.py` |
 | `cleanup.py` | Taking unused releases out again |
+| `notifications.py` | Notifications of states that need a person, sent through Apprise: what is sent and when, the states kept across restarts |
 | `dashboard/` | The dashboard, generated from the settings' definitions |
 | `store/` | SQLite access, migrations, the one-writer lock |
 

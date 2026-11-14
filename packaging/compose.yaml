@@ -91,7 +91,8 @@ services:
       - ./config:/config:ro
       - ${SHIJHON_DATA:-shijhon-data}:/data
       # The library at the path Navidrome has it, read-only; only the placeholder
-      # folder inside it is writable.
+      # folder inside it is writable. (Without ":ro" for "Also fix files in your music
+      # folder" on the Catalog page, which adds artist lists to your files.)
       - ${MUSIC_DIR:?set MUSIC_DIR}:/music:ro
       - ${MUSIC_DIR:?set MUSIC_DIR}/_shijhon:/music/_shijhon
       # The usage export, for the cleanup. Writable so that Shijhon can ask for a fresh

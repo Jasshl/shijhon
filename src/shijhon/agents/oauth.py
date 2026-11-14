@@ -41,7 +41,15 @@ SCOPES = {
     "history": "Read your listening history",
     "settings": "Choose your playlist AI model from administrator-approved models",
     "downloads": "Prepare playlist audio on the server",
+    "add": "Add catalog albums and artists' releases to your library",
+    "admin": "Administer this installation: settle the Library's review list and read "
+    "the server's status",
 }
+# Permissions that change the library or act for the whole installation. Consent offers
+# them cleared unless the connection already has them, so that none is granted merely
+# because an agent app asks for every permission there is. ``admin`` is offered to, and
+# works for, Navidrome administrators only.
+ELEVATED = ("add", "admin")
 ACCESS_SECONDS = 3600
 REFRESH_SECONDS = 30 * 86400
 # Enough for overlapping requests and an immediate lost-response retry, while
@@ -167,18 +175,50 @@ class OAuth(OAuthAuthorizationServerProvider[Code, Refresh, AccessToken]):
             raise RequestError("This sign-in expired. Connect your agent again.", 400)
         return dict(row)
 
-    async def consent_scopes(self, flow: dict[str, Any], owner: str) -> list[str]:
-        params = AuthorizationParams.model_validate_json(flow["params"])
+    async def administrator(self, owner: str) -> bool:
+        """Whether the account is a Navidrome administrator now, asked of Navidrome as the
+        dashboard asks it for its own pages: never remembered from a sign-in. An account
+        that is gone, changed or without this library is none; Navidrome not answering is
+        no answer (``UpstreamUnavailable``)."""
+        connection = await self.service.repo.connection(owner)
+        if connection is None:
+            return False
+        try:
+            return (await self.service.client.principal(connection)).is_admin
+        except UpstreamUnavailable:
+            raise
+        except PlaylistError:
+            return False
+
+    async def granted_scopes(self, flow: dict[str, Any], owner: str) -> list[str]:
+        """What this agent's connection for the account holds now (none: a new one)."""
         existing = await self.store.fetchone(
             "SELECT scopes FROM playlist_agent_tokens"
             " WHERE owner=? AND library=? AND oauth_client=? AND revoked=0",
             [owner, self.service.requests.library, flow["client"]],
         )
-        return list(
-            dict.fromkeys(
-                [*(json.loads(existing["scopes"]) if existing else []), *(params.scopes or [])]
-            )
+        return list(json.loads(existing["scopes"])) if existing else []
+
+    async def consent_scopes(self, flow: dict[str, Any], owner: str) -> list[str]:
+        """The permissions consent may grant: the connection's own and the requested ones.
+        Server administration is among them for a Navidrome administrator only."""
+        params = AuthorizationParams.model_validate_json(flow["params"])
+        scopes = list(
+            dict.fromkeys([*await self.granted_scopes(flow, owner), *(params.scopes or [])])
         )
+        if "admin" in scopes and not await self.administrator(owner):
+            scopes.remove("admin")
+        return scopes
+
+    async def preselected(self, flow: dict[str, Any], owner: str) -> list[str]:
+        """Of ``consent_scopes``, those the form shows selected: all but the elevated ones
+        the connection does not have yet, which the person selects themselves."""
+        granted = await self.granted_scopes(flow, owner)
+        return [
+            scope
+            for scope in await self.consent_scopes(flow, owner)
+            if scope not in ELEVATED or scope in granted
+        ]
 
     async def approve(self, raw: str, owner: str, scopes: list[str]) -> str:
         flow = await self.flow(raw)

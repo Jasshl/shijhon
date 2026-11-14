@@ -1,5 +1,121 @@
 # Changelog
 
+## 0.8.0
+
+- Each person can follow their artists on the new **New releases** page: the artists they
+  favorited, the artists of their favorite albums and songs, and the artists they played
+  most. Their releases of the last 30 days that the library lacks come first among the
+  newest albums in apps, and on that page. It is off until turned on, and nothing is added
+  to the library until a release is played, favorited or added. Shijhon checks the
+  followed artists once a day in the background, and apps' lists are answered from what
+  that check saved. Catalog page > Advanced settings > New releases has its settings.
+- Starting a radio from a song, an album or an artist that is only in the catalog now
+  gives songs, for each person who has set up Last.fm on the Playlists page. The songs
+  are what Last.fm lists as similar: those in your library are your own, the others are
+  catalog songs. A catalog artist's page shows similar artists once their list is made,
+  which happens in the background after the first view. Only an artist and a title are
+  sent to Last.fm, with that person's Last.fm key. `[search] radio = false` turns this off.
+- Shijhon can send notifications through Apprise to the addresses set on the new
+  **Notifications** page or in `[notifications] urls`. It reports an add-on that needs
+  sign-in, a blocked cleanup, a usage export that is out of date, a music import waiting
+  for review, a playlist refresh that failed, and an upgrade of the database that went on
+  without its snapshot. Each is sent once when its state begins
+  and at most once an hour about the same thing, each kind can be switched off, and the
+  page can send a test notification. An add-on's sign-in link is included only when it is
+  a plain address.
+- An administrator can set how many catalog releases each account may add to the library
+  within 24 hours, on the Catalog page or with `[catalog] user_releases_per_day`. There is
+  no limit by default, and administrators and albums completed by the fill policy are not
+  counted. At the limit, apps are told that the daily limit of added releases is reached
+  and nothing is added; a request that names several releases adds all of them or none.
+  Playlists are published without the songs of the releases beyond the limit, in the
+  playlist's order, and say how many were left out. A scheduled refresh the limit leaves
+  nothing of is put off until the next one. The Collection page and connected agents show
+  where an account stands.
+- An agent can search the catalog and add albums to the account's library, or a limited
+  number of an artist's releases, with a new permission for adding and a preview of what
+  would be added. An administrator's agent can list the albums in the Library's review
+  list, fill, keep or match each one again, and read a summary of the server's status,
+  with a new server administration permission that works only while the account is a
+  Navidrome administrator. The sign-in page shows both permissions cleared until they are
+  selected. Agents can read an account's new releases with `get_new_releases`. Revoking
+  an agent, or removing its connection, stops the work it had started.
+- The Library page has a search that narrows its lists by title and artist. Several
+  albums can be selected in a list, or all it holds under the search, and filled from
+  their most likely release, kept as they are or matched again in one go, with progress
+  on the page and a way to stop. The page lists the filled albums on request.
+- A filled album can be filled from another release that fits it (**Wrong edition?** on
+  the Library page), as long as nobody has used the songs the first fill added. A change
+  that is interrupted is finished by Shijhon itself. Afterwards a favorite, rating, play
+  or playlist entry for a song the new release lacks is answered as not found.
+- The library pass reads the track lists of releases already in the library again, about
+  once a month and once a week while a release is new. It adds tracks the catalog has
+  added since and corrects the lengths of songs that have no audio yet. No song moves,
+  changes its ID or is removed, and other differences are counted and left as they are.
+  `[fill] refresh_track_lists` (on by default, under Advanced settings on the Library
+  page) turns this off.
+- `shijhon backup` writes a checked copy of Shijhon's database, with the configuration
+  file and the service account's password file, into a folder of its own, also while
+  Shijhon runs. It says what the backup holds and what it leaves out, such as Navidrome's
+  database and the placeholder folder.
+- For administrators, the dashboard's sidebar shows how many albums wait in the Library's
+  review list and how many add-ons need their operator to sign in.
+- The dashboard shows times in your browser's time zone. Without JavaScript they stay in
+  the server's zone.
+- The background correction of credits changes only the credits of a song as it is when
+  written. Before, it could write back a title or a length that had changed while it
+  looked the artists up.
+
+### Upgrading
+
+- Database schema 45, upgraded at startup. Before a start upgrades the database, Shijhon
+  now writes a checked snapshot of it into `snapshots` in its state folder and keeps the
+  newest one of the schema it upgrades from and of the highest other schema. Leave room
+  there for a copy of the database plus 64 MB. If the snapshot cannot be written, Shijhon
+  upgrades and starts without it, as earlier versions did, and says so in its log, to
+  administrators on the dashboard until one dismisses it, and in a notification.
+  `upgrade_snapshots = false` turns the snapshot off.
+- Shijhon now depends on Apprise (2.1 or later). Packagers who build without `uv.lock`
+  need to add it.
+- Agents connected before keep their permissions. They gain the permissions for adding
+  and for server administration only when connected again.
+
+## 0.7.0
+
+- An add-on can say that its operator must sign in again: HTTP 503 with
+  `{"error": "needs_sign_in"}`, optionally with the `url` of its own page for it. The
+  Add-ons page, the plan, Diagnostics and the log show "Needs sign-in" with a link to that
+  page, instead of an add-on error. It counts toward no cooldown; plays and downloads pass
+  the add-on over for 10 minutes at a time until it delivers audio again, and playlist
+  preparations wait for it. **Check again** beside it says its operator signed in.
+- Songs and albums credited to several artists ("A & B") now list each artist, so each
+  gets their own page and picture; earlier placeholders are corrected in the background.
+- Artists Navidrome finds no picture for get the catalog artist's picture, set in
+  Navidrome (Catalog page > Advanced settings > Pictures for artists without one; on by
+  default).
+- Files that name several artists in one text ("A, B") get the list of those artists
+  when a catalog lists them and their names are exactly that text, so each artist gets a
+  page and a picture: imported files as they are published and placeholders the catalog
+  could not split (Catalog page > Advanced settings > Each artist of a joined credit; on by
+  default, off gives the files back), and the files in your music folder only with **Also
+  fix files in your music folder** (off by default; the folder must be writable for
+  Shijhon; NixOS: `libraryWritable`). The catalog, the catalogs of all add-ons that have
+  one, and other installed catalog adapters named in `[catalog] artist_lists_catalogs`
+  (Catalog page > Advanced settings > More catalogs for artist lists; none by default),
+  such as `["musicbrainz"]`, are asked for those lists.
+- An explicit track whose recording would take its artist over `max_per_artist` (a
+  featured credit can resolve to the main artist's recording) is left out with the new
+  reason `artist_limit`, and the other tracks are published. Before, the whole request
+  failed. Adding tracks keeps a song the playlist repeats after an edit.
+- A playlist import whose ISRC or duration cell cannot be read (`n/a`, `3m45s`, a date,
+  an `EXTINF` length of `-2`) ignores that hint for the entry and imports the rest.
+  Before, the whole file was refused. Several columns that could supply one hint, such
+  as `Duration` and `Time`, are not read unless one is mapped.
+
+### Upgrading
+
+- Database schema 38, upgraded at startup.
+
 ## 0.6.1
 
 - A seek or a resume after add-ons raced for a song stays on the add-on that played it.

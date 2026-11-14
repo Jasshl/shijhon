@@ -16,6 +16,7 @@ from typing import Any
 
 import aiosqlite
 import anyio
+from markupsafe import Markup
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from shijhon.catalog import plugin
@@ -301,7 +302,7 @@ def rows(
                 elif value is None:
                     row["state"] = ("unset", "")
                 elif item is not None:
-                    row["state"] = ("set", f"Saved {date(item.saved_at)}")
+                    row["state"] = ("set", Markup("Saved {}").format(date(item.saved_at)))
                 else:
                     row["state"] = ("set", "From the configuration")
                 if item is not None and default is not None:

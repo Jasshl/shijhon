@@ -117,7 +117,8 @@ let
     d ${placeholderDirectory} 2755 ${cfg.user} ${cfg.navidrome.group} - -
   '';
   # The person's password, for creating the account, copied where only the accounts
-  # unit reads it; a file deleted once the account exists is no error.
+  # unit reads it, before each of its runs; a file deleted once the account exists is no
+  # error.
   accountPasswordCopy = "/run/shijhon-secrets/account-password";
   copyPassword = pkgs.writeShellScript "shijhon-account-password" ''
     if [ -f ${lib.escapeShellArg account.passwordFile} ]; then
@@ -155,7 +156,12 @@ in
     libraryPath = mkOption {
       type = absolute;
       example = "/srv/music";
-      description = "Your music library, an existing folder. Navidrome and Shijhon read it; Shijhon writes only inside its placeholder folder there.";
+      description = "Your music library, an existing folder. Navidrome and Shijhon read it; Shijhon writes only inside its placeholder folder there (unless libraryWritable is on).";
+    };
+    libraryWritable = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Let Shijhon write the files of libraryPath (bound read-write into its service instead of read-only), for the dashboard's \"Also fix files in your music folder\" (catalog.artist_lists_library), which adds artist lists to files and records every change so it can be undone. Only files owned by Shijhon's user are changed.";
     };
     account = mkOption {
       type = types.nullOr (
@@ -163,7 +169,7 @@ in
           options = {
             name = mkOption {
               type = types.nonEmptyStr;
-              description = "Your Navidrome user name. A Navidrome without accounts gets it as an admin, after Shijhon's service account. In a Navidrome that has accounts it must be an admin: Shijhon signs in with it once to create its service account. An existing account keeps its password.";
+              description = "Your Navidrome user name, not navidrome.user. A Navidrome without accounts gets it as an admin, after Shijhon's service account. In a Navidrome that has accounts it must be an admin: Shijhon signs in with it once to create its service account. An existing account keeps its password.";
             };
             passwordFile = mkOption {
               type = types.nullOr absolute;
@@ -356,6 +362,10 @@ in
           message = "services.shijhon: with navidrome.manage = false, set either account (an admin account your Navidrome has: Shijhon creates its service account with it) or navidrome.passwordFile (the password of a service account you created), not both.";
         }
         {
+          assertion = account == null || lib.toLower account.name != lib.toLower cfg.navidrome.user;
+          message = "services.shijhon.account.name is the name of Shijhon's own account (navidrome.user): choose another.";
+        }
+        {
           assertion = !managed || (cfg.navidrome.url == null && cfg.navidrome.passwordFile == null);
           message = "services.shijhon: navidrome.url and navidrome.passwordFile are for your own Navidrome (navidrome.manage = false).";
         }
@@ -484,8 +494,8 @@ in
           ];
           BindReadOnlyPaths =
             shijhonPaths
+            ++ optional (!cfg.libraryWritable) "${cfg.libraryPath}:/music"
             ++ [
-              "${cfg.libraryPath}:/music"
               "/etc/resolv.conf"
               "/etc/hosts"
               # For programs that look for CA certificates where most systems keep them.
@@ -494,6 +504,9 @@ in
             ++ optional managed socketDirectory;
           BindPaths = [
             "${cfg.stateDirectory}:/data"
+          ]
+          ++ optional cfg.libraryWritable "${cfg.libraryPath}:/music"
+          ++ [
             "${placeholderDirectory}:/music/${cfg.placeholderFolder}"
           ]
           ++ optional (cfg.importsPath != null) "${cfg.importsPath}:/music/${cfg.importsFolder}"
@@ -521,8 +534,8 @@ in
           ExecStart = [
             library
             "${config.systemd.package}/bin/systemd-tmpfiles --create ${placeholderRule}"
-          ]
-          ++ optional accountPassword copyPassword;
+          ];
+          # (Where shijhon-account-password puts its copy.)
           RuntimeDirectory = optional accountPassword "shijhon-secrets";
           RuntimeDirectoryMode = "0700";
           UMask = "0077";
@@ -666,7 +679,15 @@ in
         ++ optional nd.enable "navidrome.service"
         ++ optional (!managed) "network-online.target";
         before = [ "shijhon.service" ];
-        unitConfig.RequiresMountsFor = [ cfg.stateDirectory ];
+        unitConfig = {
+          RequiresMountsFor = [ cfg.stateDirectory ];
+          # The tries end: at a sixth start within half an hour (each try takes its wait
+          # of 180 s and 10 s more), the unit fails with its last message, and so do the
+          # start of Shijhon and a switch waiting for it. (systemctl reset-failed
+          # shijhon-accounts lets it start again at once.)
+          StartLimitIntervalSec = "30min";
+          StartLimitBurst = 5;
+        };
         inherit environment;
         serviceConfig = isolation // {
           Type = "oneshot";
@@ -674,7 +695,8 @@ in
           SupplementaryGroups = optional managed socketGroup;
           # Again after Navidrome did not answer as it should (exit status 1), while
           # Shijhon's start waits for it (direct: no failed state in between, which would
-          # fail that start); not after what needs changing first (2). A switch waits too.
+          # fail that start), up to the start limit above; not after what needs changing
+          # first (2). A switch waits too.
           Restart = "on-failure";
           RestartMode = "direct";
           RestartSec = 10;
@@ -724,6 +746,42 @@ in
             )
             ++ optional accountPassword "-${accountPasswordCopy}:/run/account-password";
           BindPaths = [ "${cfg.stateDirectory}:/data" ];
+        };
+      };
+      # The copy of the person's password, made again at each start of shijhon-accounts
+      # (not only at boot): a run that finds the person's account gone, as after
+      # account.name changed, can create it. Without RemainAfterExit it runs at each
+      # start of the unit that requires it. (Not an ExecStartPre=+ of shijhon-accounts:
+      # that would still run inside its RootDirectory, without the password file.)
+      systemd.services.shijhon-account-password = mkIf accountPassword {
+        description = "Shijhon's copy of your account's password";
+        requiredBy = [ "shijhon-accounts.service" ];
+        before = [ "shijhon-accounts.service" ];
+        requires = [ "shijhon-prepare.service" ];
+        after = [ "shijhon-prepare.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${copyPassword}";
+          UMask = "0077";
+          # Only the copy's folder (shijhon-prepare's runtime folder) is writable.
+          ProtectSystem = "strict";
+          ProtectHome = "read-only";
+          ReadWritePaths = [ (dirOf accountPasswordCopy) ];
+          PrivateTmp = true;
+          PrivateDevices = true;
+          PrivateNetwork = true;
+          NoNewPrivileges = true;
+          CapabilityBoundingSet = [
+            "CAP_CHOWN"
+            "CAP_FOWNER"
+            "CAP_FSETID"
+            "CAP_DAC_OVERRIDE"
+            "CAP_DAC_READ_SEARCH"
+          ];
+          RestrictAddressFamilies = [ "AF_UNIX" ];
+          RestrictNamespaces = true;
+          LockPersonality = true;
+          SystemCallArchitectures = "native";
         };
       };
       # The copy of the person's password goes once the accounts are there: after each

@@ -600,6 +600,37 @@ def test_an_approval_refusal_is_no_failed_fill(tmp_path: Path, approval: bool) -
     anyio.run(run)
 
 
+def test_a_catalog_that_needs_sign_in_records_no_failure_and_no_rest(tmp_path: Path) -> None:
+    """Owner's decision (2026-11-12): a sign-in answer leaves the album due, with its
+    attempts as they were, and the pass goes on (no rest); another failure is recorded."""
+    from shijhon.catalog.base import CatalogError
+
+    library = Library([FITS], [])
+
+    async def run() -> None:
+        async with fills(tmp_path, library) as rig:
+            now = [1000.0]
+            rig.clock = lambda: now[0]  # type: ignore[method-assign]
+            error = CatalogError("unavailable", "timed out")
+
+            async def match(*args: Any, **kwargs: Any) -> Any:
+                raise error
+
+            rig._match_group = match  # type: ignore[method-assign]
+            assert (await rig.fill(FITS.id)).outcome == "failed"  # type: ignore[union-attr]
+            before = dict(await rig._row(FITS.id))
+            assert before["attempts"] == 1
+            rig.resting_until = 0.0
+            now[0] += 10 * 86400  # its retry is due
+            error = CatalogError("unavailable", "not asked: the add-on needs sign-in")
+            assert await rig.fill(FITS.id) is None
+            assert dict(await rig._row(FITS.id)) == before  # still due, no attempt counted
+            assert not rig.resting
+            assert await rig.due(FITS.id)
+
+    anyio.run(run)
+
+
 # The same album with an owned recording the release does not have: never a second album
 # of one name.
 TIDE = CatalogRelease(

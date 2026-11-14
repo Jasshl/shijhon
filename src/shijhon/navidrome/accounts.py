@@ -69,6 +69,11 @@ def ensure(
     for a moment is tried again for ``wait`` seconds; each request may take 10 more.
     Raises :class:`AccountsError`."""
     names = names or Names()
+    if account is not None and account.casefold() == user.casefold():
+        # (Otherwise the service account would be taken for the person's, "kept".)
+        raise AccountsError(
+            f'"{account}" ({names.account}) is the name of Shijhon\'s own account: choose another'
+        )
     deadline = time.monotonic() + wait
     made = [False]  # (a password written by an earlier try is this run's too)
     with connect.client(socket, base_url=url.rstrip("/"), timeout=10) as http:
@@ -157,7 +162,8 @@ def _ensure(
         raise AccountsError(f'creating the account "{account}" needs {names.account_password}')
     own = _read(
         account_password_file,
-        f'the password file of "{account}" ({names.account_password})',
+        f'Navidrome has no account "{account}" yet, and the password file that creates it'
+        f" ({names.account_password})",
         strip=False,
     )
     body = {"userName": account, "name": account, "password": own, "isAdmin": True}

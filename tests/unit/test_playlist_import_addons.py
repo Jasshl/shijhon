@@ -378,7 +378,7 @@ def test_a_commit_adds_an_add_on_s_release_only_when_given_its_catalog() -> None
     async def linked_song(ref: CatalogRef) -> str | None:
         return linked.get(str(ref))
 
-    engine = SimpleNamespace(materialize=AsyncMock())
+    engine = SimpleNamespace(materialize=AsyncMock(), daily_cap=None)  # (no cap set)
 
     async def materialize(release: CatalogRelease, **kwargs: Any) -> MaterializeResult:
         linked[str(track.ref)] = "native-1"

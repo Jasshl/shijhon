@@ -400,7 +400,9 @@ def test_warm_ahead_goes_on_to_the_next_add_on_after_a_slow_one(
     for index, track in enumerate(release.tracks):
         assert track.isrc
         audio = world.audio(track.title)
-        slow = 5.0 if index == 1 else 0.0  # the primary is too slow for the next track
+        # The primary is too slow for the next track: well past its 5 s request time, so its
+        # first byte never ties with that timeout.
+        slow = 8.0 if index == 1 else 0.0
         sources["primary"].add(FakeTrack(isrc=track.isrc, audio=audio, first_byte_delay=slow))
         sources["b"].add(FakeTrack(isrc=track.isrc, audio=audio, ready=True))
     play(world, songs[0], "warm-switch")

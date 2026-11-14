@@ -11,12 +11,12 @@ All options are under `services.shijhon`.
 |---|---|---|
 | `enable` | `false` | Runs Shijhon. |
 | `libraryPath` | (required) | Your music folder, which must exist. |
-| `account.name`, `account.passwordFile` | none | Your own Navidrome account. In a new Navidrome it is created as an admin. In one that has accounts, it must be an admin there, and Shijhon uses it to create its own account. The file is only read until both accounts exist. |
+| `account.name`, `account.passwordFile` | none | Your own Navidrome account. In a new Navidrome it is created as an admin. In one that has accounts, it must be an admin there, and Shijhon uses it to create its own account. Its name can't be Shijhon's own (`navidrome.user`). The file is only read until both accounts exist. |
 | `listenAddress` | `"127.0.0.1"` | Where Shijhon listens. `"0.0.0.0"` or `"::"` listens on every address. |
 | `port` | `4533` | The port apps connect to. |
 | `openFirewall` | `false` | Opens `port` in the firewall. |
 | `settings` | `{ }` | Other settings from `shijhon.toml` ([configuration](../configuration.md)), such as `cleanup.mode`. They end up in the Nix store, so don't put secrets here. |
-| `environmentFile` | none | A file of `SHIJHON_*` variables for secrets, such as `SHIJHON_AUDIOMUSE__TOKEN`. |
+| `environmentFile` | none | A file of `SHIJHON_*` variables for secrets, such as `SHIJHON_AUDIOMUSE__TOKEN` or the notification addresses in `SHIJHON_NOTIFICATIONS__URLS`. A decrypted secret from agenix or sops-nix works. |
 | `navidrome.manage` | `true` | Sets up NixOS's Navidrome for Shijhon, including [one you already run](../nixos.md#you-already-run-servicesnavidrome). `false` uses [your own Navidrome](../nixos.md#an-existing-navidrome). |
 | `navidrome.allowUntestedVersion` | `false` | Allows a Navidrome version Shijhon isn't tested with ([the Navidrome version](../nixos.md#the-navidrome-version)). |
 | `navidrome.url`, `navidrome.passwordFile` | none | Your own Navidrome's address, and the password file of an account you created there for Shijhon, used instead of `account`. |
@@ -28,6 +28,7 @@ All options are under `services.shijhon`.
 | `usageExport.directory` | `/var/lib/shijhon-usage` | Where the export is written. |
 | `usageExport.everySeconds` | `900` | How often the export is written. Shijhon can also ask for one. |
 | `aiRunner.packages`, `aiRunner.home` | none | [Local AI runners](#local-ai-runners) for playlists, and the folder for their sign-in. |
+| `libraryWritable` | `false` | Binds `libraryPath` read-write into Shijhon's service, for **Also fix files in your music folder** ([how it works](../how-it-works.md#each-artist-of-a-joined-credit)). Only files owned by Shijhon's user are changed. |
 | `placeholderFolder` | `"_shijhon"` | The placeholder folder's name in the library. |
 | `placeholderPath` | inside the library | Where that folder really is, when `libraryPath` is a read-only union you set up that shows it. |
 | `importsPath`, `importsFolder` | none, `"_imports"` | [Music imports](#music-imports). |
@@ -55,8 +56,13 @@ database. A value in `settings` applies until the same setting is saved on the d
   2755. If the library is missing, it stops with a message instead of creating it.
 - **`shijhon-accounts`** runs before Shijhon and creates the accounts. While Navidrome isn't
   answering yet, it tries for three minutes, starts over ten seconds later if it has to,
-  and Shijhon waits for it. Until the accounts exist, it keeps a copy of your password file in
-  `/run`. In a Navidrome that already has accounts, it signs in with `account` to create
+  and Shijhon waits for it. After five starts in half an hour it gives up, and Shijhon's
+  start (or the switch) fails with its last message; after the fix, run
+  `sudo systemctl reset-failed shijhon-accounts` before starting it again. Before each of
+  its starts, `shijhon-account-password` copies your password file to `/run`, where only
+  `shijhon-accounts` reads it, and the copy is removed once the accounts exist. So a
+  changed `account.name` is created at the next switch, as long as the password file is
+  still there. In a Navidrome that already has accounts, it signs in with `account` to create
   Shijhon's. If it can't, because `account` isn't set, the password is wrong or the
   account isn't an admin, it stops with a message. The other way is to create Shijhon's
   account by hand, write its password to `/var/lib/shijhon/navidrome-password` (owned by
@@ -77,10 +83,11 @@ database. A value in `settings` applies until the same setting is saved on the d
 Shijhon, `shijhon-accounts` and the usage export each run in an empty root filesystem with
 only their runtime and the folders they need. They have no capabilities, can't gain
 privileges and run in their own PID namespace. `shijhon-prepare` runs as root, with only
-the capabilities it needs to create the placeholder folder and copy the password file.
+the capabilities it needs to create the placeholder folder, and so does
+`shijhon-account-password`, with those it needs to copy the password file.
 
-Shijhon sees the library read-only at `/music`, with the placeholder folder (and the
-imports folder) writable inside it, its state at `/data`, the export at `/usage`, and
+Shijhon sees the library read-only at `/music` (read-write with `libraryWritable`), with
+the placeholder folder (and the imports folder) writable inside it, its state at `/data`, the export at `/usage`, and
 Navidrome's socket. It can't run programs from the folders it can write to.
 
 When Shijhon is stopped, it has 30 seconds to shut down before systemd ends it. **Restart
@@ -312,7 +319,7 @@ back the same way.
 ## The package alone
 
 ```sh
-nix build github:Jasshl/shijhon/v0.6.1
+nix build github:Jasshl/shijhon/v0.8.0
 ./result/bin/shijhon version
 ```
 

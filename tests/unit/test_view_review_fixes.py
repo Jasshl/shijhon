@@ -32,7 +32,7 @@ async def test_album_action_authenticates_before_any_pending_lookup() -> None:
     commits = object.__new__(Commits)
     commits.owned = SimpleNamespace(pending=AsyncMock(return_value=True), fill_album=AsyncMock())
     asked = call("star", [("albumId", str(n)) for n in range(10_000)])
-    ctx = SimpleNamespace(caller=AsyncMock(return_value=None))
+    ctx = SimpleNamespace(caller=AsyncMock(return_value=None), kept={})
     await commits._album_action("star", asked, ctx)
     commits.owned.pending.assert_not_awaited()
     commits.owned.fill_album.assert_not_awaited()

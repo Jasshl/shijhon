@@ -148,7 +148,9 @@ status. Changed input for the same owner/key returns `409`.
   one without a leading "The"); `unconfirmed` (listed, but its release could not be
   confirmed); `catalog_unavailable` (the catalog did not answer, also after a pause; add
   it again later); `not_checked` (the run's time ran out first); `duplicate` (the same
-  recording as the track at `same_as`); `library_refused` (found, but the library would
+  recording as the track at `same_as`); `artist_limit` (found, but the playlist already
+  has `limit` songs by its `artist`, the `max_per_artist` of the request, as when a
+  featured credit resolves to the main artist's recording); `library_refused` (found, but the library would
   not add it to its album, such as an owned album kept as it is; `detail` says what to
   review in Library; without the library permission it reads `not_added`). Status after a run that published nothing still
   has `tracks`.
@@ -157,7 +159,8 @@ status. Changed input for the same owner/key returns `409`.
   request that is published, or whose selection failed. A track with `replaces` (the
   `position` of a track status reports `unresolved`) takes its place; tracks without it
   go at the end. The request's list then has at most 100 tracks within `max_per_artist`.
-  A new run of the same request keeps the published tracks as they are, looks up the new
+  A new run of the same request keeps the published tracks as they are (also a song an
+  edit kept twice; a new track repeats none of them), looks up the new
   ones and the still unresolved ones again, and republishes the same native playlist;
   status reports it like the first. It is accepted after a publication, a failed
   selection or a discarded preview, and refused (`409`) while a run is active, when the
@@ -273,6 +276,76 @@ authority the playlist was made with.
   `review_key`, `action`: `choose` with `entry` and `choice`, `publish` with
   `missing_count`, `discard`, `retry`, `recheck`, `stop`, `resume`, `keep`) acts as the
   import page does.
+
+## New releases (MCP)
+
+`get_new_releases` (`limit` 1 to 100, default 30) needs `library` and `history`
+permission. It returns `enabled`; when the user has not turned following on, `releases`
+is empty and `setup_url` is the dashboard page where only they can. Otherwise `releases`
+lists, newest first, the followed artists' releases of the last `window_days` days that
+the library lacks: `album_id` (a catalog album ID), `title`, `artist`, `type` (`album`,
+`single`, `ep`, `compilation`), `release_date` and `tracks`. `total` and `has_more`
+describe the whole list, `artists_followed` counts the user's favorite and most played
+artists, and `last_checked` and `last_check` say when Shijhon's daily check last ran and
+whether it finished. The tool reads saved results and never asks the catalog.
+
+## Adding to the library (MCP)
+
+These tools need the OAuth `add` permission, which existing grants do not have until new
+browser consent selects it. They are MCP-only.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `search_catalog` | `query`, `limit=10` (1 to 25) | `albums` (`album_id`, `title`, `artist`, `type`, `release_date`, `tracks`) and `artists` (`artist_id`, `name`) |
+| `add_to_library` | `album_ids` (up to 25) or `artist_id`; for an artist `release_types` and `max_releases`; `preview`; `idempotency_key` | With `preview`, the `releases` that would be added and their `album_ids`. Otherwise `created` and the `addition` |
+| `get_library_addition` | `request_id` | The `addition` (also with `status` permission) |
+
+An `addition` has `id`, `state` (`queued`, `running`, `finished`, `stopped`), the
+`releases` in order with each one's `state` (`pending`, `added`, `already_in_library`,
+`not_added` with `reason` and `detail`), the counts `added`, `already_in_library`,
+`not_added` and `pending`, and `next` while it is unfinished. Reasons are `not_found`,
+`catalog_unavailable`, `daily_limit`, `album_collision`, `owned_fill`,
+`selection_changed`, `library_preparation`, `not_shown`, `took_too_long`, `stopped` and
+`stopped_written` (written to the server's library before the request stopped, not in the
+account's library).
+`daily_limit` (`reached`, `left_out`, `message`) appears when an administrator's daily
+limit left releases out.
+
+An artist stands for the releases the artist's page in apps shows, one edition of each
+album, of the asked `release_types` (`album` unless named: `album`, `ep`, `single`,
+`compilation`), the newest first, at most `max_releases` (default 10, at most 25). The
+answer's `releases_of_these_types` and `left_out_by_max_releases` say what the limit left
+out. A preview does not bind a later call that names the artist again; add what was
+agreed to with the preview's `album_ids`. Keys match `[A-Za-z0-9_.:-]{8,128}`. The same key with the same input returns the
+same addition; other input under it is a `conflict`. An account has at most three
+unfinished additions.
+
+## Server administration (MCP)
+
+For Navidrome administrators only, with the OAuth `admin` permission. The account's
+administrator role is checked at every call; without it the tools answer
+`administrator_required`.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `get_review_list` | `page=1`, or `album_id` | The review list's `albums` (25 a page) with `why`, `detail` and the `releases` offered, or one album's `in_review_list` and `last_action` |
+| `settle_review_album` | `album_id`, `action` (`fill`, `keep`, `rematch`), `release` with `fill`, `idempotency_key` | `result` with `state` and the dashboard's `message`; `next` while it runs |
+| `get_server_status` | none | Versions, Navidrome, the catalog, add-ons, the review list's length, the cleanup, a pending restart and `needs_attention` |
+
+A `result` state is `kept`, `running`, `finished`, `failed`, `refused`, `busy`,
+`catalog_resting`, `not_in_review_list`, `not_started` or `unknown`. Settle one album a
+call, and only as the user decided.
+
+An `idempotency_key` stands for one action: the same key and input never start it again
+and return that action's own result with `replayed`, and other input under the key is a
+`conflict`. Keys are kept in the server's memory for one hour, the newest 500, and a
+restart forgets them. After an uncertain result (an error, a timeout, `running` or
+`unknown`), read the album with `get_review_list` and its `album_id` before deciding
+anything again: `last_action` says how the last action went while it is remembered, and
+`in_review_list` whether the album still waits. A rematch can leave an album in the
+list, so being in the list is not the test. A result that says nothing was started
+(`refused`, `busy`, `catalog_resting`, `not_started`, `not_in_review_list`) stays that
+key's result; a later attempt takes a new key.
 
 ## Song facts and sound analysis (MCP)
 

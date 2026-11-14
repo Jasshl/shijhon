@@ -20,6 +20,7 @@ from shijhon.catalog.base import CatalogError, SearchResults
 from shijhon.catalog.model import CatalogRef, CatalogRelease, CatalogTrack, ReleaseKind
 from shijhon.fill.fills import JOINED, Decision, Fills
 from shijhon.matching.matcher import confirm, owned_fingerprint
+from shijhon.placeholders.daily_cap import MESSAGE, DailyLimitReached, adding_for
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.model import Connection, Definition, PlaylistError, Track
 from shijhon.playlists.service import release_fingerprint
@@ -31,6 +32,7 @@ from tests.harness.library import Album, tone, write_album
 from tests.harness.library import Track as OwnedTrack
 from tests.harness.navidrome import ADMIN_PASSWORD, ADMIN_USER
 from tests.harness.replay import Replay
+from tests.harness.subsonic import SubsonicClient
 
 
 def release_for(case: str) -> CatalogRelease:
@@ -318,6 +320,144 @@ def selected(release: CatalogRelease) -> list[Track]:
 
 def hashes(paths: list[Path]) -> dict[Path, str]:
     return {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+
+
+def test_a_first_use_is_added_for_its_account_and_refused_at_its_daily_cap(
+    setup: tuple[DeliveryWorld, CatalogRelease, str, list[Path]],
+) -> None:
+    """A catalog song of a release that an owned album takes: its first use fills that
+    album for the account that uses it. At the account's daily cap on adding the use is
+    answered with the cap's error, nothing is written, and the album's fill has not
+    failed (no record of a failure, no wait); with room it is filled and counted."""
+    world, release, album_id, _ = setup
+    cap, fills, store = world.services.daily_cap, world.services.fills, world.services.store
+    assert cap is not None and fills is not None
+    account = world.nd.create_user("lena", "lena-password")
+    lena = SubsonicClient(world.server.base_url, "lena", "lena-password")
+    missing = f"sh.tr.demo.{release.tracks[0].ref.id}"  # not among the owned songs
+
+    async def state() -> tuple[str | None, bool, list[str]]:
+        row = await fills._row(album_id)
+        added = await store.fetchone(
+            "SELECT owned_album_id FROM releases WHERE ref = ?", [str(release.ref)]
+        )
+        counted = await store.fetchall(
+            "SELECT release_ref FROM release_additions WHERE user_id = ? ORDER BY added_at",
+            [account],
+        )
+        return (
+            str(row["outcome"]) if row else None,
+            added is not None and added["owned_album_id"] == album_id,
+            [str(r["release_ref"]) for r in counted],
+        )
+
+    async def earlier() -> None:
+        await store.execute(
+            "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+            [account, "demo:earlier", time.time() - 3600],
+        )
+
+    async def claim() -> None:  # the claim itself, behind the commit's own look
+        with adding_for(account, admin=False):
+            await fills.first_use(release, "a test")
+
+    before = world.server.call(state)
+    assert before[1:] == (False, [])
+    world.server.call(earlier)
+    cap.limit = 1
+    try:
+        refused = lena.request("star", {"id": missing}).json()["subsonic-response"]
+        assert refused["error"] == {"code": 0, "message": MESSAGE}
+        with pytest.raises(DailyLimitReached):
+            world.server.call(claim)
+        assert world.server.call(state) == (before[0], False, ["demo:earlier"])
+        assert not world.placeholder_files() and not world.services.engine.writing()
+        cap.limit = 2
+        lena.ok("star", {"id": missing})
+        outcome, filled, counted = world.server.call(state)
+        assert outcome == "filled" and filled
+        assert counted == ["demo:earlier", str(release.ref)]
+    finally:
+        cap.limit = 0
+        lena.close()
+
+
+def test_a_request_with_a_first_use_fill_and_a_catalog_release_fits_whole_or_not_at_all(
+    setup: tuple[DeliveryWorld, CatalogRelease, str, list[Path]],
+) -> None:
+    """One request names a song of a release an owned album takes (its first use fills
+    that album) and a song of a release that becomes a catalog album: two places. With
+    one, nothing is written - no fill, no album - and the request is answered with the
+    cap's error; with two, the owned album is filled and the catalog album added."""
+    world, release, album_id, _ = setup
+    cap, fills, store = world.services.daily_cap, world.services.fills, world.services.store
+    assert cap is not None and fills is not None
+    other = replace(
+        release_for("beside"),
+        title="Another Shore beside",
+        artist="Invented Tide beside",
+    )
+    other = replace(
+        other,
+        tracks=tuple(
+            replace(t, artist=other.artist, album_title=other.title) for t in other.tracks
+        ),
+    )
+    both = {r.ref.id: r for r in (release, other)}
+    catalog: Any = world.services.catalog  # (its answers for both releases, uncached)
+    assert catalog is not None
+
+    async def album_by_id(ident: str) -> CatalogRelease:
+        return both[ident]
+
+    async def song(ident: str) -> CatalogTrack:
+        return next(t for r in both.values() for t in r.tracks if t.ref.id == ident)
+
+    catalog.album, catalog.song = album_by_id, song
+    account = world.nd.create_user("lena", "lena-password")
+    lena = SubsonicClient(world.server.base_url, "lena", "lena-password")
+    filling = f"sh.tr.demo.{release.tracks[0].ref.id}"  # not among the owned songs
+    beside = f"sh.tr.demo.{other.tracks[0].ref.id}"
+    request = [("name", "Fill and album"), ("songId", filling), ("songId", beside)]
+
+    async def state() -> tuple[list[str], list[str], str | None]:
+        releases = await store.fetchall("SELECT ref FROM releases ORDER BY ref")
+        counted = await store.fetchall(
+            "SELECT release_ref FROM release_additions WHERE user_id = ? ORDER BY release_ref",
+            [account],
+        )
+        row = await fills._row(album_id)
+        return (
+            [str(r["ref"]) for r in releases],
+            [str(r["release_ref"]) for r in counted],
+            str(row["outcome"]) if row else None,
+        )
+
+    async def earlier() -> None:
+        await store.execute(
+            "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+            [account, "demo:earlier", time.time() - 3600],
+        )
+
+    before = world.server.call(state)
+    world.server.call(earlier)
+    cap.limit = 2  # one place left
+    try:
+        refused = lena.request("createPlaylist", request).json()["subsonic-response"]
+        assert refused["error"] == {"code": 0, "message": MESSAGE}
+        assert world.server.call(state) == (before[0], ["demo:earlier"], before[2])
+        assert not world.placeholder_files() and not cap._held
+        cap.limit = 3
+        made = lena.ok("createPlaylist", request)["playlist"]
+        assert len(made["entry"]) == 2
+        releases, counted, outcome = world.server.call(state)
+        assert {str(release.ref), str(other.ref)} <= set(releases) and outcome == "filled"
+        assert counted == sorted(["demo:earlier", str(release.ref), str(other.ref)])
+        owned = world.nd.client().ok("getAlbum", {"id": album_id})["album"]
+        assert owned["songCount"] == len(release.tracks)  # filled, not a second album
+    finally:
+        cap.limit = 0
+        lena.close()
 
 
 @pytest.mark.parametrize("setup", ["stalenone", "unmatched"], indirect=True)

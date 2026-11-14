@@ -41,8 +41,8 @@ def closed(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
     opened: list[Store] = []
     real_open, real_close = Store.open, Store.close
 
-    async def open_(path: Path) -> Store:
-        store = await real_open(path)
+    async def open_(path: Path, *, snapshot: bool = True) -> Store:
+        store = await real_open(path, snapshot=snapshot)
         opened.append(store)
         return store
 

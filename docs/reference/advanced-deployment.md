@@ -161,11 +161,65 @@ docker compose up -d
 
 ## Restoring a backup
 
-With everything stopped, from `packaging/`; then restore the placeholder folder and the
-configuration of the same backup, and `docker compose start`:
+A snapshot taken before an upgrade and a backup made with `shijhon backup` are restored the
+same way. A snapshot belongs to the version before the upgrade. A backup belongs to the
+version its `README.txt` names; a later version migrates it again, after a new snapshot
+when one can be written ([upgrades](../deployment.md#upgrades)).
+Neither holds Navidrome's database, the placeholder folder or the imports directory, so
+restore those from the same time too, when they changed since.
+
+Do every step before you start anything again:
+
+1. Stop everything, from `packaging/`: `docker compose stop`. With
+   [music imports](../music-imports.md), run this and the commands below with both Compose
+   files (`-f compose.yaml -f compose.imports.yaml`) unless `COMPOSE_FILE` in `.env` names
+   them.
+
+2. Put the copy of Shijhon's database in place. The commands copy it beside the database
+   under a temporary name first, so a copy that fails leaves the working database as it
+   is. Only then do they remove the database's `-wal` and `-shm` files, which belong to the
+   database being replaced (SQLite would apply them to the restored copy and damage it),
+   and rename the copy. For a snapshot in Shijhon's volume, with its name:
+
+   ```sh
+   docker compose run --rm --no-deps --entrypoint sh shijhon -c 'cd /data &&
+       install -m 600 snapshots/shijhon-schema37-20261112T153000Z-4.sqlite3 restored.sqlite3 &&
+       rm -f shijhon.sqlite3-wal shijhon.sqlite3-shm && mv restored.sqlite3 shijhon.sqlite3'
+   ```
+
+   For a backup you copied out of the volume, give the container its folder, which must be
+   readable by your `PUID` (it is when you copied it out as that user):
+
+   ```sh
+   docker compose run --rm --no-deps -v ~/shijhon-backups:/backups:ro --entrypoint sh \
+       shijhon -c 'cd /data &&
+       install -m 600 /backups/shijhon-backup-20261112T153000Z/shijhon.sqlite3 restored.sqlite3 &&
+       rm -f shijhon.sqlite3-wal shijhon.sqlite3-shm && mv restored.sqlite3 shijhon.sqlite3'
+   ```
+
+   When the configuration or the service account's password changed since, put the
+   backup's `shijhon.toml` and `navidrome-password` back into `config/` too.
+
+3. Restore what goes with it, from the same time. Restore Navidrome's database, so its song
+   IDs and playlists match Shijhon's records, and the placeholder folder (`_shijhon` in your
+   music folder), so its files match the placeholders Shijhon has records of. With music
+   imports, restore the imports directory's contents into the existing directory. Do not
+   delete, recreate or move the directory itself: Shijhon then refuses it ("The retained
+   import root changed"). With **Also fix files in your music folder** on, artist lists
+   written to files or undone since then count too: restore the music folder, or Shijhon
+   can no longer undo the changes it made to those files.
+
+4. Start again. To go back to an earlier version, check out its tag and build it
+   (`docker compose up -d --build`); otherwise `docker compose start`.
+
+Restore an older backup or snapshot only if nothing was played, added, imported or
+published since it was taken; otherwise later work is lost or no longer matches the files.
+For a snapshot that means going back soon after the upgrade.
+
+An archive of the whole volume, made with Shijhon stopped as earlier versions of the
+[backup guide](../deployment.md#backups) described, takes the place of step 2:
 
 ```sh
-docker compose stop &&
 docker run --rm -v shijhon_shijhon-data:/data -v ~/shijhon-backups:/backup:ro alpine \
     sh -c 'tar -tzf /backup/shijhon-data.tar.gz >/dev/null &&
         find /data -mindepth 1 -delete && tar -xzf /backup/shijhon-data.tar.gz -C /data'
@@ -174,15 +228,6 @@ docker run --rm -v shijhon_shijhon-data:/data -v ~/shijhon-backups:/backup:ro al
 If it fails, start nothing: an unreadable archive leaves the volume as it was, a failure
 while unpacking leaves part of it. Into an installation with another `PUID:PGID`, add
 `&& chown -R <PUID>:<PGID> /data` at the end of the quoted command.
-
-Restore Navidrome's database from the same backup too, so its song IDs and playlists
-match Shijhon's records. With [music imports](../music-imports.md), run the commands
-with both Compose files (`-f compose.yaml -f compose.imports.yaml`) and restore the
-imports directory's contents from the same backup into the existing directory. Do not
-delete, recreate or move the directory itself: Shijhon then refuses it ("The retained
-import root changed").
-Restore an older backup only if nothing was played, added, imported or published since
-it was taken; otherwise later work is lost or no longer matches the files.
 
 ## Undoing automatic fills
 

@@ -8,7 +8,10 @@
   An app that talks to Navidrome directly plays their silence.
 - **Navidrome's `Scanner.PurgeMissing` must stay `never`**, the default, or Shijhon
   writes nothing into the library ([why](deployment.md#what-shijhon-needs-from-navidrome)).
-- **Any user can add releases**, and nothing limits how many.
+- **Any user can add releases.** Nothing limits how many unless an administrator sets a
+  daily cap for each account ([the daily cap on adding](how-it-works.md#the-daily-cap-on-adding)).
+  At the cap, a person still hears catalog songs that play as plain streams; those plays
+  are not recorded, because recording one would add its release.
 - **Catalog results appear in the API's ID3 methods** (`search3`, `getArtist`,
   `getAlbum`, `getAlbumList2`, `getStarred2`). Apps that browse by folders, and
   Navidrome's own API (its web interface, and apps set up as a Navidrome server rather
@@ -20,7 +23,8 @@
   the databases in Docker volumes, the default: in a folder of the Mac or Windows disk,
   Navidrome's database can be corrupted within minutes
   ([more](deployment.md#docker-desktop-on-macos-and-windows)).
-- **The dashboard shows times in UTC** when Shijhon runs in Docker.
+- **Without JavaScript, the dashboard shows times in the server's time zone**, which is UTC
+  when Shijhon runs in Docker. With JavaScript, the browser shows them in its own zone.
 
 ## Playback and downloads
 
@@ -84,7 +88,21 @@
   example "NightLetters" by "TidePaper" for "Night Letters" by "Tide Paper") is not
   found: the catalog's release is added as a separate album beside it.
 - **An automatic pick can be another edition than yours.** The Library page lists the
-  picks. A pick can be changed until the album is filled, not after.
+  picks, and a pick can be changed there. A filled album can be filled from another of
+  the releases that fit it instead (**Wrong edition?**).
+- **A filled album keeps its release once anyone has used a song the fill added.** A
+  play, a favorite, a rating, a playlist entry, a play queue, a bookmark, a share, a
+  stream or download Shijhon served, or downloaded audio in a song's place counts, also
+  when it has ended, as for the cleanup. The release is then changed for none of its
+  songs. The choice also needs Navidrome's usage records (the
+  [usage export](deployment.md#the-usage-export)), as the cleanup does. The releases
+  offered are those the album's match considered.
+- **After an album is filled from another release, an app can still hold the old songs.**
+  Starring, rating, queueing or reporting a play of one that the new release does not
+  have under the same number and title answers "not found" until the app has loaded the
+  album again, and "try again later" while the replacement is not finished. A song both
+  releases have under the same number and title keeps its ID, also when the recordings
+  differ ([how it works](how-it-works.md#matching-and-filling)).
 - **A picked release keeps its track numbers.** Where your files are numbered
   differently, two songs of the album can have the same number.
 - **An album in the review list, without a match, or kept as it is** has your songs only.
@@ -102,7 +120,26 @@
 - **Starring a catalog artist** works only once one of their albums is in your library.
 - **A saved play queue** adds only its current song's album to the library. Another device
   that restores the queue does not see its other catalog songs.
-- **Catalog track lists do not update** after a release is added to the library.
+- **Track lists follow the catalog slowly, and only in part.** The library pass reads
+  the track list of each release in your library again about once a month, and once a
+  week while the release is new ([how it works](how-it-works.md#track-lists-read-again)).
+  It adds tracks, and corrects the length of songs that have no audio yet. A title, an
+  artist, an ISRC or a track number the catalog changed stays as it was, and no song is
+  removed, so a track the catalog puts where another song already is, is not added, and
+  a track the catalog no longer lists stays. With the library pass off, or as a dry run,
+  nothing is updated.
+
+- **New releases show in the newest albums of apps that ask the server for them.** They
+  are added to the ID3 list (`getAlbumList2` with `type=newest`). An app that browses by
+  folders, or that builds its own list of recent albums from a synced copy of the
+  library, shows them only if it takes them from that list. An app that syncs the whole
+  library through that list keeps the new releases as albums until its next sync after
+  they left.
+- **New releases follow the catalog's dates, once a day.** A release shows from the next
+  daily check after the catalog lists it, and one the catalog dates by its year alone
+  never shows as new. For several catalog artists of one name the check picks the one
+  whose releases share the most titles with your library, and none when no title is
+  shared.
 
 ## The catalog of an add-on
 
@@ -118,6 +155,14 @@ has less to go on than an adapter's:
   Clean and explicit versions are not marked.
 - **A favorite or a playlist entry of a song from search results or top songs** looks
   its album up first, which takes a few seconds.
+- **A radio from a song, an album or an artist that is only in the catalog needs
+  Last.fm.** It has songs for a person who set up Last.fm on the Playlists page
+  ([how it works](how-it-works.md#radio-from-catalog-items)); for everyone else it is
+  empty. The first radio from an item can be short when the catalog answers slowly: it
+  starts with the songs found within the wait, and asked for again it has them all.
+- **A radio holds what Last.fm lists under the same names.** Each similar song is looked
+  up in the catalog by its artist and title. One that Last.fm lists under another
+  spelling, or that the catalog does not have, is left out.
 - **After a restart**, catalog songs an app still lists from an earlier search do not
   play until a search or an album shows them again.
 

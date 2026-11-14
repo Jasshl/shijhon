@@ -53,6 +53,12 @@ Navidrome accepts it:
 | rate, put into a playlist in an app, download (the app's download), share or bookmark a catalog song | - | its album |
 | prepare a playlist's audio on the **Downloads** page | - | its catalog songs' albums |
 | get a playlist Shijhon made for you (a discovery mix, a described playlist, an agent's request) | - | its catalog songs' albums |
+| ask a connected agent to add an album or an artist's releases ([agent access](agent-access.md)) | - | the albums |
+
+When an administrator has set a
+[daily cap on adding](how-it-works.md#the-daily-cap-on-adding), the Collection page says
+how many catalog releases you have added within 24 hours and, at the cap, from when you
+can add more.
 
 A favorite counts in both libraries, also one made at Navidrome directly or before this
 version (once Shijhon reads your favorites). Taken back, it leaves Original imported
@@ -261,3 +267,15 @@ it in bounded background pages. Browsing continues on the last complete index if
 is interrupted. Personal library choices survive metadata cleanup and adding the music
 back. Original and catalog origin are tracked per song, including partly filled albums;
 downloading a catalog track does not turn it into an original import.
+
+## New releases
+
+**New releases**, under Music beside Collection, follows the artists you favorite and
+play most. Turn it on there, and their releases of the last 30 days that your library
+lacks come first among the newest albums in your apps. The page lists the same
+releases, the artists followed and when they were last checked.
+
+A new release brings nothing into your libraries by showing. Once you play, favorite,
+rate or add it, it joins your Shijhon library like any catalog album, and leaves the list
+of new releases. [How it works](how-it-works.md#new-releases) describes who is followed
+and when the catalog is asked.

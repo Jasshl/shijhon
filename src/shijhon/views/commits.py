@@ -23,6 +23,12 @@ of its release fills that album - never a second, catalog copy - and an action o
 album itself (a star, a rating, a share of its ID) fills it too. A track of the release
 owned in another album plays that owned song until the fill.
 
+The daily cap on adding (``placeholders/daily_cap.py``): what a request adds is added
+for its account. The places for every release it would add are taken in one step before
+its first write - with those of the old IDs it uses (``cleanup.OldIds``, which takes them
+all) - so a request adds all its releases or none: one that does not fit is answered
+with an error, nothing written. A plain ``stream`` commits nothing and so plays as ever.
+
 No work where it would be wasted: removing a star or a rating from something that is not
 in the library changes nothing; jukebox commands go through only when the jukebox is on;
 album and artist downloads with catalog tracks are refused anyway.
@@ -32,7 +38,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any, Protocol
 
 import anyio
@@ -44,6 +51,7 @@ from shijhon.fill.fills import ChoiceRefused
 from shijhon.locks import KeyedLocks
 from shijhon.matching.normalize import fold
 from shijhon.navidrome.client import NavidromeError, NavidromeService
+from shijhon.placeholders.daily_cap import CATEGORY, MESSAGE, adding_for_request, reached
 from shijhon.placeholders.engine import MaterializeError, PlaceholderEngine
 from shijhon.proxy.app import Forward, Handler, HandlerResult, RequestContext
 from shijhon.proxy.params import RestCall
@@ -135,6 +143,8 @@ class CommitError(Exception):
         self.message = message
         self.category = category
         self.item = item
+        # The other items of the same request that were refused (``natives``).
+        self.also: list[CommitError] = []
 
 
 class Commits:
@@ -177,20 +187,18 @@ class Commits:
         async def handle(call: RestCall, ctx: RequestContext) -> HandlerResult:
             if (ctx.head and method != "stream") or callback_refused(call):
                 return await inner(call, ctx) if inner is not None else None
-            if method in _ALBUM_ACTIONS and self.owned is not None:
-                try:
-                    await self._album_action(method, call, ctx)
-                except Exception as exc:  # the action goes on: never a 500 for the fill
-                    log.warning("fill on first use (%s) failed: %s", method, type(exc).__name__)
-                    log.debug("fill on first use (%s) failed", method, exc_info=True)
             wanted = {v for k, v in call.params if k in keys and CatalogId.parse(v)}
             if not wanted:
+                # (With catalog items: once their places are taken, ``_commit``.)
+                await self._fill_albums(method, call, ctx)
                 result = await inner(call, ctx) if inner is not None else None
                 return await self.requested(call, ctx, result) if self.requested else result
-            if await ctx.caller() is None:
+            if (caller := await ctx.caller()) is None:
                 return None  # Navidrome answers with its own credential error
             try:
-                result = await self._commit(method, keys, wanted, call, ctx, inner)
+                # What this request adds to the library is added for its account.
+                with adding_for_request(ctx.kept, caller.username):
+                    result = await self._commit(method, keys, wanted, call, ctx, inner)
             except CommitError as exc:
                 # A client (a play) may wait on this answer for good: always in the log.
                 self._errors.note(
@@ -247,7 +255,11 @@ class Commits:
         if method in _QUEUES:
             committed = await self._queue(method, keys, wanted, call)
         else:
-            committed = rewrite(call, keys, await self.natives(wanted, method))
+            async with self._places(wanted):
+                # The request's owned albums are filled once its catalog items have their
+                # places: a fill takes its own, and never one of theirs.
+                await self._fill_albums(method, call, ctx)
+                committed = rewrite(call, keys, await self.natives(wanted, method))
         if inner is not None and (result := await inner(committed, ctx)) is not None:
             return result
         return Forward(committed)
@@ -267,6 +279,20 @@ class Commits:
                 return Forward(rewrite(call, {"id"}, {text: song}))
         return await self.play(call, ctx, track)
 
+    async def _fill_albums(self, method: str, call: RestCall, ctx: RequestContext) -> None:
+        """``_album_action`` for the methods that have one; whatever fails, the action
+        goes on (never a 500 for the fill)."""
+        if method not in _ALBUM_ACTIONS or self.owned is None:
+            return
+        try:
+            await self._album_action(method, call, ctx)
+        except Exception as exc:
+            if reached(exc):  # the account's daily cap: the album stays as it is
+                log.info("fill on first use (%s): %s", method, exc)
+            else:
+                log.warning("fill on first use (%s) failed: %s", method, type(exc).__name__)
+                log.debug("fill on first use (%s) failed", method, exc_info=True)
+
     async def _album_action(self, method: str, call: RestCall, ctx: RequestContext) -> None:
         """A star, rating or share of an owned album shown complete: it is filled
         first. A failed fill - whatever the error - leaves the album as it is; the action
@@ -276,11 +302,12 @@ class Commits:
             return
         keys = _ALBUM_ACTIONS[method]
         albums = {v for k, v in call.params if k in keys and "." not in v and v}
-        if not albums or await ctx.caller() is None:
+        if not albums or (caller := await ctx.caller()) is None:
             return
-        for album_id in sorted(albums):
-            if await self.owned.pending(album_id):
-                await self.owned.fill_album(album_id, method)
+        with adding_for_request(ctx.kept, caller.username):
+            for album_id in sorted(albums):
+                if await self.owned.pending(album_id):
+                    await self.owned.fill_album(album_id, method)
 
     async def _queue(
         self, method: str, keys: set[str], wanted: set[str], call: RestCall
@@ -348,6 +375,76 @@ class Commits:
             return subsonic_ok(call, {}, self.server())  # nothing in the library to change
         return Forward(committed)
 
+    def would_add(self, method: str, call: RestCall) -> set[str]:
+        """The catalog items of a request whose releases it would add to the library: what
+        ``_commit`` commits (the queue's current song only; nothing for a star or a rating
+        taken back, a refused download, a jukebox command that places nothing)."""
+        keys = set(COMMITS.get(method, ()))
+        wanted = {v for k, v in call.params if k in keys and CatalogId.parse(v)}
+        if method == "stream" or not wanted:
+            return set()
+        if method == "unstar" or (method == "setRating" and (call.get("rating") or "0") == "0"):
+            return set()
+        if method == "jukeboxControl" and call.get("action") not in ("set", "add"):
+            return set()
+        if method == "download" and any(_kind(v) != "tr" for v in wanted):
+            return set()
+        if method in _QUEUES:
+            current = _current(method, call, call.getall("id"))
+            return {current} if current in wanted and _kind(current) == "tr" else set()
+        return wanted
+
+    async def new_releases(self, texts: Iterable[str]) -> list[str]:
+        """The releases of the catalog items ``texts`` that are not in the library: what
+        committing them would add (a look: nothing is written), in the items' order. The
+        items are looked up as many at a time as ``natives`` commits them."""
+        ordered = sorted(set(texts))
+        found: dict[int, str] = {}
+        limiter = anyio.CapacityLimiter(_PARALLEL)
+
+        async def one(at: int, text: str) -> None:
+            cid = CatalogId.parse(text)
+            if cid is None or cid.kind == "ar":
+                return
+            async with limiter:
+                try:
+                    if cid.kind == "al":
+                        album: CatalogRef | None = cid.ref
+                    elif await self.materialized.song(cid.ref) is not None:
+                        return
+                    else:
+                        track = await self._fetch(lambda c, i=cid.ref.id: c.song(i), cid)
+                        album = track.album or await self._fetch(
+                            lambda c, i=cid.ref.id: _album_of(c, i), cid
+                        )
+                except CommitError:
+                    return  # answered with its own error when it is committed
+                if album is not None and await self.materialized.album(album) is None:
+                    found[at] = str(album)
+
+        async with anyio.create_task_group() as tg:
+            for at, text in enumerate(ordered):
+                tg.start_soon(one, at, text)
+        return list(dict.fromkeys(found[at] for at in sorted(found)))
+
+    @asynccontextmanager
+    async def _places(self, texts: set[str]) -> AsyncIterator[None]:
+        """The request's places under its account's daily cap, for every release its
+        catalog items would add: taken in one step before the first write, so it adds all
+        of them or - refused here (``CommitError``) - none. Those its old IDs took already
+        are used; those no write used are given back when the block ends."""
+        cap = self.engine.daily_cap
+        if cap is None or not cap.on or await cap.limited() is None:
+            yield
+            return
+        new = await self.new_releases(texts)
+        async with AsyncExitStack() as taken:
+            try:
+                await taken.enter_async_context(cap.places(new))
+            except MaterializeError:
+                raise _limit() from None
+            yield
+
     async def natives(
         self,
         texts: set[str],
@@ -376,6 +473,7 @@ class Commits:
             for text in sorted(texts):
                 tg.start_soon(one, text)
         if failures:
+            failures[0].also = failures[1:]
             raise failures[0]
         return mapping
 
@@ -448,6 +546,13 @@ class Commits:
             found = await self.materialized.album(ref)
             if found is not None and only is None:
                 return found
+            if found is None and (cap := self.engine.daily_cap) is not None and cap.on:
+                # New to the library: the account's daily cap is looked at before the
+                # catalog is asked for the release and its cover (the write asks again).
+                try:
+                    await cap.check([str(ref)])
+                except MaterializeError:
+                    raise _limit() from None
             started = time.monotonic()
             release = None
             # Owned albums are matched and filled from the installation's catalog: a
@@ -478,6 +583,8 @@ class Commits:
                     )
                     raise CommitError(0, message, category=exc.category) from None
                 except MaterializeError as exc:
+                    if reached(exc):
+                        raise _limit() from None
                     category = (
                         "selection_changed"
                         if exc.reason == "the release differs from the saved selection"
@@ -503,6 +610,8 @@ class Commits:
                     release, cover=cover, only=[only] if only is not None else None
                 )
             except MaterializeError as exc:
+                if reached(exc):
+                    raise _limit() from None
                 log.warning("commit of %s failed: %s", ref, exc.reason)
                 category = (
                     "album_collision"
@@ -564,6 +673,11 @@ class Commits:
             if fold(entry.get("name")) == wanted:
                 return str(entry["id"])
         raise CommitError(NOT_FOUND, "this artist has no albums in the library yet")
+
+
+def _limit() -> CommitError:
+    """The account's daily cap on adding is reached: nothing was written."""
+    return CommitError(0, MESSAGE, category=CATEGORY)
 
 
 async def _album_of(catalog: Any, song_id: str) -> CatalogRef | None:

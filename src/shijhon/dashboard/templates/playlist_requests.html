@@ -5,7 +5,7 @@
 {{ playlist_tabs(prefix, "describe", detail=shown is not none) }}
 {% if shown %}
 {% set c = curation %}
-{% set state_label = {'queued':'Waiting','generating':'Choosing songs','publishing':'Publishing','published':'Published','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped'}.get(shown.state, shown.state|capitalize) %}
+{% set state_label = {'queued':'Waiting','generating':'Choosing songs','publishing':'Publishing','published':'Published','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped','postponed':'Put off'}.get(shown.state, shown.state|capitalize) %}
 <div class="page-head">
   <div class="page-title">
     <p class="page-back"><a href="{{ prefix }}/playlists/describe">← Described playlists</a></p>
@@ -16,12 +16,13 @@
 <input type="hidden" name="run" value="{{ run.id }}">
 {% if shown.state == 'preview' %}<button class="btn-primary" name="action" value="publish">Publish playlist</button><button name="action" value="discard">Discard preview</button>{% endif %}
 {% if shown.state in ['failed','uncertain'] %}<button class="btn-primary" name="action" value="retry">Retry / recheck this request</button>{% endif %}
-{% if shown.state in ['published','discarded','failed'] and spec.save_instructions %}<button name="action" value="refresh">Refresh from saved instructions</button>{% endif %}
+{% if shown.state in ['published','discarded','failed','postponed'] and spec.save_instructions %}<button name="action" value="refresh">Refresh from saved instructions</button>{% endif %}
 {% if shown.refreshes %}<button name="action" value="pause">Pause refreshes</button>{% elif spec.cadence != 'manual' and shown.playlist_id %}<button name="action" value="enable">Enable refreshes</button>{% endif %}
 <a class="btn btn-quiet" href="{{ prefix }}/playlists/describe/{{ shown.id }}">Reload progress</a></form>
 </div>
 {% if error %}<div class="notice notice-error" role="alert"><p>{{ error }}</p></div>{% endif %}
-{% if shown.error %}<div class="notice notice-error" role="alert"><p>{{ shown.error }}</p></div>{% endif %}
+{% if shown.error and shown.state == 'postponed' %}<p class="notice notice-info" role="status">{{ shown.error }}</p>{% elif shown.error %}<div class="notice notice-error" role="alert"><p>{{ shown.error }}</p></div>{% endif %}
+{% set limited = shown.get('daily_limit') %}{% if limited %}<p class="notice notice-info" role="status">{{ limited.left_out }} song{{ ' was' if limited.left_out == 1 else 's were' }} left out of this playlist because the daily limit of added releases was reached. The rest was published, and the songs can be added again later.</p>{% endif %}
 {% if shown.state in ['queued','generating','publishing'] %}<p class="notice notice-info" role="status">Working in the background. Reload progress to check the result.</p>{% endif %}
 <section class="group" aria-labelledby="request-title">
 <div class="group-head"><h2 id="request-title">What you asked for</h2></div>

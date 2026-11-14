@@ -6,8 +6,9 @@ bookmarks. Methods with handlers of their own (views, commits, search) translate
 IDs themselves; for every other method a request carrying a catalog ID in any ID
 parameter is rewritten here: an item in the library gets its native ID, whatever the
 method. For an item that is not in the library, the read-only methods whose answer may be
-empty get Navidrome's own empty answer (no lyrics, no similar songs); any other method goes
-to Navidrome as it is and gets Navidrome's answer (its error). Credentials first.
+empty get Navidrome's own empty answer (no lyrics; no similar songs, unless the radio of
+catalog items has some, ``views/radio.py``); any other method goes to Navidrome as it is
+and gets Navidrome's answer (its error). Credentials first.
 """
 
 from __future__ import annotations

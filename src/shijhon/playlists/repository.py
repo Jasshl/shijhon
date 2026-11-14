@@ -9,6 +9,7 @@ import secrets
 import time
 from typing import Any
 
+import aiosqlite
 import anyio
 from pydantic import SecretStr
 
@@ -109,6 +110,17 @@ class Repository:
                     [old.user_id],
                 )
                 await db.execute("UPDATE playlist_mixes SET enabled=0 WHERE owner=?", [old.user_id])
+                # A waiting addition is discarded too: its playlist gets back its tracks
+                # (as ``update`` gives them back), so the next addition does not bring them.
+                cursor = await db.execute(
+                    "SELECT id,data FROM playlist_runs WHERE mix IN"
+                    " (SELECT id FROM playlist_mixes WHERE owner=?)"
+                    " AND state IN ('queued','generating','preview')",
+                    [old.user_id],
+                )
+                for row in await cursor.fetchall():
+                    if before := json.loads(row["data"]).get("addition", {}).get("before"):
+                        await _give_back(db, row["id"], before)
                 await db.execute(
                     "UPDATE playlist_runs SET state='discarded' WHERE mix IN"
                     " (SELECT id FROM playlist_mixes WHERE owner=?) AND state!='published'",
@@ -160,21 +172,31 @@ class Repository:
         return ident
 
     async def create_discovery(
-        self, owner: str, key: str, definition: Definition, *, enable_after: bool = False
+        self,
+        owner: str,
+        key: str,
+        definition: Definition,
+        *,
+        enable_after: bool = False,
+        creator: str = "",
     ) -> str:
-        """Save one creation and its first run atomically; retries reuse that creation."""
+        """Save one creation and its first run atomically; retries reuse that creation.
+        ``creator``: the agent grant that asks, "" for the owner on the dashboard; the
+        mix's work runs under its authority (``Requests.guard``)."""
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
             raise PlaylistError("Reload the discovery mix form before submitting.")
         original = json.dumps([definition.model_dump(), enable_after], sort_keys=True)
         input_hash = hashlib.sha256(original.encode()).hexdigest()
         async with self.store.transaction() as db:
             cursor = await db.execute(
-                "SELECT id,input_hash FROM playlist_discovery_requests"
+                "SELECT id,input_hash,creator FROM playlist_discovery_requests"
                 " WHERE owner=? AND request_key=?",
                 [owner, key],
             )
             old = await cursor.fetchone()
             if old:
+                if old["creator"] is not None and old["creator"] != creator:
+                    raise PlaylistError("This mix key is unavailable here.")
                 if old["input_hash"] != input_hash:
                     raise PlaylistError("This mix key was already used with different input.")
                 return str(old["id"])
@@ -184,9 +206,9 @@ class Repository:
                 [ident, owner, definition.model_dump_json()],
             )
             await db.execute(
-                "INSERT INTO playlist_discovery_requests(id,owner,request_key,input_hash)"
-                " VALUES (?,?,?,?)",
-                [ident, owner, key, input_hash],
+                "INSERT INTO playlist_discovery_requests(id,owner,request_key,input_hash,creator)"
+                " VALUES (?,?,?,?,?)",
+                [ident, owner, key, input_hash, creator],
             )
             data = {
                 "publish_after_generation": not definition.review_before_publishing,
@@ -269,11 +291,7 @@ class Repository:
                 "UPDATE playlist_runs SET state=?,data=?,error=? WHERE id=?",
                 [state, encoded, error, run],
             )
-            await db.execute(
-                "UPDATE playlist_mixes SET definition=json_set(definition,'$.tracks',json(?),"
-                "'$.count',?) WHERE id=(SELECT mix FROM playlist_runs WHERE id=?)",
-                [json.dumps(before["tracks"]), before["count"], run],
-            )
+            await _give_back(db, run, before)
 
     async def pause(self, mix: str) -> None:
         """Revoke pending refresh enables together with the mix's schedule."""
@@ -294,3 +312,13 @@ class Repository:
                         "UPDATE playlist_runs SET data=? WHERE id=?",
                         [json.dumps(data), row["id"]],
                     )
+
+
+async def _give_back(db: aiosqlite.Connection, run: str, before: dict[str, Any]) -> None:
+    """A discarded addition's playlist gets back the tracks it had before (``before``):
+    only those, anything else changed since stays."""
+    await db.execute(
+        "UPDATE playlist_mixes SET definition=json_set(definition,'$.tracks',json(?),"
+        "'$.count',?) WHERE id=(SELECT mix FROM playlist_runs WHERE id=?)",
+        [json.dumps(before["tracks"]), before["count"], run],
+    )

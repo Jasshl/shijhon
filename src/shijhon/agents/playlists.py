@@ -80,7 +80,7 @@ def next_step(ident: str, state: str, *, live: bool) -> str:
     if state in UNFINISHED:
         return (
             f"This work is still running. Call get_playlist_request with request_id {ident} "
-            "until state is published, preview, failed or uncertain."
+            "until state is published, preview, failed, uncertain or postponed."
             + (keeps or " playlist_id stays empty until the first publication.")
         )
     if state == "preview":
@@ -97,6 +97,12 @@ def next_step(ident: str, state: str, *, live: bool) -> str:
         )
     if state == "discarded":
         return "This run was discarded and nothing was published."
+    if state == "postponed":
+        return (
+            "This scheduled refresh was put off because the account's daily limit of added "
+            "releases is reached; error says so. Nothing failed and nothing changed: the "
+            "next scheduled refresh tries again." + stays
+        )
     return ""
 
 
@@ -551,9 +557,12 @@ class PlaylistTools:
         async with self.service.changing():
             owner, grant = await self.changing("create")
             _, definition = await self.changes.mix(owner, ident)
-            if action == "publish":
+            runs = await self.service.repo.runs(ident)
+            agents = runs and runs[0]["id"] == run_id and runs[0]["data"].get("agent")
+            if action == "publish" and not agents:
                 # Publishing a selection made from personal context needs that permission,
-                # as a refresh of it does.
+                # as a refresh of it does. Not so for songs an agent sent (a replacement:
+                # ``Requests.guard`` reads no context for it; an edit asked for it then).
                 await self.changing("create", *context(definition))
             await self.changes.review(
                 owner, ident, run_id, action, enable_refreshes=enable, actor=grant
@@ -563,15 +572,15 @@ class PlaylistTools:
     async def discover(self, mix: DiscoveryMix, key: str) -> dict[str, Any]:
         await self.tools.auth("create", "history")
         async with self.service.changing():
-            owner, _ = await self.changing("create", "history")
-            ident, created = await self.changes.discover(owner, key, mix)
+            owner, grant = await self.changing("create", "history")
+            ident, created = await self.changes.discover(owner, key, mix, creator=grant)
         return {"created": created, "request": await self.answer(ident)}
 
     async def rediscover(self, ident: str, mix: DiscoveryMix) -> dict[str, Any]:
         await self.tools.auth("create", "history")
         async with self.service.changing():
-            owner, _ = await self.changing("create", "history")
-            await self.changes.rediscover(owner, ident, mix)
+            owner, grant = await self.changing("create", "history")
+            await self.changes.rediscover(owner, ident, mix, actor=grant)
         return {"request": await self.answer(ident)}
 
     async def start_import(
@@ -584,9 +593,9 @@ class PlaylistTools:
             raise RequestError(f"Send at most {IMPORT_TEXT:,} characters of lines.")
         rows = [e.entry() for e in entries] if entries else None
         async with self.service.changing():
-            owner, _ = await self.changing("create", "library")
+            owner, grant = await self.changing("create", "library")
             ident = await self.service.imports.create(
-                owner, key, name, lines, format="lines", entries=rows
+                owner, key, name, lines, format="lines", entries=rows, creator=grant
             )
         return {"request": await self.answer(ident)}
 
@@ -604,7 +613,7 @@ class PlaylistTools:
         if len(review_key) > 100 or len(choice) > 256 or not 0 <= entry <= MAX_ROWS:
             raise RequestError("Use the import's review_key, an entry number and a song ID.")
         async with self.service.changing():
-            owner, _ = await self.changing("create", "library")
+            owner, grant = await self.changing("create", "library")
             _, definition = await self.changes.mix(owner, ident)
             if definition.mode != "import":
                 raise RequestError("This playlist is not an import.")
@@ -617,6 +626,7 @@ class PlaylistTools:
                 review_key,
                 entry=str(entry) if entry else "",
                 choice=choice,
+                actor=grant,
             )
         return {"request": await self.answer(ident)}
 
@@ -693,7 +703,8 @@ def register_playlist_tools(mcp: MCPServer, tools: Tools) -> None:
     ) -> CallToolResult:
         """Publish or discard a playlist's waiting preview (state `preview`; `run` from
         get_playlist_request) when the user has seen it and asks. Publishing a discovery
-        mix, or a description that used history or library, needs that permission too.
+        mix, or a description that used history or library, needs that permission too;
+        the preview of a replacement (songs an agent sent) does not.
         Discovery mixes: `enable_refreshes` true or false turns their daily/weekly
         refreshes on or off with this publication; left out, it keeps what was asked
         when the mix was made. Discarding leaves the published playlist as it was.

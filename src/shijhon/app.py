@@ -6,9 +6,11 @@ import asyncio
 import logging
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
+from urllib.parse import quote
 
 import aiosqlite
 import anyio
@@ -17,6 +19,10 @@ import anyio.to_thread
 
 from shijhon.access import AccessService, Principal
 from shijhon.agents.app import Agents
+from shijhon.artist_lists.files import LibraryFiles
+from shijhon.artist_lists.repair import ArtistLists
+from shijhon.artist_lists.sources import Sources
+from shijhon.artist_pictures import ArtistPictures
 from shijhon.audiomuse import AudioMuse, AudioMuseClient
 from shijhon.catalog.addon import AddonCatalog, AddonCatalogs
 from shijhon.catalog.artwork import ArtworkCache, ArtworkIndex
@@ -24,8 +30,8 @@ from shijhon.catalog.base import Catalog
 from shijhon.catalog.base import scope as catalog_scope
 from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import Twins
-from shijhon.catalog.paced import PacedCatalog
-from shijhon.catalog.setup import build_catalog
+from shijhon.catalog.paced import PacedCatalog, PacedReleases
+from shijhon.catalog.setup import artist_list_catalogs, build_catalog
 from shijhon.cleanup import Cleanup, OldIds
 from shijhon.collection.contracts import CollectionError
 from shijhon.collection.gates import MusicGate
@@ -73,29 +79,37 @@ from shijhon.downloads import Preparation
 from shijhon.fill.fills import FillPolicy, Fills
 from shijhon.fill.library_pass import LibraryPass
 from shijhon.fill.refresh import Refresh
+from shijhon.fill.replacements import Replacements, first_reply
+from shijhon.fill.track_lists import TrackLists
 from shijhon.matching.matcher import Matcher
 from shijhon.music_imports import AssetResolver, ImportError, ImportLimits, MusicImports
 from shijhon.music_imports.catalog_audio import CatalogSongAudio
 from shijhon.music_imports.catalog_route import CatalogRoute
+from shijhon.music_imports.lists import ImportLists
 from shijhon.music_imports.removal import ImportRemovals
 from shijhon.music_imports.upgrade import AfterPlay
 from shijhon.navidrome.checks import PlaceholderWrites, StartupChecks
-from shijhon.navidrome.client import NavidromeService
+from shijhon.navidrome.client import NavidromeService, segment
 from shijhon.navidrome.scans import ScanCoordinator
 from shijhon.navidrome.usage import configured
+from shijhon.new_releases import NewReleases, NotSignedIn, Read, Unavailable
+from shijhon.notifications import Notices
 from shijhon.placeholders.backing import OwnedRecordings
+from shijhon.placeholders.credits import CreditRepair, catalog_credits
+from shijhon.placeholders.daily_cap import ROLE_SECONDS, DailyCap, installation
 from shijhon.placeholders.engine import PlaceholderEngine
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.silence import SilenceMaker
-from shijhon.playlists.model import PlaylistError
+from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 from shijhon.playlists.service import Playlists
+from shijhon.playlists.similar import Similarity
 from shijhon.proxy.app import Handler, ProxyApp
 from shijhon.proxy.auth import CredentialChecker
 from shijhon.proxy.forwarding import Forwarding, learn_user_header
 from shijhon.proxy.params import RestCall
 from shijhon.proxy.upstream import Receive, Scope, Send, Upstream
 from shijhon.quality import Minimum
-from shijhon.store import Store
+from shijhon.store import Store, skipped
 from shijhon.store.writer import WriterLock
 from shijhon.views.additions import CatalogAdditions
 from shijhon.views.bursts import Bursts
@@ -107,6 +121,9 @@ from shijhon.views.covers import CoverPrefetch, CoverSizes
 from shijhon.views.discographies import Discographies
 from shijhon.views.library_artists import LibraryArtists
 from shijhon.views.native_collection_requests import NativeCollectionRequests
+from shijhon.views.newest import METHOD as NEWEST
+from shijhon.views.newest import NewestReleases
+from shijhon.views.radio import CallerKeys, CatalogRadio
 from shijhon.views.real_audio import RealAudio, RealAudioAccounts
 from shijhon.views.removed import RemovedViews
 from shijhon.views.reports import REPORTS, Reports
@@ -147,12 +164,20 @@ class Services:
     downloads: Preparation | None = None
     collection: Collection | None = None
     collection_refresh: SourceRefresh | None = None
+    # Accepted actions recorded as their accounts' activity (apps', agents' additions).
+    collection_requests: CollectionRequests | None = None
     reasons: Reasons | None = None
     written: Written | None = None
     music_imports: MusicImports | None = None
     music_import_removals: ImportRemovals | None = None
     music_imports_problem: str = ""
     quality: Minimums | None = None  # each person's minimum audio quality
+    artist_pictures: ArtistPictures | None = None  # pictures for artists without one
+    artist_lists: ArtistLists | None = None  # each artist of files naming several in one text
+    notices: Notices | None = None  # notifications of states that need a person
+    new_releases: NewReleases | None = None  # new releases of the artists accounts follow
+    radio: CatalogRadio | None = None  # similar songs and artists of catalog items
+    daily_cap: DailyCap | None = None  # how many releases an account may add in a day
 
 
 class ShijhonApp:
@@ -236,7 +261,9 @@ class ShijhonApp:
         self._opened.append(writer.aclose)
         self._lock = writer.aclose
         self.dashboard.listen()
-        store = await Store.open(self.configured.database_path)
+        store = await Store.open(
+            self.configured.database_path, snapshot=self.configured.upgrade_snapshots
+        )
         self._opened.append(store.close)
         # Values saved in the dashboard win over the file; the environment wins over
         # them.
@@ -299,14 +326,43 @@ class ShijhonApp:
             backing=recordings,
             writes_refused=writes.refused,
         )
+        # How many releases an account may add in a day: asked where one is written.
+
+        async def is_admin(user_id: str) -> bool:
+            user = await navidrome.native_json("GET", "user/" + quote(user_id, safe=""))
+            return isinstance(user, dict) and user.get("isAdmin") is True
+
+        engine.daily_cap = DailyCap(
+            store,
+            limit=settings.catalog.user_releases_per_day,
+            is_admin=is_admin,
+            # An answer about an account's role is never used for longer than a
+            # credential check is.
+            role_seconds=min(ROLE_SECONDS, settings.server.credential_cache_seconds),
+        )
+        await engine.daily_cap.prune()  # additions older than 24 hours are not kept
         await engine.load_removed()  # requests with old IDs of removed releases
         await engine.load_pending()  # placeholders a stop left half written
+        # Albums filled from another release: uses of the old release's song IDs, and the
+        # replacements a stop left to finish.
+        replacements = Replacements(store, engine, navidrome, spawn=self.try_spawn)
+        await replacements.load()
         checks = StartupChecks(navidrome, engine, store, writes)
         self.spawn(checks.run)
         self.spawn(checks.keep_repairing)
         self.forwarding.learning()  # requests wait for it (briefly)
         if not self.try_spawn(lambda: learn_user_header(self.forwarding, navidrome)):
             self.forwarding.learned()
+        # Notifications of states that need a person: the states kept from before are read
+        # first, so that nothing found from here on is sent again.
+        notices = Notices(store, settings.notifications, names=partial(account_name, navidrome))
+        await notices.load()
+        self.spawn(notices.run)
+        # An upgrade that went on without its snapshot (this start's or an earlier one's),
+        # until an administrator dismisses it: on the dashboard, and notified once.
+        upgraded = await skipped.read(store)
+        self.dashboard.skipped = upgraded
+        notices.upgraded_without_snapshot(upgraded)
         delivery = settings.delivery
         sources = SourceRegistry(
             store,
@@ -317,6 +373,7 @@ class ShijhonApp:
             cooldown_seconds=delivery.cooldown_seconds,
         )
         self._opened.append(sources.aclose)
+        sources.notices = notices
         if settings.addons is not None:
             # The environment's list always applies; the file's until the dashboard
             # changed the list.
@@ -389,6 +446,9 @@ class ShijhonApp:
             ),
             spawn=self.spawn,
         )
+        # A request waits for a replacement as long as one for audio may wait
+        # ([delivery] max_wait_seconds, as it is now).
+        replacements.waits = lambda: deliverer.settings.max_wait_seconds
         # DASH links: joined into files (in a folder of their own; what a stop left there
         # goes, before any request).
         dash = Dash(
@@ -490,6 +550,23 @@ class ShijhonApp:
         )
         if catalog is not None:
             self._opened.append(catalog.aclose)
+            # A credit naming several artists is written as each of them, with the
+            # catalog's artist items of the songs it listed without them.
+            engine.credits = catalog_credits(catalog)
+        # Placeholders written with a joined credit before: rewritten with each artist.
+        repair = CreditRepair(
+            engine, store, catalog=catalog.key if catalog else None, stopping=self._stopping
+        )
+        self.spawn(repair.run)
+        # Library artists Navidrome has no picture for: the catalog artist's, set in Navidrome.
+        pictures = ArtistPictures(
+            navidrome,
+            catalog,
+            store,
+            enabled=settings.catalog.artist_pictures,
+            stopping=self._stopping,
+        )
+        self.spawn(pictures.run)
         listening = Listening(memory_seconds=delivery.prefetch_memory_seconds)
 
         # The song a client says it plays never waits behind the user's fetches.
@@ -593,6 +670,9 @@ class ShijhonApp:
         views.native = catalog_ids.native
         self.proxy.fallback = catalog_ids.handle
         search = settings.search
+        discographies = Discographies(
+            store, max_age_seconds=search.discography_max_age_days * 86400
+        )
         additions = CatalogAdditions(
             catalog,
             store,
@@ -605,9 +685,7 @@ class ShijhonApp:
             spawn=self.spawn,
             cache_seconds=settings.catalog.cache_seconds,
             library_artists=library_artists,
-            discographies=Discographies(
-                store, max_age_seconds=search.discography_max_age_days * 86400
-            ),
+            discographies=discographies,
             artist_sync=Bursts(search.artist_sync_pages, search.artist_sync_seconds),
             search_guard=Bursts(
                 search.guard_searches,
@@ -641,8 +719,32 @@ class ShijhonApp:
         self.proxy.handlers.update(
             additions.handlers(get_artist=virtual["getArtist"], ids=catalog_ids.handle)
         )
+        # The newest albums of an account that follows artists begin with their new
+        # releases (before the lists' complete counts below, which wrap it).
+        newest = NewestReleases(additions, AccessService(navidrome), self.upstream)
+        if catalog is not None:
+            self.proxy.handlers[NEWEST] = newest.wrap(
+                self.proxy.handlers.get(NEWEST, self.proxy.fallback)
+            )
+        # Radio from catalog items: their similar songs and artists, from Last.fm (once
+        # playlists are there, below).
+        radio = CatalogRadio(
+            catalog,
+            additions,
+            enabled=search.radio,
+            native=catalog_ids.native,
+            shown=shown,
+            # A client asking for many lists has the artist pages' sync settings, counted
+            # apart.
+            sync=Bursts(search.artist_sync_pages, search.artist_sync_seconds),
+            spawn=self.spawn,
+            server=lambda: self.checker.server,
+        )
+        self.proxy.handlers.update(radio.handlers(ids=catalog_ids.handle))
+        views.similar = radio.similar_artists
         fills: Fills | None = None
         library_pass: LibraryPass | None = None
+        background: PacedCatalog | None = None  # (the catalog at the background pace)
         if catalog is not None and settings.fill.enabled:
             fill = settings.fill
             fills = Fills(
@@ -658,7 +760,9 @@ class ShijhonApp:
                 pause_seconds=fill.background_pause_seconds,
                 policy=FillPolicy(fill.auto_min_songs, fill.auto_min_share),
                 auto_pick=fill.auto_pick,
+                replacements=replacements,
             )
+            self.spawn(replacements.run)
             # Owned albums shown complete from their first view, filled on first use.
             albums = CompleteAlbums(fills, self.upstream, library_artists=library_artists)
             self.proxy.handlers["getAlbum"] = albums.wrap(self.proxy.handlers.get("getAlbum"))
@@ -675,14 +779,22 @@ class ShijhonApp:
             own = CachedCatalog(
                 catalog.inner, ttl=settings.catalog.cache_seconds, maxsize=64, remember=0
             )
+            background = PacedCatalog(own, fill.pass_requests_per_second)
             library_pass = LibraryPass(
                 fills,
                 navidrome,
-                Matcher(PacedCatalog(own, fill.pass_requests_per_second), twins=twins),
+                Matcher(background, twins=twins),
                 mode=fill.library_pass,  # a dry run: nothing fills automatically
                 start_seconds=fill.pass_start_seconds,
                 interval_seconds=fill.pass_interval_hours * 3600,
                 pause_seconds=fill.background_pause_seconds,
+                # Added releases' track lists, read again past the caches in the same pace.
+                track_lists=TrackLists(
+                    store,
+                    Refresh(store, navidrome, engine, PacedReleases(background, catalog.inner)),
+                    fills,
+                    enabled=fill.refresh_track_lists,
+                ),
             )
             self.spawn(library_pass.run)
         # An action (the dashboard's): the release as the catalog has it now, past its cache.
@@ -709,6 +821,7 @@ class ShijhonApp:
             changed=library_artists.forget,
             spawn=self.try_spawn,
         )
+        cleanup.notices = notices
         self.spawn(cleanup.run)
         # ... by a use of their old IDs, while views, covers and plain streams of them write
         # nothing.
@@ -719,7 +832,8 @@ class ShijhonApp:
             changed=library_artists.forget,
             jukebox_enabled=interceptor.jukebox_enabled,
         )
-        self.proxy.before = old_ids
+        # (First: a use of a song a release change took out never reaches the handlers.)
+        self.proxy.before = first_reply(replacements, old_ids)
         interceptor.use_old_id = old_ids.use  # a stream that needs converting
         for method in COMMITS:
             self.proxy.handlers[method] = commits.wrap(method, self.proxy.handlers.get(method))
@@ -750,6 +864,9 @@ class ShijhonApp:
             removed,
         )
         self.services.quality = minimums
+        self.services.daily_cap = engine.daily_cap
+        self.services.artist_pictures = pictures
+        self.services.notices = notices
         # Imports also ask the catalogs of the add-ons, as the Add-ons page has them now.
         addon_catalogs = AddonCatalogs(
             sources,
@@ -765,6 +882,10 @@ class ShijhonApp:
         )
         self.services.playlists = playlists
         self._opened.append(playlists.aclose)
+        # ... asked with the Last.fm key each account connected for its discovery mixes.
+        radio.similarity = Similarity(playlists.history)
+        radio.key_of = CallerKeys(AccessService(navidrome), playlists.repo)
+        self.services.radio = radio
         token_held = token_withheld(self.configured, values, locked=self.locked)
         if token_held:
             log.warning(
@@ -792,6 +913,7 @@ class ShijhonApp:
         history = History(store)
         collection_requests = CollectionRequests(commits, self.upstream, history)
         commits.requested = collection_requests
+        self.services.collection_requests = collection_requests
         # Accepted actions kept to record (large ones, preparations, favorites read).
         self.spawn(collection_requests.run)
         playlists.published = collection_requests.published
@@ -892,6 +1014,86 @@ class ShijhonApp:
                 )
                 self.services.music_import_removals = removals
                 self.spawn(removals.run)
+        # Files naming several artists in one text: the catalogs' list of them, when the
+        # text is exactly those names (library files, imports' files; placeholders: the
+        # credit repair, which asks the add-on catalogs too while the setting is on).
+        # (The catalog is asked by ISRC and search too: as background work, sharing the
+        # library pass's pace, so that together they keep to it. The catalogs asked for
+        # artist lists only each have that pace of their own.)
+        if background is None and catalog is not None:
+            background = PacedCatalog(catalog, settings.fill.pass_requests_per_second)
+        others = artist_list_catalogs(
+            settings.catalog,
+            per_second=settings.fill.pass_requests_per_second,
+            resolver=self.resolver,
+        )
+        for _, paced in others:
+            self._opened.append(paced.inner.aclose)
+        lists_sources = Sources(store, background, addon_catalogs, others)
+
+        # New releases of the artists an account follows, for those who turned it on:
+        # the daily check asks Navidrome as the account (the sign-in its dashboard saved)
+        # and the catalog at the background pace.
+        async def as_account(owner: str) -> Read:
+            try:
+                connection = await playlists.connection(owner)
+            except UpstreamUnavailable:
+                raise Unavailable from None
+            except PlaylistError:
+                raise NotSignedIn from None
+
+            async def read(method: str, params: Sequence[tuple[str, str]]) -> dict[str, Any]:
+                try:
+                    return await playlists.client.call(connection, method, params)
+                except UpstreamUnavailable:
+                    raise Unavailable from None
+                except PlaylistError:
+                    raise NotSignedIn from None
+
+            return read
+
+        new_releases = NewReleases(
+            store,
+            navidrome,
+            background,
+            additions,
+            discographies,
+            as_account,
+            days=settings.catalog.new_releases_days,
+            most_played=settings.catalog.new_releases_most_played,
+            artists_per_day=settings.catalog.new_releases_artists_per_day,
+            stopping=self._stopping,
+        )
+        await new_releases.load()
+        newest.releases = new_releases
+        new_releases.missing = newest.missing
+        self.services.new_releases = new_releases
+        self.spawn(new_releases.run)
+        if settings.navidrome.library_path is not None:
+            imported = self.services.music_imports
+            lists = ArtistLists(
+                navidrome,
+                store,
+                lists_sources,
+                LibraryFiles(
+                    settings.navidrome.library_path,
+                    store,
+                    navidrome,
+                    scans,
+                    not_in=(settings.placeholders.folder, settings.music_imports.folder),
+                ),
+                placeholder_folder=settings.placeholders.folder,
+                imports=ImportLists(imported, navidrome) if imported is not None else None,
+                enabled=settings.catalog.artist_lists,
+                library=settings.catalog.artist_lists_library,
+                stopping=self._stopping,
+            )
+            if imported is not None:
+                imported.lists = lists.imports
+            self.services.artist_lists = lists
+            repair.lists = lists_sources
+            repair.lookups = lists.lookups
+            self.spawn(lists.run)
 
         async def library_context(owner: str, limit: int) -> list[dict[str, str]]:
             try:
@@ -943,6 +1145,7 @@ class ShijhonApp:
 
         visibility.learn = learn
         visibility.attach(self.proxy)
+        newest.selection = visibility.selection
         source_refresh = self.services.collection_refresh
 
         async def native_verified(principal: Principal, token: str) -> None:
@@ -980,6 +1183,9 @@ class ShijhonApp:
             if self.try_spawn(self.agents.run):
                 with anyio.fail_after(10):
                     await self.agents.ready.wait()
+            # What agents were asked to add to their accounts' libraries, also what a
+            # restart left unfinished.
+            self.spawn(self.agents.additions.run)
         self.spawn(playlists.run)
         self.spawn(downloads.run)
         self.spawn(collection.run)
@@ -1137,7 +1343,10 @@ class ShijhonApp:
         """One piece of background work: an exception ends it alone (logged by its type
         only: messages may carry an add-on's link; an error line a minute at most for each
         kind of work), never the app's other background work - the library pass, the
-        cleanup, expiry, fills, warm-ahead, cover prefetch."""
+        cleanup, expiry, fills, warm-ahead, cover prefetch. What it adds to the library
+        is the installation's own work unless it says whose it is: never the person's whose
+        request started it (the daily cap on adding)."""
+        installation()
         try:
             await work()
         except Exception as exc:
@@ -1152,6 +1361,13 @@ class ShijhonApp:
             # Where, for a debug log: the frames only - never the exception's message.
             where = "".join(traceback.format_tb(exc.__traceback__))
             log.debug("background work %s failed at:\n%s", name, where)
+
+
+async def account_name(navidrome: NavidromeService, user_id: str) -> str | None:
+    """The account name of a Navidrome user ID (for a notification), None when unknown."""
+    user = await navidrome.native_json("GET", "user/" + segment(user_id))
+    name = user.get("userName") if isinstance(user, dict) else None
+    return name if isinstance(name, str) and name else None
 
 
 def _name(work: Callable[..., Any]) -> str:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import secrets
@@ -11,7 +12,7 @@ from urllib.parse import urlsplit
 
 from pydantic import SecretStr, ValidationError
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
 from shijhon.config import LOOPBACK_HOSTS
@@ -21,6 +22,7 @@ from shijhon.dashboard.playlist_imports import Pages as ImportPages
 from shijhon.dashboard.playlist_requests import Pages as RequestPages
 from shijhon.dashboard.playlist_requests import edits_view
 from shijhon.dashboard.saved import PLAYLIST_KEYS
+from shijhon.dashboard.times import day
 from shijhon.playlists.edits import forget, remembered
 from shijhon.playlists.model import Connection, Definition, PlaylistError
 from shijhon.playlists.repository import AI_FIELDS
@@ -38,6 +40,8 @@ AGENT_CAN = {
     "history": "read your listening history",
     "settings": "choose your AI model",
     "downloads": "prepare playlist audio",
+    "add": "add albums to your library",
+    "admin": "settle the review list and read the server's status",
 }
 
 
@@ -91,7 +95,8 @@ class Pages:
             Route("/playlists/host-ai", page(self.host_ai), methods=["POST"]),
             Route("/playlists/private-ai", page(self.private_ai), methods=["POST"]),
             Route("/playlists/forget", page(self.forget), methods=["POST"]),
-            Route("/playlists/agents", page(self.agents), methods=["POST"]),
+            # Revoking an agent only takes access away: the session is enough (``agents``).
+            Route("/playlists/agents", page(self.agents, verify=False), methods=["POST"]),
             *RequestPages(self.dashboard).routes(),
             *ImportPages(self.dashboard).routes(),
             Route("/playlists/{mix}", page(self.detail), methods=["GET", "POST"]),
@@ -104,6 +109,12 @@ class Pages:
         if not services or not services.playlists:
             raise PlaylistError("Playlist services are starting.")
         return services.playlists
+
+    @property
+    def radio(self) -> bool:
+        """Whether similar songs and artists of catalog items are answered from Last.fm."""
+        services = self.dashboard.services
+        return bool(services and services.catalog and services.radio and services.radio.enabled)
 
     async def owned_connection(self, session: Session) -> Connection:
         connection = await self.service.connection(session.user_id)
@@ -151,21 +162,27 @@ class Pages:
 
     async def agents(self, request: Request, session: Session) -> Response:
         """Revoke one of the account's agents (agents connect themselves). The signed-in
-        session is the authority: no Navidrome check, so an agent can be revoked while
-        Navidrome is down or the saved playlist password is stale."""
-        try:
-            async with self.service.changes:
-                form = request.state.form
-                if form.get("action") != "revoke":
-                    raise PlaylistError("Agents connect themselves at the MCP address.")
-                await self.service.repo.store.execute(
-                    "UPDATE playlist_agent_tokens SET revoked=?"
-                    " WHERE id=? AND owner=? AND revoked=0",
-                    [time.time(), form.get("agent", ""), session.user_id],
-                )
-            return self.dashboard._see("/playlists#agents")
-        except PlaylistError as exc:
-            return await self.render(session, error=str(exc))
+        session and its form token are the authority (the route is not verified with
+        Navidrome, and this uses no playlist connection), so an agent can be revoked while
+        Navidrome is down or the saved playlist password is stale. So every answer is a
+        redirect to the (verified) page or a plain refusal: nothing personal is shown."""
+        from shijhon.dashboard.app import HEADERS  # (app imports this module)
+
+        services = self.dashboard.services
+        if not services or not services.playlists:
+            return PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS)
+        service = services.playlists
+        form = request.state.form
+        if form.get("action") != "revoke":
+            return PlainTextResponse(
+                "Agents connect themselves at the MCP address.\n", 400, headers=HEADERS
+            )
+        async with service.changes:
+            await service.repo.store.execute(
+                "UPDATE playlist_agent_tokens SET revoked=? WHERE id=? AND owner=? AND revoked=0",
+                [time.time(), form.get("agent", ""), session.user_id],
+            )
+        return self.dashboard._see("/playlists#agents")
 
     async def local_ai_row(self) -> dict[str, Any] | None:
         """The row of ``playlists.allow_private_api`` (a saved setting, as on the settings
@@ -178,6 +195,7 @@ class Pages:
             dashboard.host.configured,
             await dashboard.saved.all(),
             addon_names=[],
+            date=day,
             locked=dashboard.host.locked,
         )
         return next(
@@ -258,6 +276,8 @@ class Pages:
                 if connection and connection.history_key.get_secret_value()
                 else ""
             ),
+            # The key also answers the radio of catalog items, while that is on.
+            radio=self.radio,
             ai_mode=(
                 "shared"
                 if connection and connection.use_shared_ai
@@ -450,47 +470,70 @@ class Pages:
             if not session.is_admin:
                 raise PlaylistError("Only administrators can configure server AI.")
             # Only this setting of [playlists] is taken from a form (never a runner's command).
-            # First, so that the connection saved with it may use a private address.
+            # First, so that the connection saved with it may use a private address; given
+            # back when the connection is refused, so that a refused form changes nothing. The
+            # section's other saves wait meanwhile, so that giving it back undoes no other.
             local = {key: value for key, value in form.items() if key in PLAYLIST_KEYS}
-            if local and self.dashboard.saved is not None:
-                _, written, _ = await self.dashboard._save(session, "playlists", local, whole=False)
-                if written is None:
-                    raise PlaylistError("The setting for AI on this network was not saved.")
-            async with self.service.changes:
-                old = await self.owned_connection(session)
-                shared = await self.service.repo.shared_ai()
-                backend = form.get("backend", "none")
-                endpoint = form.get("endpoint", "").strip() if backend == "api" else ""
-                model = form.get("model", "").strip() if backend != "none" else ""
-                if backend == "api" and (not endpoint or not model):
-                    raise PlaylistError("Enter an API base URL and model for the API connection.")
-                previous = shared or {**old.model_dump(), "api_key": old.api_key.get_secret_value()}
-                api_key = (
-                    form.get("api_key", "")
-                    or (
-                        previous.get("api_key", "")
-                        if previous.get("backend") == "api" and previous.get("endpoint") == endpoint
-                        else ""
-                    )
-                    if backend == "api"
-                    else ""
-                )
-                configured = Connection.model_validate(
-                    {
-                        **old.model_dump(),
-                        "backend": backend,
-                        "endpoint": endpoint,
-                        "model": model,
-                        "api_key": api_key,
-                        "use_shared_ai": False,
+            before: dict[str, str] = {}
+            dashboard = self.dashboard
+            async with contextlib.AsyncExitStack() as held:
+                if local and dashboard.saved is not None:
+                    await held.enter_async_context(dashboard._section_saves.hold("playlists"))
+                    running = dashboard.running or dashboard.host.configured
+                    before = {
+                        key: "true" if getattr(running.playlists, key) else "false" for key in local
                     }
-                )
-                models = [
-                    line.strip()
-                    for line in form.get("allowed_models", "").splitlines()
-                    if line.strip()
-                ]
-                await self.service.configure_shared_ai(configured, allowed_models=models)
+                    _, written, _ = await dashboard._save(
+                        session, "playlists", local, whole=False, held=True
+                    )
+                    if written is None:
+                        raise PlaylistError("The setting for AI on this network was not saved.")
+                try:
+                    async with self.service.changes:
+                        old = await self.owned_connection(session)
+                        shared = await self.service.repo.shared_ai()
+                        backend = form.get("backend", "none")
+                        endpoint = form.get("endpoint", "").strip() if backend == "api" else ""
+                        model = form.get("model", "").strip() if backend != "none" else ""
+                        if backend == "api" and (not endpoint or not model):
+                            raise PlaylistError(
+                                "Enter an API base URL and model for the API connection."
+                            )
+                        previous = shared or {
+                            **old.model_dump(),
+                            "api_key": old.api_key.get_secret_value(),
+                        }
+                        api_key = (
+                            form.get("api_key", "")
+                            or (
+                                previous.get("api_key", "")
+                                if previous.get("backend") == "api"
+                                and previous.get("endpoint") == endpoint
+                                else ""
+                            )
+                            if backend == "api"
+                            else ""
+                        )
+                        configured = Connection.model_validate(
+                            {
+                                **old.model_dump(),
+                                "backend": backend,
+                                "endpoint": endpoint,
+                                "model": model,
+                                "api_key": api_key,
+                                "use_shared_ai": False,
+                            }
+                        )
+                        models = [
+                            line.strip()
+                            for line in form.get("allowed_models", "").splitlines()
+                            if line.strip()
+                        ]
+                        await self.service.configure_shared_ai(configured, allowed_models=models)
+                except (PlaylistError, ValidationError):
+                    if before:
+                        await dashboard._save(session, "playlists", before, whole=False, held=True)
+                    raise
             return self.dashboard._see("/playlists")
         except (PlaylistError, ValidationError) as exc:
             message = str(exc) if isinstance(exc, PlaylistError) else "Check the host AI fields."
@@ -559,7 +602,9 @@ class Pages:
                         [spec.model_dump_json(), mix["id"]],
                     )
                     await service.repo.enqueue(
-                        mix["id"], enable_after=request.state.form.get("enable") == "true"
+                        mix["id"],
+                        enable_after=request.state.form.get("enable") == "true",
+                        actor="",  # (the owner's: ``Requests.guard``)
                     )
                     service.notify()
                     return self.dashboard._see(f"/playlists/{mix['id']}")
@@ -589,8 +634,8 @@ class Pages:
                 form = request.state.form
                 action = form.get("action")
                 if action in ("generate", "preview"):
-                    await service.repo.enqueue(
-                        mix["id"], review=True if action == "preview" else None
+                    await service.repo.enqueue(  # (the owner's: ``Requests.guard``)
+                        mix["id"], review=True if action == "preview" else None, actor=""
                     )
                 elif action in ("pause", "enable"):
                     if action == "enable" and (not mix["playlist_id"] or not mix["published"]):
@@ -613,10 +658,9 @@ class Pages:
                     run = await service.repo.run(form.get("run", ""))
                     if run["mix"] != mix["id"]:
                         raise PlaylistError("That run does not belong to this mix.")
-                    if "actor" in run["data"]:
-                        # The owner takes over a run an agent asked for, with their own
-                        # authority (also when that agent was disconnected since).
-                        run["data"]["actor"] = ""
+                    # The owner publishes or rechecks with their own authority, also a run
+                    # of a mix an agent made or asked for (and was disconnected since).
+                    run["data"]["actor"] = ""
                     if action == "publish" and run["state"] == "preview":
                         run["data"]["enable_after"] = form.get("enable") == "true"
                         if not run["data"]["enable_after"]:

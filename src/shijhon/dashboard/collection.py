@@ -259,11 +259,19 @@ class Pages:
             filters.append(SHOW_LABELS[show_of(query)])
         if query.origin != "all":
             filters.append(ORIGIN_LABELS[query.origin])
+        # Where the account stands with the daily cap on adding (nothing while none is set).
+        cap = getattr(self.dashboard.services, "daily_cap", None)
+        adding = (
+            await cap.standing(session.user_id, admin=session.is_admin)
+            if cap is not None and session.user_id
+            else None
+        )
         return await self.dashboard._render(
             "collection.html",
             session=session,
             current="collection",
             title="Your collection",
+            adding=adding,
             query=query,
             listing=listing,
             listing_ready=listing_ready,

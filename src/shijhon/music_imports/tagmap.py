@@ -939,3 +939,74 @@ def matroska_copy(source_fd: int, target_fd: int, wanted: Mapping[str, Sequence[
         timeout=FFMPEG_SECONDS,
         check=True,
     )  # fmt: skip
+
+
+# --- artist lists: these names alone, everything else as it is ------------------------
+
+# The names Shijhon gives a file that names several artists in one text
+# (``artist_lists``), and every name Navidrome 0.64.2 reads each of them under, as raw keys.
+LISTED: dict[str, frozenset[str]] = {
+    "artists": frozenset({*tagging.ARTISTS_ALIASES, "txxx:artists"}),
+    "albumartists": frozenset(
+        {*tagging.ALBUM_TAGS["albumartists"], "txxx:albumartists", "album artists",
+         "----:com.apple.itunes:albumartists"}
+    ),
+    "albumartist": frozenset({*tagging.ALBUM_TAGS["albumartist"], "albumartist"}),
+}  # fmt: skip
+
+
+def _same_place(key: str, place: str) -> bool:
+    return key.lower() == place.lower()
+
+
+def set_listed(tags: Any, kind: str, values: Mapping[str, Sequence[str] | None]) -> None:
+    """Item-level writes of ``values`` (``LISTED`` names: a name's values, or None to
+    remove it) into ``tags`` of family ``kind``: each name's own place is emptied and
+    takes the values; every other tag stays as it is - unlike ``write`` and
+    ``replace_album``, nothing else is cleared."""
+    for logical, wanted in values.items():
+        if logical not in LISTED:
+            raise ValueError(logical)
+        place = _name(logical, kind)
+        if not place:
+            raise ValueError(logical)
+        texts = [str(v) for v in wanted or () if str(v)]
+        if kind == "id3":
+            if place.startswith("TXXX:"):
+                desc = place[5:].lower()
+                for frame in [f for f in tags.getall("TXXX") if f.desc.lower() == desc]:
+                    del tags[frame.HashKey]
+                if texts:
+                    tags.add(TXXX(encoding=3, desc=place[5:], text=texts))
+            else:
+                tags.delall(place)
+                if texts:
+                    tags.add(Frames[place](encoding=3, text=texts))
+            continue
+        for key in [k for k in tags.keys() if _same_place(k, place)]:  # noqa: SIM118 - ASF tags iterate as pairs
+            del tags[key]
+        if not texts:
+            continue
+        if kind == "mp4" and place.startswith("----:"):
+            tags[place] = [MP4FreeForm(t.encode()) for t in texts]
+        else:
+            tags[place] = texts
+
+
+def save_as_found(audio: Any, tags: Any, fileobj: Any) -> None:
+    """``save``, keeping an ID3 tag's version (2.3 stays 2.3: several values of a frame
+    are then separated as 2.4 separates them, which Navidrome 0.64.2 reads); an ID3v2.2
+    tag, which Mutagen cannot write as it is, is refused (``ValueError``)."""
+    fileobj.seek(0)
+    if isinstance(tags, ID3):
+        major = tags.version[1] if tags.version[0] == 2 else 4
+        if major not in (3, 4):
+            raise ValueError("ID3v2.2")
+        if isinstance(audio, AAC):
+            tags.save(fileobj, v2_version=major, v23_sep=None)
+        else:
+            audio.save(fileobj, v2_version=major, v23_sep=None)
+    else:
+        audio.save(fileobj)
+    fileobj.flush()
+    fileobj.seek(0)

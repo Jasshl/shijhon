@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from shijhon.dashboard import library
 from shijhon.fill.fills import ChoiceRefused, Decision, FillPolicy
 from tests.conftest import NavidromeFactory
 from tests.harness.collection import prepare_collection
@@ -188,6 +189,48 @@ def test_the_meter_counts_albums_checked_with_or_without_a_match(admin: Browser)
     assert int(meter.group(1).replace(",", "")) == sum(int(n.replace(",", "")) for n in outcomes)
 
 
+def test_the_sidebar_counts_the_albums_to_review(world: DeliveryWorld, admin: Browser) -> None:
+    """On the Library link of every page: the review list's length, in words for a screen
+    reader; nothing when the list is empty."""
+    fills = world.services.fills
+    assert fills is not None
+    store = world.services.store
+    listed = world.server.call(lambda: library.review_count(store, fills.scope))
+    assert listed >= 1
+    words = f"{listed} album{'s' if listed != 1 else ''} to review"
+    page = admin.get("cleanup").text
+    links = re.findall(rf'<li><a href="{PATH}/library"[^>]*>(.*?)</a></li>', page)
+    assert len(links) == 2 and all(
+        f'<span class="nav-count" aria-hidden="true">{listed}</span>'
+        f'<span class="visually-hidden">, {words}</span>' in link
+        for link in links
+    )
+    held = world.server.call(
+        lambda: store.fetchall(
+            "SELECT album_id FROM album_matches WHERE scope = ? AND outcome = 'review'",
+            [fills.scope],
+        )
+    )
+    ids = [row["album_id"] for row in held]
+
+    def mark(outcome: str) -> None:
+        async def write() -> None:
+            for album in ids:
+                await store.execute(
+                    "UPDATE album_matches SET outcome = ? WHERE scope = ? AND album_id = ?",
+                    [outcome, fills.scope, album],
+                )
+
+        world.server.call(write)
+
+    mark("kept")
+    try:
+        page = admin.get("cleanup").text
+        assert "to review</span>" not in page and "nav-count" not in page
+    finally:
+        mark("review")
+
+
 def test_fill_from_a_chosen_release_in_the_background(world: DeliveryWorld, admin: Browser) -> None:
     started = action(admin, world, FILLED, action="fill", release="demo:900000101")
     assert started.status_code == 303 and started.headers["location"].endswith("#review")
@@ -324,6 +367,77 @@ def test_advanced_fill_settings_are_generated(world: DeliveryWorld, admin: Brows
         assert fills.budget == 4.5
     finally:
         admin.submit("library", {"open_budget_seconds": "15"}, action="library/settings")
+
+
+def test_the_page_says_what_reading_track_lists_again_led_to(
+    world: DeliveryWorld, admin: Browser
+) -> None:
+    passing, store = world.services.library_pass, world.services.store
+    assert passing is not None and passing.track_lists is not None
+    now = time.time()
+    readings = [  # (release, when read, outcome, added, updated)
+        ("demo:q-lists-1", now - 3600, "changed", 2, 1),
+        ("demo:q-lists-2", now - 86400, "same", 0, 0),
+        ("demo:q-lists-3", now - 40 * 86400, "changed", 7, 7),
+        ("demo:q-lists-4", now - 60, "failed", 0, 0),  # not read
+    ]
+
+    async def seed() -> None:
+        for ref, at, how, added, updated in readings:
+            await store.execute(
+                "INSERT INTO releases (ref, folder, album_id, title, artist, album_tags, data,"
+                " created_at) VALUES (?, ?, ?, 'Listed', 'Lister', '{}', '{}', ?)",
+                [ref, f"_shijhon/{ref}", f"album-{ref}", now - 90 * 86400],
+            )
+            await store.execute(
+                "INSERT INTO release_refreshes (ref, checked_at, outcome, added, updated,"
+                " left_out) VALUES (?, ?, ?, ?, ?, ?)",
+                [ref, at, how, added, updated, 2 if ref.endswith("-2") else 0],
+            )
+
+    async def clear() -> None:  # (the readings go with their releases)
+        await store.execute("DELETE FROM releases WHERE ref LIKE 'demo:q-lists-%'")
+        left = await store.fetchone("SELECT COUNT(*) AS n FROM release_refreshes")
+        assert left is not None and left["n"] == 0
+
+    def line(page: str) -> str:
+        found = re.search(r'<p class="muted" id="track-lists">(.*?)</p>', page, re.S)
+        return found.group(1) if found else ""
+
+    assert line(admin.get("library").text) == ""  # nothing read yet
+    world.server.call(seed)
+    try:
+        assert line(admin.get("library").text) == ""  # the pass is off
+        passing.mode = "on"
+        # What each release's latest reading led to, taken together (no total over time).
+        assert line(admin.get("library").text) == (
+            "The pass has read the track lists of 3 releases in your library again. At their"
+            " latest readings it added 9 tracks and corrected the length of 8 songs. It left"
+            " 2 other differences from the catalog as they are."
+        )
+        world.server.call(
+            lambda: store.execute(
+                "UPDATE release_refreshes SET outcome = 'pending' WHERE ref = 'demo:q-lists-1'"
+            )
+        )
+        passing.mode = "dry_run"
+        assert line(admin.get("library").text) == (
+            "The pass has read the track lists of 3 releases in your library again. At their"
+            " latest readings it added 7 tracks and corrected the length of 7 songs. As a dry"
+            " run, it found 2 tracks to add and 1 length to correct at their latest readings."
+            " It left 2 other differences from the catalog as they are."
+        )
+        # The setting applies at once; off, the page says nothing about it.
+        saved = admin.submit("library", {"refresh_track_lists": "false"}, action="library/settings")
+        assert saved.status_code == 303 and passing.track_lists.enabled is False
+        page = admin.get("library").text
+        assert line(page) == "" and "Restart needed" not in page
+        admin.submit("library", {"refresh_track_lists": "true"}, action="library/settings")
+        assert passing.track_lists.enabled is True
+    finally:
+        passing.mode = "off"
+        admin.submit("library", {"refresh_track_lists": "true"}, action="library/settings")
+        world.server.call(clear)
 
 
 def test_review_actions_need_the_session_token(world: DeliveryWorld, admin: Browser) -> None:

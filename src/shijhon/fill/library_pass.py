@@ -14,6 +14,10 @@ Every album is looked at: those the fill policy allows (the owner has enough of 
 are filled, the others matched and kept with their plan (``deferred``), so that a view shows
 them complete at once, even among many, and their first use fills them.
 
+After its albums, a run reads the track lists of some releases already in the library
+again (``fill.track_lists``: tracks the catalog added since and lengths it corrected,
+nothing else), in the same pace and the same mode - unless that is switched off.
+
 Its mode is a setting: a **dry run** (the default) records what it would do - fill, complete,
 review, no match - as plans, and writes nothing; ``shijhon matches`` lists them. Nothing
 else fills automatically meanwhile (views, searches and syncs only match): only first use
@@ -32,6 +36,7 @@ from typing import Literal
 import anyio
 
 from shijhon.fill.fills import Decision, Fills
+from shijhon.fill.track_lists import TrackLists
 from shijhon.matching.matcher import Matcher
 from shijhon.navidrome.client import NavidromeError, NavidromeService
 
@@ -51,6 +56,7 @@ class LibraryPass:
         start_seconds: float = 60.0,
         interval_seconds: float = 6 * 3600.0,
         pause_seconds: float = 5.0,
+        track_lists: TrackLists | None = None,
     ) -> None:
         self.fills = fills
         self.navidrome = navidrome
@@ -62,6 +68,8 @@ class LibraryPass:
         self.progress: tuple[int, int] = (0, 0)  # albums done, albums to look at
         self.running = False  # a run is under way (its progress above)
         self.last: dict[str, int] = {}  # the outcomes of the last run
+        # Added releases' track lists, read again after a run's albums (None: not built).
+        self.track_lists = track_lists
 
     @property
     def mode(self) -> Literal["off", "dry_run", "on"]:
@@ -91,13 +99,28 @@ class LibraryPass:
         """One pass over the library; the number of albums of each outcome, or None when
         Navidrome stopped it. ``running`` says so meanwhile."""
         self.running = True
+        mode = self.mode  # read once: a run under way keeps the mode it started with
         try:
-            return await self._run_once()
+            done = await self._run_once(mode == "dry_run")
+            if done is not None and mode != "off":
+                await self._track_lists(mode == "dry_run")
+            return done
         finally:
             self.running = False
 
-    async def _run_once(self) -> dict[str, int] | None:
-        dry_run = self.mode == "dry_run"
+    async def _track_lists(self, dry_run: bool) -> None:
+        """The run's second part: track lists that are due (never in the albums' way: a
+        failure is logged and the next run tries again)."""
+        if self.track_lists is None:
+            return
+        try:
+            await self.track_lists.run(
+                dry_run=dry_run, run_seconds=self.interval_seconds, pause_seconds=self.pause
+            )
+        except Exception as exc:
+            log.warning("track lists: the run failed: %s", type(exc).__name__)
+
+    async def _run_once(self, dry_run: bool) -> dict[str, int] | None:
         name = "library pass (dry run)" if dry_run else "library pass"
         self.progress = (0, 0)  # this run's, not the last one's
         await self.fills.wait_idle()  # e.g. a rest of the catalog

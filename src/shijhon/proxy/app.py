@@ -137,8 +137,11 @@ class RequestContext:
 
 
 Handler = Callable[[RestCall, RequestContext], Awaitable[HandlerResult]]
-# Work before any handler, on every parsed REST call (a release taken out comes back).
-Before = Callable[[RestCall, RequestContext], Awaitable[None]]
+# Work before any handler, on every parsed REST call (a release taken out comes back). A
+# reply answers the request itself: no handler runs, and it is not forwarded (a use of a
+# song a release change took out, a use that may not add a release back). The
+# credentials' refusal still comes first.
+Before = Callable[[RestCall, RequestContext], Awaitable["Reply | None"]]
 MusicGate = Callable[[RestCall, RequestContext], Awaitable[bool]]
 FinalLibraryAnswer = Callable[[RestCall, RequestContext], Awaitable["LibraryAnswer | None"]]
 PathGate = Callable[[Scope], Awaitable[bool]]
@@ -312,11 +315,16 @@ class ProxyApp:
         ctx = RequestContext(self.checker, call, scope, music_gate=self.music_gate)
         try:
             try:
+                early = None
                 if self.before is not None and not refused:
-                    await self.before(call, ctx)
-                result = (
-                    await handler(call, ctx) if handler is not None and not ctx.bypass else None
-                )
+                    early = await self.before(call, ctx)
+                result: HandlerResult
+                if early is not None and not ctx.bypass:
+                    result = early
+                else:
+                    result = (
+                        await handler(call, ctx) if handler is not None and not ctx.bypass else None
+                    )
                 # Some wrappers tolerate optional handler failures. An unavailable
                 # current grant must still fail closed, including inside those wrappers.
                 if ctx._gate_failed is not None:

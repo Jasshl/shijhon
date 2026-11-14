@@ -54,6 +54,9 @@ class _Reading:
     def __init__(self) -> None:
         self.done = anyio.Event()
         self.principal: Principal | None = None
+        # Navidrome gave no answer in time: those waiting fail with it rather than each
+        # asking again, all at once, while it struggles. A denial is asked again.
+        self.unavailable = False
 
 
 class AccessService:
@@ -78,11 +81,16 @@ class AccessService:
         reading = self._reading.get(username)
         if reading is not None:
             await reading.done.wait()
+            if reading.unavailable:
+                raise AccessUnavailable
             principal = reading.principal or await self.verify(username)
         else:
             reading = self._reading[username] = _Reading()
             try:
                 principal = reading.principal = await self.verify(username)
+            except AccessUnavailable:
+                reading.unavailable = True
+                raise
             finally:
                 del self._reading[username]
                 reading.done.set()

@@ -35,7 +35,8 @@ are not converted into song lists. ASX start times, durations, previews and mark
 are explicitly refused on entries and their alternate references. ASX `ENTRYREF`
 documents must be exported as their ordered tracks; they are never treated as songs
 or opened recursively. Malformed music rows reject the submission with their entry
-number instead of disappearing from the imported list. This is not a claim to read
+number instead of disappearing from the imported list; only an unreadable ISRC or
+duration hint is ignored for its entry (see below). This is not a claim to read
 every playlist dialect or every service's export.
 
 M3U per-entry start-time, stop-time and run-time instructions are explicitly refused
@@ -80,14 +81,19 @@ Glass Orchard,First Light,Paper Garden,203500,ZZSHJ2600001
 `ISRC` accepts the compact or hyphenated code in either letter case. `duration_ms`
 and `Duration (ms)` mean milliseconds; `duration`, `Duration (seconds)`, `Length` and
 `Time` mean seconds or `M:SS` / `H:MM:SS`, with fractional seconds allowed. Units never
-depend on how large the number is. Blank or zero duration means unknown. If both
-duration columns have values, they must agree. Invalid codes or lengths reject the
-submission with the entry number.
+depend on how large the number is. Blank or zero duration means unknown. A code or
+length Shijhon cannot read, such as `n/a`, `3m45s` or a date, is ignored for that
+entry, which is then matched by its names alone, and the other entries import as
+usual. The same holds when the two duration columns of an entry disagree. When several
+columns could supply the ISRC or a duration, such as both `Duration` and `Time`, none
+of them is read unless you map one on the form.
 
 XSPF and JSPF durations are milliseconds. Their recording identifiers can use
 `isrc:ZZSHJ2600001` or `urn:isrc:ZZSHJ2600001`; native song identifiers use `navidrome:`
 or `subsonic:`. Several ISRC identifiers are kept as alternatives for one track.
-M3U `EXTINF` and PLS `LengthN` durations are seconds; `-1` means unknown.
+M3U `EXTINF` and PLS `LengthN` durations are seconds; `-1` means unknown. In these
+formats too, a duration or ISRC identifier that cannot be read is ignored for its
+entry.
 
 For matching by names, a conflicting known ISRC or a known duration differing by more
 than five seconds rules out a candidate. Among otherwise eligible candidates, the
@@ -272,7 +278,11 @@ Publication uses native song IDs, owner-authenticated native playlist calls and 
 existing verified catalog preparation path. Catalog tracks can add whole releases as
 placeholders or missing tracks to matched albums; publication does not download audio.
 A preparation failure can leave releases added. Use **Downloads** separately to prepare
-published audio.
+published audio. When an administrator has set a
+[daily cap on adding](how-it-works.md#the-daily-cap-on-adding), the releases an import
+adds count toward yours, in the order of the import's songs: at the cap publication
+stops with that reason, keeps what it has prepared, and goes on from there when you
+retry it later.
 
 Each native create/append/replace intent is durable before the request. The entire
 saved playlist is read back after every write and its exact order, repeats and

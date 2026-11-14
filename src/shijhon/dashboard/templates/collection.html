@@ -18,7 +18,8 @@
   <div class="page-title">
     <h1>Your collection</h1>
     <p class="page-summary">Choose the music your apps show, and bring in your own files.</p>
-  </div>
+{% if adding %}    <p class="collection-muted" data-daily-limit>You have added {{ adding.used }} of the {{ adding.limit }} catalog release{{ '' if adding.limit == 1 else 's' }} an account may add within 24 hours.{% if adding.left == 0 and adding.frees_at %} You can add more from {{ adding.frees_at|when }}.{% endif %}</p>
+{% endif %}  </div>
   <div class="page-actions">
     <details class="collection-menu" data-collection-menu>
       <summary class="btn">More{{ chevron('down') }}</summary>

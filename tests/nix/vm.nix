@@ -1,5 +1,6 @@
 # The NixOS service in a virtual machine, with the Navidrome it manages: the services and
-# the usage export start, the accounts are made (and kept, the password file gone),
+# the usage export start, the accounts are made (and kept, the password file gone; the
+# person's made again by the accounts unit alone once Navidrome lost it),
 # Navidrome is on its socket only and counts apps apart by the address Shijhon names,
 # Navidrome reads a placeholder Shijhon writes, Shijhon reads the export but not
 # Navidrome's database, a local AI runner is inside Shijhon's sandbox (with the CA
@@ -197,6 +198,35 @@ pkgs.testers.runNixOSTest {
         machine.wait_until_succeeds("! test -e /run/shijhon-secrets/account-password")
         assert subsonic("getUser", "&username=alex")["user"]["adminRole"]
 
+    with subtest("an account gone from Navidrome is created again by shijhon-accounts alone"):
+        # As after account.name changed: shijhon-accounts starts again, shijhon-prepare
+        # does not, and the copy of the person's password is made for that run too.
+        service = machine.succeed("cat /var/lib/shijhon/navidrome-password").strip()
+        token = json.loads(machine.succeed(
+            f"curl -fsS --unix-socket {socket} -H 'Content-Type: application/json'"
+            f" -d '{{\"username\":\"shijhon\",\"password\":\"{service}\"}}'"
+            " http://localhost/auth/login"
+        ))["token"]
+        bearer = f"-H 'X-ND-Authorization: Bearer {token}'"
+        users = json.loads(machine.succeed(
+            f"curl -fsS --unix-socket {socket} {bearer} http://localhost/api/user"
+        ))
+        alex = next(u["id"] for u in users if u["userName"] == "alex")
+        machine.succeed(
+            f"curl -fsS -X DELETE --unix-socket {socket} {bearer} http://localhost/api/user/{alex}"
+        )
+        since = machine.succeed("date '+%Y-%m-%d %H:%M:%S'").strip()
+        machine.succeed("systemctl restart shijhon-accounts.service")
+        machine.succeed(
+            f"journalctl -u shijhon-accounts --since '{since}'"
+            " | grep -q 'your account \"alex\" created in Navidrome'"
+        )
+        machine.wait_until_succeeds("! test -e /run/shijhon-secrets/account-password")
+        machine.wait_for_unit("shijhon.service")
+        machine.wait_until_succeeds(
+            "${ping "alex" password "10.9.0.1"} | grep -q '\"status\":\"ok\"'", timeout=1200
+        )
+
     with subtest("Navidrome counts apps apart by the address Shijhon names"):
         token = json.loads(machine.succeed(
             f"curl -fsS --unix-socket {socket} -H 'Content-Type: application/json'"
@@ -284,6 +314,8 @@ pkgs.testers.runNixOSTest {
 
     with subtest("Shijhon starts once its accounts unit succeeds after a failed try"):
         machine.succeed("systemctl stop shijhon.service shijhon-accounts.service")
+        # (A fresh count for its start limit: the subtests above started it three times.)
+        machine.succeed("systemctl reset-failed shijhon-accounts.service")
         # Navidrome out of reach: its socket's folder closed to the socket's group.
         machine.succeed("chmod 0700 /run/shijhon-navidrome")
         since = machine.succeed("date '+%Y-%m-%d %H:%M:%S'").strip()

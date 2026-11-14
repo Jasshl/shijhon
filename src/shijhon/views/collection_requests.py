@@ -21,6 +21,7 @@ from shijhon.collection.history import MAX_PENDING, History, queue_pending, reco
 from shijhon.collection.query_index import QueryIndex
 from shijhon.collection.reader import CallerLibrary
 from shijhon.collection.reasons import Reasons
+from shijhon.placeholders.daily_cap import adding_for
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.model import Track
 from shijhon.playlists.resolve import native_track, same_recording
@@ -480,6 +481,33 @@ class CollectionRequests:
     def notify(self) -> None:
         self._wake.set()
 
+    async def added(self, principal: Principal, albums: Sequence[str]) -> bool:
+        """Albums the verified account ``principal`` asked to have in its library by a
+        request that is no app's (an agent acting for it), once they are in the library:
+        recorded as its activity like an app's action on the album, so they join its
+        Shijhon library. ``albums`` name them as an action's ``albumId`` does (catalog or
+        native IDs); their recordings come from the placeholder ledger. True: recorded
+        now; False: kept to record (``drain``), as an app's action is when it cannot be
+        recorded at once. The caller verified the account and that Navidrome shows it
+        the albums."""
+        if self.library_id not in _actor(principal).library_ids:
+            raise CollectionError("Your access to this music library could not be verified.")
+        values = [("albumId", album) for album in dict.fromkeys(albums)]
+        if not values:
+            return True
+        try:
+            with anyio.fail_after(5):
+                tracks = await self._tracks(values)
+                if tracks is not None:
+                    await self.history.record_catalog(
+                        _actor(principal), self.library_id, [t for t in tracks if recordable(t)]
+                    )
+                    return True
+        except Exception as exc:
+            log.warning("collection addition not recorded at once: %s", type(exc).__name__)
+        await self._queue(principal.user_id, values)
+        return False
+
     async def run(self) -> None:
         """Record the kept actions, at once when told of new ones (``notify``), else every
         minute. A start makes every kept item due once more (one more try each)."""
@@ -587,7 +615,8 @@ def _accepted(answer: LibraryAnswer) -> bool:
 
 
 class CollectionRestorer:
-    """Restore only an approved Save's bounded, previously attributed catalog refs."""
+    """Restore only an approved Save's bounded, previously attributed catalog refs. What
+    comes back is added for the account whose selection it is (the daily cap on adding)."""
 
     def __init__(self, commits: Commits, reader: CallerLibrary, history: History) -> None:
         self.commits, self.reader, self.history = commits, reader, history
@@ -653,6 +682,7 @@ class CollectionRestorer:
             anyio.fail_after(120),
             self.commits.engine.guard_materializations(check),
             self.commits.engine.guard_writes(authorize_write),
+            adding_for(actor.owner_id),
         ):
             for ref in sorted(removed):
                 await self.commits.engine.restore_release(ref)

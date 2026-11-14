@@ -700,6 +700,43 @@ def test_interrupted_selection_pauses_publication_but_keeps_opt_in_review(
     anyio.run(run)
 
 
+def test_an_agent_run_interrupted_by_a_restart_leaves_the_refreshes_on(tmp_path: Path) -> None:
+    async def run() -> None:
+        store = await Store.open(tmp_path / "db")
+        service = Playlists(
+            store,
+            SimpleNamespace(socket=None, base_url="", library_id=1),
+            None,
+            None,
+            PlaylistSettings(),
+        )
+        await service.repo.connect(connection())
+        mix = await service.repo.create(connection().user_id, Definition())
+        ident = await service.repo.enqueue(mix, automatic=False)
+        data = (await service.repo.run(ident))["data"]
+        assert data.get("publish_after_generation")
+        await service.repo.update(ident, "generating", {**data, "agent": {"kind": "replace"}})
+        await store.execute("UPDATE playlist_mixes SET enabled=1 WHERE id=?", [mix])
+        checked = anyio.Event()
+
+        async def tick() -> None:
+            checked.set()
+
+        service.tick = tick  # type: ignore[method-assign]
+        try:
+            async with anyio.create_task_group() as group:
+                group.start_soon(service.run)
+                await checked.wait()
+                assert (await service.repo.run(ident))["state"] == "failed"
+                assert (await service.repo.mix(mix, connection().user_id))["enabled"]
+                group.cancel_scope.cancel()
+        finally:
+            await service.aclose()
+            await store.close()
+
+    anyio.run(run)
+
+
 def test_connection_change_during_automatic_selection_pauses_mix(tmp_path: Path) -> None:
     async def run() -> None:
         store = await Store.open(tmp_path / "db")

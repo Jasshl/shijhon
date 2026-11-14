@@ -1,6 +1,6 @@
 ---
 name: shijhon-playlists
-description: Create, refresh and manage Shijhon playlists through its connected MCP tools - mainly by choosing the songs yourself - including discovery mixes, playlist imports and explicitly requested recurring playlists. Use for music curation and playlist recovery; excludes server administration and audio downloads.
+description: Create, refresh and manage Shijhon playlists through its connected MCP tools - mainly by choosing the songs yourself - including discovery mixes, playlist imports and explicitly requested recurring playlists, and add catalog albums to the library on request. Use for music curation and playlist recovery; excludes server administration and audio downloads.
 ---
 
 # Shijhon playlists
@@ -70,6 +70,39 @@ yourself in a replacement; editing it needs those permissions too.
   out of the result unless you set `exclude_reference` to false. Without the permission,
   Shijhon also does not look up playlist names written in the prompt; with it, a playlist
   the prompt only names is found by name and its songs are not removed.
+
+- `get_new_releases` lists the new releases of the artists the user follows (their
+  favorite and most played artists), the newest first, when the user asks what is new
+  or wants a playlist of new music. It needs the library and history permissions. Only
+  the user can turn following on, on the dashboard's New releases page; when it is off,
+  say so instead of guessing. The albums are catalog releases not yet in the library:
+  name their songs as artist/title tracks in `create_playlist` to use them.
+
+## Adding albums to the library
+
+Only when the user asks to have an album or an artist in their library, and with the add
+permission (`features.library_additions` in `get_capabilities`):
+
+- Find the album or artist with `search_catalog`; `get_new_releases` also returns catalog
+  album IDs. `search_library` finds songs the user already has, not catalog albums.
+- `add_to_library` takes up to 25 `album_ids`, or one `artist_id`. An artist stands for a
+  limited number of releases: albums only unless `release_types` names others, the newest
+  first, 10 unless `max_releases` says otherwise. Call it with `preview: true` first for an
+  artist and show the user the list. Then add what they agreed to by passing the preview's
+  `album_ids` (or the ones they chose), not the `artist_id` again: the artist's list is
+  looked up anew by each call and can have changed. Add by `artist_id` without a preview
+  only when the user asked for exactly that.
+- Send an `idempotency_key` to add, and keep it with the same input through recovery. The
+  answer lists each release as `added`, `already_in_library`, `not_added` (with a reason)
+  or `pending`; read pending ones with `get_library_addition`. Never send the addition
+  again under a new key after an uncertain result.
+- When the answer has `daily_limit`, an administrator's daily limit left releases out.
+  Tell the user how many were added and how many were not, and do not retry at once.
+
+Adding writes whole albums as placeholders that play from the add-ons; it downloads no
+audio. The review list and the server status tools are for Navidrome administrators with
+their own permission and are outside this skill; [the API reference](references/api.md)
+lists them.
 
 `get_song_facts`, `get_playlist_profile` and the `include_sound` option of
 `search_library` and `get_native_playlists` add year, genres, Last.fm tags (when the user

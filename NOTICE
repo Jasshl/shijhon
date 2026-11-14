@@ -76,13 +76,16 @@ the versions uv.lock names. Two of them are under licenses other than permissive
 
 The others are under permissive licenses, each with its license text in its own package:
 
-- MIT: aiolimiter, aiosqlite, annotated-types, anyio, async-lru, attrs, h11, jsonschema,
-  jsonschema-specifications, mcp, mcp-types, pydantic, pydantic-core, pydantic-settings,
-  PyJWT, referencing, rpds-py, truststore and typing-inspection.
+- MIT: aiolimiter, aiosqlite, annotated-types, anyio, async-lru, attrs, charset-normalizer,
+  h11, jsonschema, jsonschema-specifications, mcp, mcp-types, pydantic, pydantic-core,
+  pydantic-settings, PyJWT, PyYAML, referencing, rpds-py, truststore, typing-inspection and
+  urllib3.
 - MIT-0: cffi.
-- BSD-3-Clause: click, httpcore, httpcore2, httpx, httpx2, idna, Jinja2, MarkupSafe,
-  pycparser, python-dotenv, sse-starlette, Starlette and uvicorn.
-- Apache-2.0: opentelemetry-api and python-multipart.
+- ISC: requests-oauthlib.
+- BSD-2-Clause: Apprise.
+- BSD-3-Clause: click, httpcore, httpcore2, httpx, httpx2, idna, Jinja2, Markdown,
+  MarkupSafe, oauthlib, pycparser, python-dotenv, sse-starlette, Starlette and uvicorn.
+- Apache-2.0: opentelemetry-api, python-multipart and requests.
 - Apache-2.0 OR BSD-3-Clause: cryptography.
 - PSF-2.0: defusedxml and typing-extensions.
 

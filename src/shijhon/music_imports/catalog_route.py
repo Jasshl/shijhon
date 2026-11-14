@@ -33,6 +33,7 @@ from shijhon.music_imports.overlap import (
     CatalogUnreachable,
     Incoming,
 )
+from shijhon.placeholders.daily_cap import adding_for
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.service import release_fingerprint
 from shijhon.views.commits import CommitError
@@ -134,8 +135,10 @@ class CatalogRoute:
         *,
         fingerprint: str,
         authorize: Callable[[], Awaitable[None]],
+        owner: str,
     ) -> dict[str, str]:
-        """Catalog track -> native song ID, the reviewed release added to the library."""
+        """Catalog track -> native song ID, the reviewed release added to the library, for
+        the import's account ``owner`` (the daily cap on adding)."""
         ref = CatalogRef.parse(release)
 
         def check(found: CatalogRelease) -> None:
@@ -144,7 +147,11 @@ class CatalogRoute:
 
         engine = self.commits.engine
         try:
-            with engine.guard_materializations(check), engine.guard_writes(authorize):
+            with (
+                engine.guard_materializations(check),
+                engine.guard_writes(authorize),
+                adding_for(owner),
+            ):
                 await self.commits.native(CatalogId("al", ref), "import")
         except CommitError as exc:
             if exc.category in _REFUSED or exc.code == NOT_FOUND or CHANGED in exc.message:

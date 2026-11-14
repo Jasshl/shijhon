@@ -41,6 +41,15 @@ Configured server AI can still fail at runtime.
 - `get_listening_history` returns bounded artist/title listen counts from the
   connected Last.fm history source, restricted to the configured `history_days` window.
   It needs that source configured and history permission; it does not substitute library membership for listening evidence.
+- `get_new_releases` returns the new releases of the artists the account follows, its
+  favorite and most played artists, as its apps' newest albums start with them
+  ([new releases](../how-it-works.md#new-releases)): each with its catalog album ID,
+  title, artist, type, release date and track count, the newest first, 1 to 100 a call.
+  It also says how many artists are followed and when they were last checked. It needs
+  the library and the history permission, because the list follows from the account's
+  favorites and plays. Only the user can turn following on, on the dashboard's **New
+  releases** page; until then the tool says so and returns no releases. It reads what
+  Shijhon's daily check saved and asks the catalog nothing.
 - `create_playlist` accepts either a description using saved server AI, or an
   ordered artist/title list curated by the external agent without server AI.
   Track versions and all user constraints are preserved. Native/catalog IDs and
@@ -50,7 +59,19 @@ Configured server AI can still fail at runtime.
   the request's status reports every track's outcome and, for each one left out, why
   (not found, only on other albums, only other versions, credited differently, the
   catalog did not answer, a repeat) with the nearest songs found. `require_all` publishes
-  nothing unless every track resolves. `add_playlist_tracks` puts tracks in the places
+  nothing unless every track resolves. When an administrator has set a
+  [daily cap on adding](../how-it-works.md#the-daily-cap-on-adding), a track whose
+  release would pass the account's cap is left out as `library_refused`, with a detail
+  that says the daily limit of added releases is reached; the status then also has
+  `daily_limit`, with how many songs were left out for it. Places are taken in the order
+  of the tracks, so the first tracks are the ones published. A described playlist or a
+  discovery mix is published without such songs in the same way. A scheduled refresh
+  that would have no song left has the state `postponed`, with the reason in `error`:
+  nothing failed, the playlist and its schedule stay as they are, and the next
+  scheduled refresh tries again. `get_capabilities`
+  lists the cap under `limits.added_releases_per_day`, with how many releases the account
+  has added in the last 24 hours, how many are left and when the next one is free; the
+  entry is absent while no cap applies to the account. `add_playlist_tracks` puts tracks in the places
   of left-out ones, or at the end, and republishes the same playlist, unless it was
   edited in Navidrome since publication.
   When a request builds on playlists or songs the user already has, the agent finds
@@ -73,7 +94,9 @@ Configured server AI can still fail at runtime.
   appears when a preview waits or a run failed.
 - With explicit tracks, `count` is ignored and the number of tracks is used. `max_per_artist`
   defaults to 2 and goes up to 10. A list over the limit is refused with the artists named
-  and how to allow them.
+  and how to allow them. A track whose recording is credited to an artist the playlist
+  already has that many songs by, as when a featured credit resolves to the main artist's
+  recording, is left out and reported as `artist_limit`.
 - Daily/weekly described playlists need saved server AI and explicitly saved
   refresh instructions. Shijhon's durable worker runs them after the agent
   disconnects. A remote agent does not need to stay connected or supply a timer.
@@ -95,7 +118,9 @@ Configured server AI can still fail at runtime.
   `song_id`. Songs it removes are remembered like the user's own removals. The edit is
   not applied if the playlist changed again before it ran.
 - `review_playlist_preview` publishes or discards a preview. Replacements and edits wait
-  while a run is unfinished or a preview waits for review.
+  while a run is unfinished or a preview waits for review. Publishing a selection that
+  Shijhon made from listening history or the library needs that permission too, but
+  publishing the preview of a replacement does not, because an agent chose those songs.
 - `manage_playlist_refresh` pauses, resumes, runs or previews the server's refreshes of
   described playlists and discovery mixes, or, with `forget_edits`, forgets what
   refreshes learned from the user's edits (the result's `forgotten` counts the songs;
@@ -123,6 +148,89 @@ Configured server AI can still fail at runtime.
   permission. Completed audio remains; copying audio onto a device uses the app's
   download action. See the [preparation contract](../../skills/shijhon-playlists/references/api.md#server-audio-preparation-mcp).
 
+- `search_catalog` (the `add` permission) searches the catalog for albums and artists to
+  add: up to 25 of each, an album as one edition by the edition rules, with its catalog
+  album ID, title, artist, type, release date and track count, and an artist with its
+  catalog artist ID and name. The existing search tools read the library and name songs
+  only, so this is how an agent finds a catalog album or artist; `get_new_releases` also
+  returns catalog album IDs. It reads nothing personal and does not say what the library
+  already has.
+- `add_to_library` (the `add` permission, and the user's request) adds up to 25 catalog
+  albums named by `album_ids`, or the releases of one artist named by `artist_id`. Each
+  release goes through the same code as an app's action on a catalog album: it is added
+  whole, into the owned album it completes or as a catalog album, with the same refusals,
+  and once Navidrome shows it to the account it is recorded as the account's activity, so
+  it joins the account's Shijhon library and All. An album the person removed from a
+  library by hand stays out of that library.
+  An artist stands for the releases the artist's page in apps shows, one edition of each
+  album: those the library lacks, and those it has, which then join the account's library
+  too. Only albums are taken unless `release_types` names others (`album`, `ep`,
+  `single`, `compilation`), the newest first, and at most `max_releases` of them (10 unless
+  the call says otherwise, never more than 25). The answer says how many releases of
+  those types there are and how many the limit left out.
+  With `preview: true` nothing is written and no key is needed: the answer lists what
+  would be added, and its `album_ids` name exactly those releases. An artist's releases
+  are looked up anew by every call that names the artist, and the catalog's list can
+  change between two calls, so a preview does not bind a later call with the same
+  `artist_id`. To add what the person agreed to, the agent passes the preview's
+  `album_ids`. Adding by `artist_id` without a preview remains for a person who asked
+  for exactly that, and the answer lists what was added.
+  Without `preview`, the call needs an `idempotency_key`. The request is kept
+  under that key and a worker adds its releases one after another, so the answer waits a
+  few seconds and then says each release's state: `added`, `already_in_library` (the
+  library had it; it is now in the account's library too), `not_added` with a `reason`
+  and a sentence, or `pending`. While releases are pending, `next` names
+  `get_library_addition`. An account has at most three unfinished additions.
+  When an administrator has set a
+  [daily cap on adding](../how-it-works.md#the-daily-cap-on-adding), the releases count for
+  the account. A release over the cap is `not_added` with the reason `daily_limit`, and
+  the answer's `daily_limit` says that the limit is reached, how many releases were added
+  and how many were left out. A preview and an accepted request also carry
+  `added_releases_per_day`, where the account stands, as `get_capabilities` reports it.
+- `get_library_addition` reads one addition of this connection, with the `add` or the
+  `status` permission.
+- `get_review_list` (the `admin` permission, a Navidrome administrator) lists the albums
+  in the Library's review list as the dashboard shows them, 25 a page: the album, how many
+  of its songs the library owns, why it needs a decision and the releases offered, with
+  the chosen one first. With `album_id` it says whether that album is still in the list
+  (`in_review_list`) and how its last action went (`last_action`: running, finished or
+  failed). The last action is remembered for about a quarter of an hour and until a
+  restart, and a keep leaves none.
+- `settle_review_album` (the `admin` permission, a Navidrome administrator, and the
+  user's decision) settles one album a call through the Library page's own action: `fill`
+  from one of the album's offered releases, `keep` as it is, or `rematch`. The page's
+  checks apply: only a listed release can fill, an album that is part of another album's
+  release is not filled on its own, one action runs for an album at a time and one fill
+  at a time, and nothing is matched while the catalog rests after errors. A fill and a
+  rematch run in the background; the answer waits a few seconds and says `running`,
+  `finished` or `failed` with the dashboard's message. Several albums are settled one
+  call after another.
+  The call needs an `idempotency_key`, which stands for one action. The key is taken
+  before the action starts, so of two calls with one key only one carries an action out:
+  the same input joins the first call and gets that action's own result with
+  `replayed`, and other input under the key is a `conflict`. A replay answers with what
+  its own call did, not with the album's latest action; for background work that is the
+  work as it stands. Keys are kept in the server's memory only: each for one hour, the
+  newest 500 of them, and a restart forgets them all. After that the same call is a new
+  action. An agent therefore does not rely on the key alone after an uncertain result
+  (an error, a timeout, a `running` or `unknown` result): it reads the album with
+  `get_review_list` and its ID first. `last_action` says how the last action went, and
+  `in_review_list` whether the album still waits. A rematch can leave an album in the
+  list, so being in the list does not show that nothing happened. The agent sends the
+  action again only when no action is running and the person decides so. A result that
+  says nothing was started (`refused`, `busy`, `catalog_resting`, `not_started`,
+  `not_in_review_list`) stays that key's result, so a later attempt is a new action
+  with a new key.
+- `get_server_status` (the `admin` permission, a Navidrome administrator) returns a
+  read-only summary of what **Diagnostics** shows: the versions of Shijhon, Navidrome and
+  the database schema, whether Navidrome answers, the catalog's state, each add-on's
+  name and state (`ok`, `off`, `needs_sign_in`, `manifest_unreachable`, `cooling_down`,
+  `failing` or `not_checked`), the review list's length, the cleanup's mode and last
+  check, whether saved settings wait for a restart, and `needs_attention` in sentences.
+  An add-on that needs its operator to sign in names its sign-in page only when that
+  address has no query string, no fragment and no user part. The summary holds no other
+  address, no token, no setting's value and nothing about any account.
+
 History and library reads have separate optional permissions. The agent should
 use each source only when the user asks to use it for the current task. Permission
 does not opt every future playlist into personal context. Creation influence
@@ -131,6 +239,9 @@ flags default off; explicit-track requests keep them off.
 Missing configuration returns `setup_required`, the missing feature and the
 signed-in setup URL. Missing permissions return `permission_required` and an
 OAuth scope challenge, so supporting clients can request a new authorization.
+The administrator tools return `administrator_required` when the grant has the
+permission but the account is not a Navidrome administrator now; a new authorization
+does not change that.
 Neither condition disables unrelated features. The complete creation payload
 and recovery rules are in the [request contract](../../skills/shijhon-playlists/references/api.md).
 
@@ -167,7 +278,11 @@ spent refresh token can recover its replacement; current client, connection and
 permission checks still apply.
 
 After sign-in, the consent form selects the connection's existing permissions plus the
-newly requested ones. Clear a permission to remove it deliberately. Authorizing
+newly requested ones. Clear a permission to remove it deliberately. The `add` and `admin`
+permissions are the exception: the form shows them cleared until the connection has them,
+so a client that asks for every permission does not get them unless the person selects
+them, and `admin` is on the form only for an account that is a Navidrome administrator
+at that moment. Authorizing
 additional permissions for the same OAuth client/account preserves the connection and
 its requests. Removing a permission takes effect on outstanding credentials too. Client
 registration describes possible scopes; only browser consent grants access to the user's
@@ -177,6 +292,18 @@ history/library read permission; starting another generation needs its saved con
 permissions. Preparation status similarly remains readable after `downloads` is removed.
 Removing `downloads` or revoking the connection pauses unfinished preparation at the
 existing worker preflights, including after acquisition waits and before placement.
+An addition to the library is checked against its connection before every release and
+again where files are written: once the connection is revoked, loses `add`, or its OAuth
+client is no longer registered, the request stops, its remaining releases are not added,
+and its status says so. A review-list action started by an agent is checked the same way,
+against the `admin` permission and the account's administrator role: before it starts,
+where a fill writes files, and after every wait immediately before a decision is
+forgotten or recorded, so a keep or a rematch that waited changes nothing once the
+agent's access has ended. A restart continues an unfinished addition where it stopped,
+while its connection still allows it; adding a release that is in the library writes
+nothing. A release that a stopped request had written before a restart, and that the
+restart may no longer add for the account, stays in the server's library and is reported
+as not in the account's library.
 Independent app downloads can continue through shared acquisitions. After restoring
 permission on the same connection, explicitly resume its paused batch. Restart also
 pauses unfinished preparation for explicit resume. If the Downloads page was explicitly
@@ -196,6 +323,12 @@ passwords or dashboard cookies.
 
 Personal OAuth access requires current identity and configured-library access. Grants,
 requests and preparation jobs remain bound to the immutable owner and connection.
+The `add` permission adds to the connected account's own library only, counted for that
+account. The `admin` permission is the only one that reaches beyond the account, and
+only for the review list and the read-only status: whether the account is a Navidrome
+administrator is asked of Navidrome at every call and at each write of a fill it
+started, never taken from the sign-in. It gives no access to settings, add-on addresses,
+credentials or other accounts' data.
 The `settings` permission permits only the connected account's approved model choice.
 It grants no administrator rights or authority to change host endpoints, credentials,
 executables, approved models or another account's preferences. Model approval and

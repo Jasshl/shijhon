@@ -156,6 +156,12 @@ def test_large_matching_batches_resume_after_recreating_import_service_and_keep_
             assert all(
                 len(call.args[1]) <= PREPARE_BATCH for call in service.check_tracks.call_args_list
             )
+            # At its account's daily cap on adding an import adds what fits, then stops (it
+            # goes on from there when retried): every batch is prepared that way.
+            assert all(
+                call.kwargs.get("partly") is True and "leave_out" not in call.kwargs
+                for call in service.check_tracks.call_args_list
+            )
 
     anyio.run(run)
 

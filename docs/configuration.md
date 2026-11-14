@@ -10,7 +10,7 @@ Lowest first:
 1. the built-in default;
 2. the configuration file;
 3. a value saved on the dashboard (the `[delivery]`, `[catalog]`, `[fill]`, `[cleanup]`,
-   `[audiomuse]` and `[agents]` settings, `[search] budget_seconds`,
+   `[audiomuse]`, `[agents]` and `[notifications]` settings, `[search] budget_seconds`,
    `[playlists] allow_private_api`, and the add-ons);
 4. an environment variable. The dashboard shows such a setting locked, with the variable's
    name.
@@ -148,7 +148,21 @@ On the dashboard's Catalog page.
 |---|---|
 | `kind` (`none`) | The name of an installed catalog adapter ([catalogs.md](catalogs.md)), whose own settings go in this section too. `addon`: the catalog of one of your add-ons, named by `addon` |
 | `twins` (`explicit`) | Which of the clean and explicit versions of an album or song are shown: `explicit`, `clean` or `both` |
-| `[search] budget_seconds` (8) | The longest a search, the page of an artist in your library or an artist's top songs waits for the catalog ([catalogs.md](catalogs.md#a-catalog-that-answers-slowly)). 120 at most |
+| `user_releases_per_day` (0) | How many catalog releases one account that is not a Navidrome administrator may add to the library within 24 hours ([how-it-works.md](how-it-works.md#the-daily-cap-on-adding)). 0: no limit. It applies at once |
+| `artist_pictures` (on) | Library artists Navidrome finds no picture for get the catalog artist's, set in Navidrome ([how-it-works.md](how-it-works.md#artist-pictures)). Off: the pictures Shijhon set are removed. Under Advanced settings |
+| `artist_lists` (on) | Files whose one artist text names several artists ("A, B") get the list of those artists from a catalog, when its names are exactly that text ([how-it-works.md](how-it-works.md#each-artist-of-a-joined-credit)). Off: the files Shijhon changed, those still as it left them, are given back as they were. Under Advanced settings |
+| `artist_lists_library` (off) | With `artist_lists`, also the files in your music folder, which must then be writable for Shijhon ([how-it-works.md](how-it-works.md#each-artist-of-a-joined-credit)). Off: the files Shijhon changed there, those still as it left them, are given back. Under Advanced settings |
+| `artist_lists_catalogs` (none) | More catalogs asked for the lists of `artist_lists`, after the catalog in use: installed catalog adapters by name, such as `["musicbrainz"]`. Each is built with its adapter's default settings, used for these lists only and asked at the library pass's pace; one that is not installed or cannot be built is logged at startup and passed over ([how-it-works.md](how-it-works.md#each-artist-of-a-joined-credit)). Applies after a restart. Under Advanced settings |
+| `new_releases_days` (30) | How long after its release date a followed artist's release leads the newest albums of the people who turned **New releases** on ([how-it-works.md](how-it-works.md#new-releases)). 0: nobody can turn it on, and nothing is checked or shown. Applies at once. Under Advanced settings |
+| `[search] budget_seconds` (8) | The longest a search, the page of an artist in your library, an artist's top songs or a radio from a catalog item waits for the catalog ([catalogs.md](catalogs.md#a-catalog-that-answers-slowly)). 120 at most |
+| `[search] radio` (on) | Similar songs and similar artists of songs, albums and artists that are only in the catalog, as Last.fm lists them, for each person who set up Last.fm on the Playlists page ([how-it-works.md](how-it-works.md#radio-from-catalog-items)). Off: Navidrome's empty answer for them, as before. Set in the configuration file or the environment |
+
+With `SHIJHON_ARTIST_LISTS_REPORT=1` in Shijhon's environment, `artist_lists` logs once
+a start what it would at most write, by source, and why other songs are left; nothing is
+written or recorded, the credit repair asks the other catalogs and the add-on catalogs
+nothing, and music imports are published as they are (what an earlier stop left half done
+is still put right). It is meant for a look before the first writes; remove it to let them
+run.
 
 ### `[fill]` and `[cleanup]`
 
@@ -161,6 +175,7 @@ filling and the cleanup do.
 | `[fill] library_pass` (`dry_run`) | The pass over the whole library: `dry_run`, `on` or `off` |
 | `[fill] auto_min_songs` (3), `auto_min_share` (0.25) | The fill policy: an album is filled automatically when you have at least this many of its songs, or this share of its tracks. 1 song: every album |
 | `[fill] auto_pick` (on) | When several releases fit an album, or the one that fits numbers its tracks differently from your files, the most likely is used. Off: such albums go to the review list |
+| `[fill] refresh_track_lists` (on) | The library pass reads the track lists of releases already in your library again, adds tracks the catalog added since and corrects the lengths of songs that have no audio yet ([how it works](how-it-works.md#track-lists-read-again)). A dry run only counts them, and with the pass off nothing is read. Off: track lists stay as they were when their releases were added. Under Advanced settings |
 | `[cleanup] mode` (`off`) | `off`; `dry_run`: the daily check logs what it would take out; `on` |
 | `[cleanup] unused_days` (30) | A release nobody has used is taken out this many days after it was added |
 | `[cleanup] catalog_albums` (on), `fills` (on) | Which releases: catalog albums added to the library, and the songs added to partly owned albums |
@@ -182,6 +197,40 @@ which is set in the file or the environment only.
 | `timeout_seconds` (20) | The longest one request to it may take |
 | `sync_hours` (6) | How often Shijhon reads which songs are analyzed, and their analysis (it also does once after starting, if the last time was longer ago) |
 
+### `[notifications]`
+
+On the dashboard's Notifications page. Shijhon can tell you when something needs a person,
+so that you don't have to open the dashboard to find out. It sends through
+[Apprise](https://github.com/caronc/apprise), which reaches ntfy, Discord, Telegram,
+Slack, Matrix, email, Home Assistant, a plain JSON webhook and many more services, each
+with an address of its own, such as `ntfy://my-topic` or
+`mailto://user:password@example.com`. Apprise's documentation lists every service and the
+form of its address. These settings apply at once.
+
+| Setting | What it sets |
+|---|---|
+| `urls` | One or more Apprise addresses, separated by spaces, commas or new lines. Empty (the default): nothing is sent. The addresses hold their services' tokens, so they are a secret: never shown or logged, and hidden by `shijhon saved`. An address Apprise cannot use is refused when it is saved or read, and the message names its place in the list, not the address |
+| `addon_sign_in` (on) | An add-on says its operator must sign in again. The notification has the link to its page for that when the add-on gave a plain one. A link with a query string, a fragment, or a user name or password could hold a credential, so it is not sent: the notification says the link is on the Add-ons page |
+| `cleanup_blocked` (on) | The cleanup took nothing out because what it reads as Navidrome's records does not match the library, or the library may not be written now |
+| `usage_export` (on) | The cleanup asked for a new usage export and none arrived in time |
+| `import_review` (on) | A music import is checked and waits for its person's review |
+| `playlist_refresh` (on) | A playlist's scheduled refresh failed, which pauses its refreshes |
+| `snapshot_skipped` (on) | A start upgraded the database without the snapshot `upgrade_snapshots` asks for, because the snapshot could not be written. The notification names the schemas and why, such as how much space the snapshot needed, and no path. It lasts until an administrator dismisses the line the dashboard shows about it ([upgrades](deployment.md#upgrades)) |
+
+Each of these is sent once when it begins, and not again while it lasts. When it ends and
+begins again, it is sent again, but at most once an hour about the same add-on, import or
+playlist, so an add-on that keeps signing out does not flood your phone. What lasts is kept
+in Shijhon's database, so a restart sends nothing again. Nothing is sent when one ends. A
+state that began while no address was set is not sent later. Imports and playlist
+refreshes are looked at once a minute, and several that begin together arrive as one
+notification. An upgrade without its snapshot is looked at when Shijhon starts, so one that
+`shijhon fills-undo --apply` made is sent at the next start. A notification about someone's import or playlist names their account, never
+the music or the playlist.
+
+**Send a test notification** on the page says whether the addresses took it. When one
+could not be sent, the page says so quietly and the log has a line, both without the
+address.
+
 ## The command line
 
 `--config <file>` goes before the command. In the running container:
@@ -197,6 +246,14 @@ which is set in the file or the environment only.
 - `shijhon saved`: the settings saved on the dashboard, secrets hidden;
   `--clear <section>[.<key>]` removes them.
 - `shijhon catalogs`: the installed catalog adapters.
+- `shijhon backup`: writes a backup of Shijhon's own state into a folder of its own in
+  `backups` beside the database (`--to <folder>` for another place), also while Shijhon
+  runs: a copy of the database checked with SQLite's integrity check, the configuration
+  file and the service account's password file. It says what the backup holds and what it
+  does not, such as Navidrome's database and the placeholder folder
+  ([backups](deployment.md#backups)). It makes no backup when one of those files cannot
+  be read, and refuses to run as root on a database another user owns or when it cannot
+  write to the database's folder (SQLite needs that to read a database in WAL mode).
 - `shijhon fills-undo`: lists the automatic fills the fill policy would not make now;
   `--apply` undoes those nobody used, with Shijhon stopped
   ([advanced deployment](reference/advanced-deployment.md#undoing-automatic-fills)).
@@ -225,11 +282,14 @@ Installation pages require a current Navidrome administrator and library access.
 work without JavaScript except the music-file transfer page, which needs it for
 file selection, transfer progress and resuming uploads. The sidebar groups the pages
 under **Music**, for everyone, and **Server**, for administrators; on a narrow screen it
-is behind **Menu**. Each settings page shows the settings most people change first, the
-rest under **Advanced settings**.
+is behind **Menu**. For administrators, a small count beside **Library** gives the albums
+in its review list, and one beside **Add-ons** the add-ons that need their operator to
+sign in. Each settings page shows the settings most people change first, the rest under
+**Advanced settings**. Times are shown in your browser's time zone.
 
 Under Music, **Collection**, **Playlists** and **Downloads** are your own music, playlists
-and audio prepared for your apps. Under Server:
+and audio prepared for your apps, and **New releases** follows your artists
+([how it works](how-it-works.md#new-releases)). Under Server:
 
 - **Add-ons**: add, order (by dragging), enable, disable or remove add-ons, switch them
   all on or off, and their settings.
@@ -237,12 +297,23 @@ and audio prepared for your apps. Under Server:
 - **Catalog**: which catalog is used, and its settings.
 - **Library**: the fill policy, the library pass, the **review list** (albums whose
   match needs a decision) and the albums **picked automatically**. Fill one from a release
-  you choose, keep it as it is, or match it again.
+  you choose, keep it as it is, or match it again. A search narrows the lists to the
+  albums whose title or artist holds its words. Tick several albums, or all a list holds
+  under the search, to fill them from their most likely release, keep them or match them
+  again in one go: the albums are done one after another in the background, the page
+  shows how far it is, and stopping leaves the others as they are. Such an action takes
+  the albums as the page showed them: one whose match has changed since is left alone and
+  counted, and a page loaded more than half an hour ago is loaded anew first. A filled
+  album whose edition is wrong can be filled from another of its releases instead, while
+  nobody has used the songs the fill added
+  ([how it works](how-it-works.md#matching-and-filling)).
 - **Cleanup**: what Shijhon added, the cleanup's settings, what its last check took out
   or would take out, and the **Saved audio** settings (keeping streamed songs, and how
   long and how much saved audio is kept). A change that lets it take out
   more first shows what the next check would take out.
 - **Sound analysis**: the connection to AudioMuse-AI ([guide](sound-analysis.md)).
+- **Notifications**: the Apprise addresses notifications go to, what is reported, and
+  **Send a test notification** ([settings](#notifications)).
 - **Diagnostics**: Navidrome, the add-ons, the catalog, versions, recent errors, and
   **Restart Shijhon**.
 

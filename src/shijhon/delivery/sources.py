@@ -21,7 +21,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiosqlite
 import anyio
@@ -32,6 +32,9 @@ from shijhon.delivery.addon import Addon, addon_key
 from shijhon.delivery.netpolicy import Reach, Resolver, policy_client, system_resolver
 from shijhon.delivery.pacing import AddonPace, Limits, Paces, origin
 from shijhon.store import Store
+
+if TYPE_CHECKING:
+    from shijhon.notifications import Notices
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +86,17 @@ def usual_seconds(stats: SourceStats | None) -> float | None:
     recent = list(stats.recent)[-USUAL_STARTS:] if stats is not None else []
     times = sorted(attempt.seconds for attempt in recent if attempt.delivered)
     return times[len(times) // 2] if times else None
+
+
+@dataclass(frozen=True)
+class Attention:
+    """What an add-on said it needs from its operator before it can answer again:
+    ``kind`` "sign_in" (sign in or verify), with the add-on's own page for it when it named
+    one (``url``), since when (wall clock)."""
+
+    kind: str
+    url: str | None
+    since: float
 
 
 @dataclass(frozen=True)
@@ -173,6 +187,13 @@ class SourceRegistry:
             self.cool(cooldown_seconds)
         self._sources: dict[int, Source] | None = None
         self._cooldown: dict[int, float] = {}
+        # What add-ons need from their operators (``needs``), and when a sign-in's passing
+        # over ends (apart from cooldowns: ended with the need, a cooldown never with it).
+        self._attention: dict[int, Attention] = {}
+        self._signing_in: dict[int, float] = {}
+        # Where a sign-in an add-on needs is reported, and that it no longer does
+        # (``notifications.py``; None: nowhere).
+        self.notices: Notices | None = None
         self._stats: dict[int, SourceStats] = {}
         self._rebuild = anyio.Lock()
         # Clients of replaced configurations stay open for pinned plays until this age.
@@ -370,6 +391,10 @@ class SourceRegistry:
         if stats is not None:
             stats.failures_since_success = stats.errors_since_success = 0
         self._cooldown.pop(source_id, None)  # a changed add-on: it may work again
+        self._attention.pop(source_id, None)
+        self._signing_in.pop(source_id, None)
+        if self.notices is not None:
+            self.notices.addon_answered(source_id)
 
     async def reorder(
         self,
@@ -377,10 +402,22 @@ class SourceRegistry:
         *,
         also: Callable[[aiosqlite.Connection], Awaitable[None]] | None = None,
     ) -> None:
+        """Put the add-ons in this order; those it leaves out follow, in their order. The
+        steps are numbered in the new order (plays ask by step, ``streaming``, so the two
+        agree): add-ons next to each other that shared a step still share one, and every
+        other add-on starts a new one."""
         async with self.store.transaction() as conn:
-            for position, source_id in enumerate(ordered_ids, start=1):
+            async with conn.execute("SELECT id, step FROM sources ORDER BY position, id") as cursor:
+                old = {int(row["id"]): int(row["step"]) for row in await cursor.fetchall()}
+            listed = list(dict.fromkeys(i for i in ordered_ids if i in old))
+            order = listed + [i for i in old if i not in set(listed)]
+            step = 0
+            for position, source_id in enumerate(order, start=1):
+                if position == 1 or old[source_id] != old[order[position - 2]]:
+                    step += 1
                 await conn.execute(
-                    "UPDATE sources SET position = ? WHERE id = ?", [position, source_id]
+                    "UPDATE sources SET position = ?, step = ? WHERE id = ?",
+                    [position, step, source_id],
                 )
             if also is not None:
                 await also(conn)
@@ -438,7 +475,11 @@ class SourceRegistry:
             if also is not None:
                 await also(conn)
         self._cooldown.pop(source_id, None)
+        self._attention.pop(source_id, None)
+        self._signing_in.pop(source_id, None)
         self._stats.pop(source_id, None)
+        if self.notices is not None:
+            self.notices.addon_answered(source_id)
         await self.invalidate()
 
     async def sync(
@@ -627,10 +668,14 @@ class SourceRegistry:
             return sorted(self._sources.values(), key=lambda s: (s.position, s.id))
 
     async def streaming(self) -> list[Source]:
-        """The enabled sources that may deliver audio (``Source.streams``), in the user's
+        """The enabled sources that may deliver audio (``Source.streams``), in the plan's
         order: those a play, a download or a preparation asks - not an add-on whose
-        manifest declares no ``stream`` (its catalog is used all the same)."""
-        return [source for source in await self.enabled() if source.streams]
+        manifest declares no ``stream`` (its catalog is used all the same). By step, then
+        by place in the list: an add-on outside the plan (a catalog-only one, while its
+        manifest is not known) keeps its place in the list but is asked in its own step,
+        after the plan's - never between the add-ons of a step, nor before the plan."""
+        found = [source for source in await self.enabled() if source.streams]
+        return sorted(found, key=lambda s: (s.step, s.position, s.id))
 
     def cooling(self, source_id: int) -> bool:
         """Whether the routing passes the source over now: it cools down (errors in a row,
@@ -638,8 +683,8 @@ class SourceRegistry:
         return self._cooling_for(source_id) > 0
 
     def _cooling_for(self, source_id: int) -> float:
-        until = self._cooldown.get(source_id)
-        left = 0.0 if until is None else max(0.0, until - self.clock())
+        until = max(self._cooldown.get(source_id, 0.0), self._signing_in.get(source_id, 0.0))
+        left = max(0.0, until - self.clock())
         source = self._listed.get(source_id)
         pace = None if source is None else source.pace
         return left if pace is None else max(left, pace.blocked)
@@ -759,7 +804,45 @@ class SourceRegistry:
             return self._cooling_for(source.id)
         return source.pace.block(seconds, audio=audio)
 
+    def needs(self, source_id: int, kind: str, url: str | None, seconds: float) -> bool:
+        """The add-on said it needs its operator (``kind``: "sign_in"): it is passed over
+        for ``seconds`` (asked again after them; 0: not passed over), and shown so until it
+        delivers again or is changed (``answered``). True when it is new (or another need,
+        another page)."""
+        found = self._attention.get(source_id)
+        new = found is None or (found.kind, found.url) != (kind, url)
+        if new:
+            self._attention[source_id] = Attention(kind, url, time.time())
+            if kind == "sign_in" and self.notices is not None:
+                source = self._listed.get(source_id) or (self._sources or {}).get(source_id)
+                name = source.name if source is not None else f"#{source_id}"
+                self.notices.addon_needs_sign_in(source_id, name, url)
+        if seconds > 0:  # (none: shown, not passed over - a catalog's add-on)
+            self._signing_in[source_id] = self.clock() + seconds
+        return new
+
+    def passed_over_for_sign_in(self, source_id: int) -> bool:
+        """Whether a play passes the add-on over now because its operator must sign in."""
+        return self._signing_in.get(source_id, 0.0) > self.clock()
+
+    def attention(self, source_id: int) -> Attention | None:
+        """What the add-on said it needs from its operator, until it no longer does
+        (``answered``)."""
+        return self._attention.get(source_id)
+
+    def answered(self, source_id: int) -> None:
+        """The add-on no longer needs its operator (it delivered audio, or was changed or
+        turned off and on): not shown so, nor passed over for it, any more - a cooldown of
+        its own stays. (A need noted before a restart, and kept for its notification, ends
+        here too.)"""
+        if self.notices is not None:
+            self.notices.addon_answered(source_id)
+        if self._attention.pop(source_id, None) is None:
+            return
+        self._signing_in.pop(source_id, None)
+
     def succeeded(self, source: Source, latency: float) -> None:
+        self.answered(source.id)
         source.stats.successes += 1
         source.stats.last_latency = latency
         source.stats.last_success_at = time.time()

@@ -2,7 +2,8 @@
 
 Private, loopback and link-local destinations are denied — checked after DNS resolution
 and on every redirect hop — unless an add-on is explicitly allowed; an explicitly allowed
-loopback add-on works (every other delivery suite relies on that).
+loopback add-on works (every other delivery suite relies on that). Notifications are not
+under this policy: their addresses are an administrator's own.
 """
 
 from __future__ import annotations
@@ -86,3 +87,26 @@ def test_addon_host_resolving_to_forbidden_address_is_denied(world: DeliveryWorl
     song, _, _ = world.placeholder_track("n-hidden", [addon])
     assert "not allowed" in failed(world, song)
     assert addon.requests() == []
+
+
+def test_notifications_go_to_the_administrators_own_address_on_this_machine(
+    world: DeliveryWorld,
+) -> None:
+    """The add-ons' policy is not the notifications': their addresses are an
+    administrator's own (a service on this machine or the home network among them), and
+    Apprise's services make their own connections. A loopback address that the policy
+    refuses to an add-on of public reach takes the notification."""
+    from shijhon.config import NotificationSettings
+    from shijhon.delivery.netpolicy import allowed
+    from shijhon.notifications import TEST_NOTICE, Notices
+    from tests.harness.notification_sink import NotificationSink
+
+    assert not allowed("127.0.0.1", Reach.PUBLIC)
+    sink = NotificationSink().start()
+    try:
+        settings = NotificationSettings(urls=sink.address())  # type: ignore[arg-type]
+        notices = Notices(world.services.store, settings)
+        outcome = world.server.call(lambda: notices.deliver(TEST_NOTICE, 5))
+        assert outcome.ok and [r.body["title"] for r in sink.wait(1)] == [TEST_NOTICE.title]
+    finally:
+        sink.stop()

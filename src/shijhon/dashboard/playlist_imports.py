@@ -305,6 +305,7 @@ class Pages:
                         form.get("review", ""),
                         entry=form.get("entry", ""),
                         choice=form.get("choice", ""),
+                        actor="",  # the owner's own authority, also on an agent's import
                     )
                 return self.dashboard._see(f"/playlists/import/{ident}")
             try:

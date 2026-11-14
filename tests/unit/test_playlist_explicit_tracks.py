@@ -748,6 +748,59 @@ def test_a_discarded_or_failed_addition_still_takes_further_additions(tmp_path: 
     anyio.run(run)
 
 
+def test_additions_are_remembered_beyond_the_latest_runs(tmp_path: Path) -> None:
+    import time
+
+    from shijhon.playlists.requests import ADDITIONS
+
+    async def later_runs(service: Playlists, ident: str, count: int, data: Any = None) -> None:
+        for n in range(count):
+            ident_ = f"later-{time.monotonic_ns()}-{n}"
+            await service.repo.store.execute(
+                "INSERT INTO playlist_runs(id,mix,created,state,automatic,data)"
+                " VALUES (?,?,?,'discarded',0,?)",
+                [ident_, ident, time.time() + 1, json.dumps(data or {})],
+            )
+
+    async def run() -> None:
+        async with service_at(tmp_path / "db", ai=False) as service:
+            install(service)
+            ident = await published(service, request("Night Bloom", "Unheard Song"))
+            addition = TrackAddition(tracks=[{"artist": "Mira Sole", "title": "Grey Tide"}])
+            assert await service.requests.add_tracks("owner", ident, "add-key-1", addition)
+            await service.process((await service.repo.runs(ident))[0]["id"])
+            await later_runs(service, ident, 20)  # refreshes, replacements, failures
+            # The same key again adds nothing, however many runs came since.
+            assert not await service.requests.add_tracks("owner", ident, "add-key-1", addition)
+            # The cap counts every addition too.
+            for n in range(ADDITIONS - 1):
+                await later_runs(service, ident, 1, {"addition": {"key": f"old-{n}", "hash": ""}})
+            await later_runs(service, ident, 20)
+            other = TrackAddition(tracks=[{"artist": "Mira Sole", "title": "Paper Moths"}])
+            with pytest.raises(RequestError, match="all the additions"):
+                await service.requests.add_tracks("owner", ident, "add-key-new", other)
+
+    anyio.run(run)
+
+
+def test_a_history_change_gives_a_waiting_addition_s_tracks_back(tmp_path: Path) -> None:
+    async def run() -> None:
+        async with service_at(tmp_path / "db", ai=False) as service:
+            install(service)
+            ident = await published(service, request("Night Bloom", "Unheard Song"))
+            before = json.loads((await service.repo.mix(ident, "owner"))["definition"])
+            addition = TrackAddition(tracks=[{"artist": "Mira Sole", "title": "Grey Tide"}])
+            assert await service.requests.add_tracks("owner", ident, "add-key-1", addition)
+            waiting = (await service.repo.runs(ident))[0]
+            assert waiting["state"] == "queued"
+            await service.repo.connect(connected(history_user="new-profile", history_key="k"))
+            assert (await service.repo.run(waiting["id"]))["state"] == "discarded"
+            after = json.loads((await service.repo.mix(ident, "owner"))["definition"])
+            assert (after["tracks"], after["count"]) == (before["tracks"], before["count"])
+
+    anyio.run(run)
+
+
 def test_status_hides_library_outcomes_from_a_requester_without_library_permission(
     tmp_path: Path,
 ) -> None:
@@ -903,5 +956,148 @@ def test_a_refused_track_still_fails_the_selection_when_nothing_else_would_stay(
             with pytest.raises(PlaylistError, match="settled Library decision"):
                 await service.check_tracks(connected(), [only], {}, leave_out=left)
             assert left == {}
+
+    anyio.run(run)
+
+
+def test_adding_tracks_keeps_a_song_the_playlist_repeats_after_an_edit(tmp_path: Path) -> None:
+    from tests.unit.test_agent_playlist_management import connect, created, described, latest
+    from tests.unit.test_agents import app_at, call
+
+    async def run() -> None:
+        async with app_at(tmp_path / "db") as (app, http):
+            service = app.service
+            native = install(service)
+            token = await connect(http)
+            ident = await created(service, http, token, "Night Bloom", "Lantern Hall")
+            described(service, native)
+            # The owner adds Night Bloom once more in an app; an agent then orders it.
+            native["entry"], native["changed"] = [{"id": "n1"}, {"id": "n2"}, {"id": "n1"}], "y"
+            edited = await call(
+                http,
+                token,
+                "edit_playlist_tracks",
+                {"request_id": ident, "idempotency_key": "edit-key", "order": ["n1", "n1", "n2"]},
+            )
+            assert edited["ok"], edited
+            await latest(service, ident)
+            assert [e["id"] for e in native["entry"]] == ["n1", "n1", "n2"]
+            added = await call(
+                http,
+                token,
+                "add_playlist_tracks",
+                {
+                    "request_id": ident,
+                    "idempotency_key": "add-after-repeat",
+                    "tracks": [
+                        {"artist": "Mira Sole", "title": "Grey Tide"},
+                        {"artist": "Orrin Vale", "title": "Lantern Hall"},  # (a new repeat)
+                    ],
+                },
+            )
+            assert added["ok"], added
+            await latest(service, ident)
+            status = await service.requests.status("owner", ident)
+            assert status["state"] == "published", status["error"]
+            assert [e["id"] for e in native["entry"]] == ["n1", "n1", "n2", "n3"]
+            assert [(t["outcome"], t.get("reason")) for t in status["tracks"]] == [
+                *[("resolved", None)] * 4,
+                ("unresolved", "duplicate"),
+            ]
+            assert status["tracks"][4]["same_as"] == 3
+
+    anyio.run(run)
+
+
+def test_a_new_track_repeats_no_kept_track_wherever_that_one_is(tmp_path: Path) -> None:
+    from shijhon.playlists.prompt import explicit_tracks
+
+    async def run() -> None:
+        async with service_at(tmp_path / "db", ai=False) as service:
+            install(service)
+            spec = request("Night Bloom", "Grey Tide", "Night Bloom", "Lantern Hall")
+
+            def shown(track: Track) -> dict[str, Any]:
+                return {"outcome": "library", "song": {"artist": track.artist}}
+
+            kept = {n: (SONGS[t], shown(SONGS[t])) for n, t in ((3, "Night Bloom"),)}
+
+            async def check() -> None:
+                return None
+
+            curated = await explicit_tracks(
+                service, connected(), spec.definition(), check, kept=kept
+            )
+            assert [s.id for s in curated.selected] == ["n3", "n1", "n2"]
+            first = curated.curation["tracks"][0]
+            assert (first["reason"], first["same_as"]) == ("duplicate", 3)
+            assert "kept_repeats" not in curated.curation
+
+    anyio.run(run)
+
+
+def test_a_track_over_the_artist_limit_after_resolution_is_left_out_and_reported(
+    tmp_path: Path,
+) -> None:
+    songs = {
+        "One": Track(id="a1", artist="Ash", title="One", album="Rooms"),
+        "Two": Track(id="a2", artist="Ash", title="Two", album="Rooms"),
+        "Three": Track(id="a3", artist="Ash", title="Three (feat. Bell)", album="Rooms"),
+        "Lantern Hall": SONGS["Lantern Hall"],
+    }
+
+    async def run() -> None:
+        async with service_at(tmp_path / "db", ai=False) as service:
+            install(service)
+
+            async def resolve(connection: Any, want: dict[str, Any], **kw: Any) -> Track | None:
+                return songs[want["title"]]
+
+            service.resolver.resolve = resolve  # type: ignore[method-assign]
+            spec = PlaylistRequest(
+                name="Lantern evening",
+                count=4,
+                tracks=[
+                    {"artist": "Ash", "title": "One"},
+                    {"artist": "Ash", "title": "Two"},
+                    {"artist": "Ash feat. Bell", "title": "Three"},
+                    {"artist": "Orrin Vale", "title": "Lantern Hall"},
+                ],
+                max_per_artist=2,
+            )
+            curated = await generate(service, connected(), spec.definition())
+            assert [s.id for s in curated.selected] == ["a1", "a2", "n2"]
+            left = curated.curation["tracks"][2]
+            assert (left["outcome"], left["reason"], left["artist"], left["limit"]) == (
+                "unresolved",
+                "artist_limit",
+                "Ash",
+                2,
+            )
+            assert "max_per_artist" in left["detail"]
+
+            # Published tracks an addition keeps count too, wherever they are.
+            from shijhon.playlists.prompt import explicit_tracks
+
+            async def check() -> None:
+                return None
+
+            shown = {"outcome": "library", "song": {"artist": "Ash"}}
+            kept = {4: (songs["Two"], shown), 1: (songs["One"], shown)}
+            spec = spec.model_copy(
+                update={
+                    "tracks": [
+                        spec.tracks[0],
+                        spec.tracks[2],
+                        spec.tracks[3],
+                        spec.tracks[1],
+                    ]
+                }
+            )
+            curated = await explicit_tracks(
+                service, connected(), spec.definition(), check, kept=kept
+            )
+            assert [s.id for s in curated.selected] == ["a1", "n2", "a2"]
+            assert curated.curation["tracks"][1]["reason"] == "artist_limit"
 
     anyio.run(run)

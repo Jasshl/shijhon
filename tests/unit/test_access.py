@@ -231,3 +231,52 @@ async def test_grants_never_stand_in_for_another_spelling_or_for_a_later_step() 
 
     async with anyio.create_task_group() as group:
         group.start_soon(request)
+
+
+async def test_waiters_share_an_unavailable_answer_and_ask_again_after_a_denial() -> None:
+    """When the shared question finds Navidrome unavailable, those waiting on it fail with
+    it instead of all asking again at once (and waiting twice as long). A denial is asked
+    again by each, as before."""
+    asked = 0
+    release = anyio.Event()
+    denied = {"now": False}
+
+    class Native:
+        library_id = 1
+
+        async def native_json(self, method: str, path: str, **kwargs: Any) -> Any:
+            nonlocal asked
+            asked += 1
+            if asked == 1:
+                await release.wait()  # stands for the first question's time limit
+            if not denied["now"]:
+                raise NavidromeError("unavailable", status=500)
+            return []  # no such account: a denial
+
+    access = AccessService(Native())  # type: ignore[arg-type]
+    failures: list[type[Exception]] = []
+
+    async def one() -> None:
+        try:
+            await access.grants("invented-listener")
+        except (AccessUnavailable, AccessDenied) as exc:
+            failures.append(type(exc))
+
+    async with anyio.create_task_group() as group:
+        for _ in range(10):
+            group.start_soon(one)
+        await anyio.wait_all_tasks_blocked()
+        assert asked == 1
+        release.set()
+    assert failures == [AccessUnavailable] * 10
+    assert asked == 1
+
+    asked, release, denied["now"] = 0, anyio.Event(), True
+    failures.clear()
+    async with anyio.create_task_group() as group:
+        for _ in range(3):
+            group.start_soon(one)
+        await anyio.wait_all_tasks_blocked()
+        release.set()
+    assert failures == [AccessDenied] * 3
+    assert asked == 3

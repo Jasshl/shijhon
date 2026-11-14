@@ -8,7 +8,8 @@ lists what the cleanup of unused releases would take out now (read only);
 Shijhon that does not see that database itself; ``shijhon carry-over`` shows the catalog
 albums carried over at the upgrade to schema 24, and ``--account NAME`` gives them to one
 account's Shijhon library (``collection/carryover.py``); ``shijhon navidrome-accounts``
-creates Navidrome's first accounts in a new installation (``navidrome/accounts.py``).
+creates Navidrome's first accounts in a new installation (``navidrome/accounts.py``);
+``shijhon backup`` writes a checked copy of Shijhon's own state (``store/backup.py``).
 
 ``serve`` exits with ``RESTART_STATUS`` when the dashboard's "Restart Shijhon" stopped it:
 whatever runs Shijhon starts it again (``Restart``)."""
@@ -52,7 +53,7 @@ from shijhon.navidrome.usage import configured as usage_configured
 from shijhon.placeholders.engine import PlaceholderEngine
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.silence import SilenceMaker
-from shijhon.store import Store
+from shijhon.store import Store, backup
 from shijhon.store.db import latest_schema
 from shijhon.store.writer import AlreadyRunning, WriterLock
 from shijhon.views.real_audio import RealAudioAccounts
@@ -218,6 +219,20 @@ def main(argv: list[str] | None = None) -> None:
         metavar="SECONDS",
         help="how long to wait for Navidrome to answer (default: 120)",
     )
+    backed = sub.add_parser(
+        "backup",
+        help="write a checked copy of Shijhon's database, with the configuration file and the"
+        " service account's password file, into a folder of its own (also while Shijhon runs)",
+    )
+    backed.add_argument(
+        "--database", type=Path, help="the database (default: shijhon.sqlite3 in state_dir)"
+    )
+    backed.add_argument(
+        "--to",
+        type=Path,
+        metavar="FOLDER",
+        help="where the backup's folder goes (default: backups beside the database)",
+    )
     sub.add_parser("version", help="print the version")
     args = parser.parse_args(argv)
 
@@ -265,6 +280,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "carry-over":
         _carry_over(args)
+        return
+
+    if args.command == "backup":
+        _backup(args)
         return
 
     if args.command == "saved":
@@ -427,6 +446,48 @@ def serve(settings: Settings, *, config: Path | None = None) -> None:
         )
     if status is not None:
         raise SystemExit(status)
+
+
+def _backup(args: argparse.Namespace) -> None:
+    """``backup``: Shijhon's state as of one commit, also beside the running service (the
+    online backup only reads the database). Says where it went, what it holds and what
+    not; never prints what a file holds."""
+    configured = _settings(args.config)
+    database = args.database or configured.database_path
+    folder = args.to or database.parent / backup.BACKUPS
+    try:
+        owner = database.stat().st_uid
+    except OSError:
+        owner = None
+    if owner is not None and os.geteuid() == 0 and owner != 0:
+        # SQLite's files beside the database would be root's, and Shijhon could not open it.
+        _refuse(
+            f"run it as the user that owns {database} (user ID {owner}), not as root: files"
+            " SQLite makes beside the database would belong to root and keep Shijhon from"
+            " opening it"
+        )
+    try:
+        made = backup.make_backup(
+            database,
+            folder,
+            configuration=args.config,
+            password_file=configured.navidrome.password_file,
+        )
+    except backup.CopyError as exc:
+        _refuse(f"no backup was written: {exc}")
+    print(f"backup written: {made.path}")
+    print(
+        f"  {backup.DATABASE}: Shijhon's database at schema {made.database.schema}"
+        f" ({backup.megabytes(made.database.size)}), checked with SQLite's integrity check;"
+        " with the settings saved on the dashboard"
+    )
+    for name, what in made.files:
+        print(f"  {name}: {what}")
+    print(f"  {backup.README}: what it holds, and how to restore it")
+    print('not in it (back these up as docs/deployment.md, "Backups", says):')
+    for item in (*made.left_out, *backup.NOT_COVERED):
+        print(f"  {item}")
+    print("it holds secrets: its folder and files are readable by their owner only")
 
 
 def _catalogs() -> str:
@@ -604,7 +665,7 @@ async def _apply_undo(
     targeted scans, records - in the database the list was made from."""
     if settings.navidrome.library_path is None:
         raise SystemExit("navidrome.library_path must point at the library root")
-    store = await Store.open(database)
+    store = await Store.open(database, snapshot=settings.upgrade_snapshots)
     navidrome = NavidromeService(
         settings.navidrome.url,
         settings.navidrome.user,

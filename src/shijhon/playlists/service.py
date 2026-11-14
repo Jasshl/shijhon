@@ -8,7 +8,7 @@ import logging
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import AsyncExitStack, asynccontextmanager, nullcontext
 from typing import TYPE_CHECKING, Any
 
 import aiosqlite
@@ -21,6 +21,7 @@ from shijhon.catalog.cache import CachedCatalog
 from shijhon.catalog.model import CatalogRef, CatalogRelease, release_data
 from shijhon.config import PlaylistSettings
 from shijhon.navidrome.client import NavidromeError, NavidromeService
+from shijhon.placeholders.daily_cap import CATEGORY, adding_for
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.ai import Curator, validate
 from shijhon.playlists.client import OwnerClient
@@ -85,6 +86,10 @@ _PREPARATION_ERRORS = {
         "Retry this selection later, or review the album in Library."
     ),
     "selection_changed": "A selected release changed after it was saved. Generate again.",
+    "daily_limit": (
+        "The daily limit of added releases is reached, so a selected release could not "
+        "be added to the library. Retry later."
+    ),
 }
 
 
@@ -98,8 +103,24 @@ LEFT_OUT = frozenset(
         "owned_complete",
         "owned_retry",
         "album_collision",
+        "daily_limit",
     }
 )
+# What leaves a song out of a described playlist or a discovery mix too: the account's
+# daily cap on adding (``placeholders/daily_cap.py``). The rest is published.
+LIMIT_ONLY = frozenset({"daily_limit"})
+# A run the daily cap left nothing of: what a scheduled refresh says, put off.
+POSTPONED = (
+    "This refresh was put off: the daily limit of added releases is reached. The playlist "
+    "and its schedule stay as they are, and the next scheduled refresh tries again."
+)
+
+
+class DailyLimit(PlaylistError):
+    """The account's daily cap on adding left nothing to publish, or stopped an import:
+    no failure of the playlist - nothing is wrong with it, and it works again later."""
+
+
 COLLISION = (
     "A selected release conflicts with an existing library album. Check that album in "
     "Library. For No match, choose Match again, then retry this selection."
@@ -110,8 +131,13 @@ def without_refused(
     data: dict[str, Any], selected: list[Track], refused: dict[str, str]
 ) -> list[Track]:
     """The selection without ``refused`` (catalog IDs, with why), in ``data`` and in its
-    report: each such track becomes unresolved there with reason ``library_refused``."""
+    report: each such track becomes unresolved there with reason ``library_refused``. How
+    many the account's daily cap on adding left out is kept with the run (``daily_limit``),
+    which is how a selection without a report says it."""
     kept = [s for s in selected if s.id not in refused]
+    limited = sum(1 for s in selected if refused.get(s.id) == "daily_limit")
+    if limited:
+        data["daily_limit"] = limited
     resolved = iter(selected)
     for entry in data.get("curation", {}).get("tracks", []):
         if entry.get("outcome") == "unresolved":
@@ -357,7 +383,9 @@ class Playlists:
             "SELECT mix,automatic,data FROM playlist_runs WHERE state='generating'"
         )
         for row in interrupted:
-            if row["automatic"] or json.loads(row["data"]).get("publish_after_generation"):
+            data = json.loads(row["data"])
+            # As a failure: an agent's tracks leave the playlist's own refreshes as they are.
+            if row["automatic"] or (data.get("publish_after_generation") and not data.get("agent")):
                 await self.repo.store.execute(
                     "UPDATE playlist_mixes SET enabled=0 WHERE id=?", [row["mix"]]
                 )
@@ -531,6 +559,16 @@ class Playlists:
                     # Each explicit track's outcome, for the caller to replace the others.
                     data = {**data, "curation": {"tracks": exc.tracks}}
                 uncertain = bool(data.get("intent"))
+                if isinstance(exc, DailyLimit) and not uncertain:
+                    # The account's daily cap on adding left nothing to publish: no
+                    # failure. The playlist and its schedule stay as they are; a scheduled
+                    # refresh is put off (its next one tries again), a run someone asked
+                    # for says why and can be retried.
+                    if run["automatic"]:
+                        await self.repo.update(ident, "postponed", data, POSTPONED)
+                    else:
+                        await self.repo.update(ident, "failed", data, str(exc))
+                    return
                 error = (
                     str(exc)
                     if isinstance(exc, PlaylistError)
@@ -819,6 +857,28 @@ class Playlists:
             "created_id": "",
         }
 
+    async def daily_standing(self, user_id: str) -> dict[str, Any] | None:
+        """Where the account stands with the daily cap on adding, for an agent: None while
+        no cap is set or the account is an administrator."""
+        cap = self.commits.engine.daily_cap if self.commits is not None else None
+        standing = await cap.standing(user_id) if cap is not None else None
+        if standing is None:
+            return None
+        return {
+            "limit": standing.limit,
+            "added_in_last_24_hours": standing.used,
+            "left": standing.left,
+            **(
+                {
+                    "next_free_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(standing.frees_at)
+                    )
+                }
+                if standing.frees_at is not None
+                else {}
+            ),
+        }
+
     async def catalog_of(self, key: str, *, addons: bool = False) -> Catalog | None:
         """The catalog of the items with the key ``key``: the installation's, else - for
         imports (``addons``) - the catalog of the enabled add-on with that key."""
@@ -882,11 +942,20 @@ class Playlists:
         authorize: Callable[[], Awaitable[None]] | None = None,
         addons: bool = False,
         leave_out: dict[str, str] | None = None,
+        left_for: frozenset[str] = LEFT_OUT,
+        partly: bool = False,
     ) -> list[str]:
         """``addons`` (imports): recordings of the add-ons' catalogs too, added from
         those catalogs. ``leave_out`` (explicit tracks): a recording the library refuses
-        for its album (``LEFT_OUT``) is left out instead of failing the selection; its
-        ID goes in with the reason, and the IDs returned are those of the others."""
+        for its album (``left_for``: ``LEFT_OUT``) is left out instead of failing the
+        selection; its ID goes in with the reason, and the IDs returned are those of the
+        others. What is added to the library is added for the connection's account, under
+        its daily cap on adding: the places for the releases new to the library are taken
+        in one step, in the order of the songs, before the first is written
+        (``_take_places``). Songs of releases beyond the room are left out (with
+        ``leave_out``); else nothing is written and the selection is refused
+        (``DailyLimit``) - or, ``partly`` (an import, which goes on from where it
+        stopped), what fits is written first."""
         mapping: dict[str, str] = {}
         catalog_ids: set[str] = set()
         others: dict[str, Catalog] = {}  # the add-ons' catalogs, by key
@@ -948,64 +1017,96 @@ class Playlists:
                 if library_bound
                 else nullcontext()
             )
-            with self.commits.engine.guard_materializations(check), authorization:
-                try:
-                    while True:
-                        try:
-                            mapping = await self.commits.natives(catalog_ids, catalogs=others)
-                            break
-                        except CommitError as refused:
-                            if (
-                                leave_out is None
-                                or refused.category not in LEFT_OUT
-                                or refused.item not in catalog_ids
-                                or len(selected) - len(leave_out) <= 1  # none would stay
-                            ):
-                                raise
-                            # One track the library refuses; the others are asked again.
-                            log.warning("playlist track left out: category=%s", refused.category)
-                            leave_out[refused.item] = refused.category
-                            catalog_ids.discard(refused.item)
-                            if not catalog_ids:
-                                mapping = {}
+            with (
+                self.commits.engine.guard_materializations(check),
+                authorization,
+                adding_for(connection.user_id),
+            ):
+                async with AsyncExitStack() as taken:
+                    # The places under the account's daily cap, in the playlist's order,
+                    # before the first release is written.
+                    beyond = await self._take_places(
+                        taken,
+                        selected,
+                        catalog_ids,
+                        leave_out if CATEGORY in left_for else None,
+                        partly,
+                    )
+                    try:
+                        while True:
+                            try:
+                                mapping = await self.commits.natives(catalog_ids, catalogs=others)
                                 break
-                except CommitError as exc:
-                    if exc.category in _PREPARATION_ERRORS:
-                        category = exc.category
-                        error = _PREPARATION_ERRORS[category]
-                    elif exc.category == "album_collision" or exc.message.endswith(
-                        "the placeholders joined another album"
-                    ):
-                        category = "album_collision"
-                        error = (
-                            "A selected release conflicts with an existing library album. "
-                            "Check that album in Library. For No match, choose Match again, "
-                            "then retry this selection."
-                        )
-                    elif exc.category == "owned_fill" or exc.message == (
-                        "could not add the album's missing songs"
-                    ):
-                        category = "owned_fill"
-                        error = (
-                            "A selected track belongs to an album whose missing tracks could "
-                            "not be added. Retry this selection later. If Library lists the "
-                            "album under No match, choose Match again before retrying."
-                        )
-                    else:
-                        category = "library_preparation"
-                        error = (
-                            "Some selected tracks could not be prepared in the library. "
-                            "Retry this selection after checking the catalog and album matches."
-                        )
-                    # The original error can contain private adapter details. Log only
-                    # our fixed category and retain the frozen selection for recovery.
-                    log.warning("playlist preparation failed: category=%s", category)
-                    affected = next((s for s in selected if s.id == exc.item), None)
-                    if affected is None and len(selected) == 1:
-                        affected = selected[0]
-                    if affected is not None:
-                        error = _with_track(error, affected)
-                    raise PlaylistError(error) from None
+                            except CommitError as refused:
+                                if (
+                                    leave_out is None
+                                    or refused.category not in left_for
+                                    or refused.item not in catalog_ids
+                                    or len(selected) - len(leave_out) <= 1  # none would stay
+                                ):
+                                    raise
+                                # One track the library refuses; the others are asked again.
+                                log.warning(
+                                    "playlist track left out: category=%s", refused.category
+                                )
+                                leave_out[refused.item] = refused.category
+                                catalog_ids.discard(refused.item)
+                                # The account's daily cap refuses the same tracks when asked
+                                # again: those of this round are left out with it.
+                                for other in refused.also:
+                                    if (
+                                        other.category == "daily_limit"
+                                        and "daily_limit" in left_for
+                                        and other.item in catalog_ids
+                                        and len(selected) - len(leave_out) > 1
+                                    ):
+                                        leave_out[other.item] = other.category
+                                        catalog_ids.discard(other.item)
+                                if not catalog_ids:
+                                    mapping = {}
+                                    break
+                    except CommitError as exc:
+                        if exc.category in _PREPARATION_ERRORS:
+                            category = exc.category
+                            error = _PREPARATION_ERRORS[category]
+                        elif exc.category == "album_collision" or exc.message.endswith(
+                            "the placeholders joined another album"
+                        ):
+                            category = "album_collision"
+                            error = (
+                                "A selected release conflicts with an existing library album. "
+                                "Check that album in Library. For No match, choose Match again, "
+                                "then retry this selection."
+                            )
+                        elif exc.category == "owned_fill" or exc.message == (
+                            "could not add the album's missing songs"
+                        ):
+                            category = "owned_fill"
+                            error = (
+                                "A selected track belongs to an album whose missing tracks could "
+                                "not be added. Retry this selection later. If Library lists the "
+                                "album under No match, choose Match again before retrying."
+                            )
+                        else:
+                            category = "library_preparation"
+                            error = (
+                                "Some selected tracks could not be prepared in the library. "
+                                "Retry this selection after checking the catalog and album matches."
+                            )
+                        # The original error can contain private adapter details. Log only
+                        # our fixed category and retain the frozen selection for recovery.
+                        log.warning("playlist preparation failed: category=%s", category)
+                        affected = next((s for s in selected if s.id == exc.item), None)
+                        if affected is None and len(selected) == 1:
+                            affected = selected[0]
+                        if affected is not None:
+                            error = _with_track(error, affected)
+                        raise (DailyLimit if category == CATEGORY else PlaylistError)(
+                            error
+                        ) from None
+                    if beyond is not None:
+                        # (an import: what fitted is in the library; it goes on from here)
+                        raise DailyLimit(_with_track(_PREPARATION_ERRORS[CATEGORY], beyond))
         if leave_out:
             selected = [s for s in selected if s.id not in leave_out]
         ids = [mapping.get(s.id, s.id) for s in selected]
@@ -1016,6 +1117,58 @@ class Playlists:
                     "A resolved library track differs from the selection. The playlist was kept."
                 )
         return ids
+
+    async def _take_places(
+        self,
+        taken: AsyncExitStack,
+        selected: list[Track],
+        catalog_ids: set[str],
+        leave_out: dict[str, str] | None,
+        partly: bool,
+    ) -> Track | None:
+        """The publication's places under its account's daily cap (kept until ``taken``
+        closes): for the releases of ``catalog_ids`` that are not in the library, in the
+        order their songs come in the playlist. All fit: None. ``leave_out``: the songs of
+        the releases beyond the room go there (and out of ``catalog_ids``), in that order;
+        when none would stay, ``DailyLimit``. ``partly``: those songs leave ``catalog_ids``
+        and the first is returned (the caller stops with it once the others are written).
+        Neither: ``DailyLimit`` when not all fit - nothing is taken."""
+        assert self.commits is not None
+        cap = getattr(self.commits.engine, "daily_cap", None)
+        if cap is None or not cap.on or await cap.limited() is None:
+            return None
+        new: list[tuple[Track, str]] = []
+        for song in selected:
+            cid = CatalogId.parse(song.id)
+            if cid is None or song.id not in catalog_ids or not song.release:
+                continue
+            if await self.commits.materialized.song(cid.ref) is not None:
+                continue
+            if await self.commits.materialized.album(CatalogRef.parse(song.release)) is None:
+                new.append((song, song.release))
+        if not new:
+            return None
+        try:
+            got = await taken.enter_async_context(
+                cap.places([ref for _, ref in new], partial=leave_out is not None or partly)
+            )
+        except MaterializeError:
+            raise DailyLimit(_PREPARATION_ERRORS[CATEGORY]) from None
+        over = set(got.refused)
+        beyond = [song for song, ref in new if ref in over]
+        if not beyond:
+            return None
+        log.warning("playlist tracks beyond the daily cap: %d", len(beyond))
+        if leave_out is None:
+            for song in beyond:
+                catalog_ids.discard(song.id)
+            return beyond[0]
+        for song in beyond:
+            if len(selected) - len(leave_out) <= 1:  # none would stay
+                raise DailyLimit(_with_track(_PREPARATION_ERRORS[CATEGORY], song))
+            leave_out[song.id] = CATEGORY
+            catalog_ids.discard(song.id)
+        return None
 
     async def native_track(
         self,
@@ -1051,7 +1204,9 @@ class Playlists:
             return
         rules = self.rules(definition, data)
         edit = (data.get("agent") or {}).get("kind") == "edit"
-        validate(selected, rules, repeats=edit)
+        # (an addition keeps the repeats an edit kept: ``explicit_tracks``)
+        kept = bool(data.get("curation", {}).get("kept_repeats"))
+        validate(selected, rules, repeats=edit or kept)
         target = data.get("created_id") or mix["playlist_id"]
         current: dict[str, Any] | None = None
         if target:
@@ -1109,6 +1264,9 @@ class Playlists:
                 await self.requests.guard(mix, data)
 
             partial = rules.mode == "tracks" and not rules.require_all
+            # Explicit tracks that must all be published are; any other selection goes
+            # out without the songs the account's daily cap on adding left out.
+            whole = rules.mode == "tracks" and rules.require_all
             refused: dict[str, str] = {}
             ids = await self.check_tracks(
                 connection,
@@ -1116,7 +1274,8 @@ class Playlists:
                 approved,
                 library_bound=rules.mode != "discovery",
                 authorize=authorize,
-                leave_out=refused if partial else None,
+                leave_out=None if whole else refused,
+                left_for=LEFT_OUT if partial else LIMIT_ONLY,
             )
             if refused:
                 # Before any intent: the selection published is the one recovery keeps.

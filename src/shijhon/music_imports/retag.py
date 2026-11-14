@@ -23,6 +23,19 @@ encoding (``tagmap.ENCODING``) - and its first picture, in place of the add-on's
 The upgraded file is accepted only when what Navidrome makes the song's identity of (its
 album identity, title, disc and track numbers, MusicBrainz release track ID) reads back
 the same; the swap then checks Navidrome's own read.
+
+With ``{"mode": "lists", "values": {name: [values] or null}, "artist": text, "pin": bool}``
+it makes a copy of a file with its artist lists (``artist_lists``): only those names
+change (``tagmap.set_listed``: ``artists``, ``albumartists`` and ``albumartist``), every
+other tag as Navidrome reads it stays exactly as it was, and so does the song's identity
+(album identity included: ``grouping.first_artist``); its artist tag must still be
+``artist`` when given. With ``pin``, a file without an album artist tag that is no
+compilation also gets the album artist Navidrome showed for it (its first track artist):
+an artists list alone would change its album (``"pinned": true`` says it did). A file
+that cannot take them so is refused with a reason (``REFUSED``), never a tag. The output
+also gives a digest of the copy's tags as Navidrome reads them (``raw_digest``) and of the
+source's (``raw_before``): an undo is accepted only when it gives back the tags the file
+had.
 """
 
 from __future__ import annotations
@@ -37,7 +50,7 @@ from typing import Any
 
 from mutagen.id3 import ID3
 
-from shijhon.matching.grouping import album_key
+from shijhon.matching.grouping import album_key, compilation, first_artist
 from shijhon.music_imports import tagmap
 from shijhon.placeholders import tags as tagging
 
@@ -98,9 +111,10 @@ def _identity(audio: Any, tags: Any = None) -> tuple[Any, ...]:
             "musicbrainz/release track id",
         ),
     )
-    artist = tagging.mapped(raw, ("tpe1", "artist", "\xa9art", "author"))
+    artist = tagging.mapped(raw, tagging.ARTIST_ALIASES)
+    artists = tagging.mapped(raw, tagging.ARTISTS_ALIASES)
     return (
-        album_key(album, artist[0] if artist else ""),
+        album_key(album, first_artist(artist, artists)),
         title[0] if title else "",
         _numbers(audio, raw),
         release_track[0] if release_track else "",
@@ -145,12 +159,149 @@ def carry(
         os.fsync(out.fileno())
 
 
+# Why a file does not take its artist lists (the words the caller records; nothing else
+# about the file leaves this process).
+REFUSED = frozenset({"format", "listed", "identified", "changed", "other_tags", "identity"})
+# MusicBrainz artist identifiers: Navidrome pairs them with the names by position.
+_ARTIST_IDS = (
+    "txxx:musicbrainz artist id", "musicbrainz_artistid", "musicbrainz artist id",
+    "----:com.apple.itunes:musicbrainz artist id", "musicbrainz/artist id",
+    "txxx:musicbrainz album artist id", "musicbrainz_albumartistid",
+    "musicbrainz album artist id", "----:com.apple.itunes:musicbrainz album artist id",
+    "musicbrainz/album artist id",
+)  # fmt: skip
+
+
+class Refused(ValueError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def raw_digest(raw: Mapping[str, Sequence[str]]) -> str:
+    """A digest of a file's tags as Navidrome reads them."""
+    shown = {k: list(v) for k, v in sorted(raw.items()) if v}
+    return hashlib.sha256(json.dumps(shown, ensure_ascii=False).encode()).hexdigest()
+
+
+def lists(
+    source: Any,
+    target: Any,
+    values: Mapping[str, Sequence[str] | None],
+    artist: str | None,
+    suffix: str = "",
+    pin: bool = False,
+) -> tuple[str, str, bool]:
+    """The copy with its artist lists (module docstring), written through ``target``;
+    returns the digests of the source's and the copy's tags, and whether its album artist
+    was pinned. Raises ``Refused``."""
+    while chunk := source.read(CHUNK):
+        target.write(chunk)
+    target.flush()
+    target.seek(0)
+    audio = tagmap.parse(target, suffix)
+    kind = tagmap.family(audio)
+    if audio is None or not kind or suffix.lower().lstrip(".") == "mka":
+        raise Refused("format")
+    found = tagmap.ensure_tags(audio, target)
+    before = tagmap.raw(audio, found)
+    adding = {name: v for name, v in values.items() if v}
+    if "artists" in adding and tagging.mapped(before, tagging.ARTISTS_ALIASES):
+        raise Refused("listed")
+    if "albumartists" in adding and tagging.mapped(before, tagmap.LISTED["albumartists"]):
+        raise Refused("listed")
+    if "albumartist" in adding and tagging.mapped(before, tagmap.LISTED["albumartist"]):
+        raise Refused("listed")
+    if adding and tagging.mapped(before, _ARTIST_IDS):
+        raise Refused("identified")
+    if artist is not None and tagging.mapped(before, tagging.ARTIST_ALIASES) != [artist]:
+        raise Refused("changed")
+    identity = _identity(audio, found)
+    values = dict(values)
+    pinned = False
+    if (
+        pin
+        and adding
+        and not tagging.mapped(before, tagmap.LISTED["albumartist"])
+        and not tagging.mapped(before, tagmap.LISTED["albumartists"])
+        and not compilation(tagmap.album_tags(audio, found))
+    ):
+        shown = first_artist(tagging.mapped(before, tagging.ARTIST_ALIASES))
+        if not shown:
+            raise Refused("changed")
+        values["albumartist"] = [shown]
+        pinned = True
+    tagmap.set_listed(found, kind, values)
+    try:
+        tagmap.save_as_found(audio, found, target)
+    except ValueError:
+        raise Refused("format") from None
+    copied = tagmap.parse(target, suffix)
+    if copied is None:
+        raise Refused("format")
+    tags = tagmap.tags_of(copied, target)
+    after = tagmap.raw(copied, tags)
+    touched = frozenset().union(*(tagmap.LISTED[name] for name in values))
+    if any(before.get(k) != after.get(k) for k in (set(before) | set(after)) - touched):
+        raise Refused("other_tags")
+    for name, wanted in values.items():
+        if tagging.mapped(after, tagmap.LISTED[name]) != [str(v) for v in wanted or ()]:
+            raise Refused("format")
+    if _identity(copied, tags) != identity:
+        raise Refused("identity")
+    return raw_digest(before), raw_digest(after), pinned
+
+
+def _finish(target: Any) -> tuple[int, str]:
+    os.fsync(target.fileno())
+    target.seek(0)
+    hashed, size = hashlib.sha256(), 0
+    while chunk := target.read(CHUNK):
+        hashed.update(chunk)
+        size += len(chunk)
+    return size, hashed.hexdigest()
+
+
 def main() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
     resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))
     if sys.platform.startswith("linux"):
         resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
     request = json.loads(sys.stdin.read(256 * 1024))
+    if request.get("mode") == "lists":
+        values = request["values"]
+        artist = request.get("artist")
+        if not isinstance(values, dict) or not (artist is None or isinstance(artist, str)):
+            raise ValueError
+        with (
+            os.fdopen(int(sys.argv[1]), "rb", buffering=0) as source,
+            os.fdopen(int(sys.argv[2]), "r+b") as target,
+        ):
+            try:
+                before, after, pinned = lists(
+                    source,
+                    target,
+                    values,
+                    artist,
+                    str(request.get("suffix") or ""),
+                    request.get("pin") is True,
+                )
+            except Refused as exc:
+                print(json.dumps({"refused": exc.reason}))
+                return
+            size, digest = _finish(target)
+        print(
+            json.dumps(
+                {
+                    "size": size,
+                    "sha256": digest,
+                    "raw_before": before,
+                    "raw_digest": after,
+                    "pinned": pinned,
+                }
+            )
+        )
+        return
     if request.get("mode") == "carry":
         target_fd = int(sys.argv[2])
         with (

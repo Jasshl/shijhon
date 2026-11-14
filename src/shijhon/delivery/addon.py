@@ -33,7 +33,7 @@ from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import anyio
 import httpx
@@ -80,20 +80,86 @@ class AddonError(Exception):
     item that Shijhon cannot use: an unexpected status, no URL) | broken (a malformed answer:
     not JSON, too large, unreadable) | denied | failed (an HTTP 5xx, no connection) |
     preparing (an HTTP 503 with a valid ``Retry-After``: not ready yet, ask again then - no
-    error) | cooling (not asked: the add-on said "too many requests" and its time has not
-    passed). ``retry_after``: the seconds a rate limit's or a preparation's ``Retry-After``
-    named (None: none, or not valid). ``shared``: another request's answer, waited for (a
-    manifest read once for several first uses): its failure is counted where it was
-    asked."""
+    error) | sign_in (its operator must sign in again: ``needs_sign_in``, with the page where
+    they do as ``url`` when it named one - no error) | cooling (not asked: the add-on said
+    "too many requests" and its time has not passed). ``retry_after``: the seconds a rate
+    limit's or a preparation's ``Retry-After`` named (None: none, or not valid). ``shared``:
+    another request's answer, waited for (a manifest read once for several first uses): its
+    failure is counted where it was asked."""
 
     def __init__(
-        self, kind: str, reason: str, retry_after: float | None = None, *, shared: bool = False
+        self,
+        kind: str,
+        reason: str,
+        retry_after: float | None = None,
+        *,
+        shared: bool = False,
+        url: str | None = None,
     ) -> None:
         super().__init__(f"{kind}: {reason}")
         self.kind = kind
         self.reason = reason
         self.retry_after = retry_after
         self.shared = shared
+        self.url = url
+
+
+SIGN_IN = "needs_sign_in"  # an add-on's answer: its operator must sign in again
+NEEDS_SIGN_IN = "needs sign-in"
+SIGN_IN_BYTES = 16 * 1024  # such an answer is small: a longer body is not read as one
+# An add-on that said so is passed over this long at a time by plays and downloads (asked
+# again after it), until it delivers again.
+SIGN_IN_SECONDS = 600
+
+
+@dataclass(frozen=True)
+class SignIn:
+    """An add-on's answer that its operator must sign in (or verify) before it can answer
+    again; ``url``: the add-on's own page where they do, when it named one (http or https)."""
+
+    url: str | None = None
+
+
+async def sign_in_needed(response: httpx.Response) -> SignIn | None:
+    """Whether ``response`` says the add-on needs its operator to sign in: HTTP 503 with a
+    JSON object whose ``error`` is ``needs_sign_in`` (``Retry-After`` or not), optionally
+    with a ``url``. Reads its body (a small one only). None: another answer."""
+    if response.status_code != 503:
+        return None
+    body = b""
+    try:
+        async for chunk in response.aiter_bytes():
+            body += chunk
+            if len(body) > SIGN_IN_BYTES:
+                return None
+    except httpx.HTTPError:
+        return None
+    try:
+        data = json.loads(body)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(data, dict) or data.get("error") != SIGN_IN:
+        return None
+    return SignIn(_page(data.get("url")))
+
+
+def _page(url: object) -> str | None:
+    """An add-on's page to show its operator: an http or https address, without any user
+    name or password in it; None for anything else (or one that can't be read)."""
+    if not isinstance(url, str) or len(url) > 2048:
+        return None
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:  # (an address that can't be read: no page)
+        return None
+    if parts.scheme not in ("http", "https") or not host:
+        return None
+    if ":" in host:  # (an IPv6 address, written in brackets)
+        host = f"[{host}]"
+    netloc = host if port is None else f"{host}:{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def text(value: Any) -> str | None:
@@ -685,6 +751,8 @@ class Addon:
                 if response.status_code in (401, 403):
                     raise AddonError("unavailable", f"refused (HTTP {response.status_code})")
                 if response.status_code == 503:
+                    if (signed_out := await sign_in_needed(response)) is not None:
+                        raise AddonError("sign_in", NEEDS_SIGN_IN, url=signed_out.url)
                     ready_in = pacing.retry_after(response.headers.get("retry-after"))
                     if ready_in is not None:  # (whatever its body says)
                         raise AddonError("preparing", PREPARING, ready_in)
@@ -757,7 +825,9 @@ class Addon:
                 mine.shared(reading.waits, joined)
         if reading.error is not None:
             error = reading.error
-            raise AddonError(error.kind, error.reason, error.retry_after, shared=True)
+            raise AddonError(
+                error.kind, error.reason, error.retry_after, shared=True, url=error.url
+            )
 
     async def _read_manifest(self) -> Manifest:
         asked: list[AddonPace] = []

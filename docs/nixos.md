@@ -8,7 +8,7 @@ You need NixOS with flakes, on Linux x86-64 or ARM64, with systemd 257 or newer.
 
 ## Set it up
 
-Your music stays where it is. Shijhon only adds a `_shijhon` folder to it, and Navidrome
+Your music stays where it is. Shijhon only adds a `_shijhon` folder to it (unless you let it fix artist credits in your files, below), and Navidrome
 and Shijhon both need to be able to read it. The section
 [on your music folder](#your-music-folder) below explains how to check that.
 
@@ -35,7 +35,7 @@ been tried yet.
    ```nix
    {
      inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-     inputs.shijhon.url = "github:Jasshl/shijhon/v0.6.1"; # a release tag
+     inputs.shijhon.url = "github:Jasshl/shijhon/v0.8.0"; # a release tag
 
      outputs = { nixpkgs, shijhon, ... }: {
        nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
@@ -98,6 +98,10 @@ been tried yet.
    sudo systemctl start shijhon
    ```
 
+   If Navidrome didn't answer, `shijhon-accounts` tries again for about a quarter of an
+   hour and then gives up. In that case, run `sudo systemctl reset-failed shijhon-accounts`
+   first.
+
 5. **Open the dashboard** at `http://127.0.0.1:4533/shijhon/` on that machine. From
    another computer, run `ssh -L 4533:127.0.0.1:4533 yourhost` first and open the same
    address. Sign in with your account, then sign in to **Collection** once to prepare your
@@ -144,7 +148,11 @@ been tried yet.
 
 `libraryPath` is the folder your music is in now. Shijhon doesn't move, rename or retag
 anything in it, and doesn't change its permissions. It only adds the `_shijhon`
-placeholder folder, and you keep adding music as before.
+placeholder folder, and you keep adding music as before. The one exception is opt-in:
+with `libraryWritable = true;` the folder is writable for Shijhon, and **Also fix files in
+your music folder** on the dashboard may then add lists of artists to files whose one
+artist text names several ([how it works](how-it-works.md#each-artist-of-a-joined-credit));
+A file is changed only when it is owned by Shijhon's user; Diagnostics says when files are left as they are. While an album's files are being changed, a union without hard links needs room for a whole copy of each.
 
 The folder has to be outside `/home`, `/root` and `/run/user`, because the services can't
 see those. If your music is in your home folder, move it, for example to `/srv/music`, or
@@ -269,10 +277,37 @@ The reference covers [connecting over a Unix socket and Navidrome's login limits
 ## Upgrades
 
 1. Read the [changelog](../CHANGELOG.md). Options can change between beta versions.
-2. Take a [backup](#backups). Shijhon updates its database at the first start, and an
-   older version won't start on the updated one, so going back means restoring the backup
-   together with the older tag.
-3. Change the tag in `inputs.shijhon.url`, run `nix flake update shijhon` and switch.
+2. Change the tag in `inputs.shijhon.url`, run `nix flake update shijhon` and switch.
+
+Shijhon updates its database at the first start, and an older version won't start on the
+updated one. Before it changes the database, that start writes a checked snapshot of it
+into `/var/lib/shijhon/snapshots`, named for the schema it holds. Once that snapshot is
+complete, it keeps the newest snapshot of this schema and of the highest other schema
+([in detail](deployment.md#upgrades)). If the snapshot can't be written, Shijhon updates
+the database and starts without it, as versions before snapshots did, and removes no
+snapshot to make room. `journalctl -u shijhon` says why, administrators see it at the top
+of the dashboard until one of them dismisses it, and it is reported once when notification
+addresses are set. Then free some space or fix the folder so that the next update can take
+its snapshot, and make a backup now with `shijhon backup` ([below](#backups)). Setting
+`services.shijhon.settings.upgrade_snapshots = false` updates without a snapshot, and then
+nothing is shown or reported. With music
+imports, back up the imports folder before you switch.
+
+To go back, stop Shijhon and copy the snapshot beside the database under a temporary name.
+Once the copy is complete, remove the database's `-wal` and `-shm` files, which belong to
+the database being replaced, and rename the copy:
+
+```sh
+sudo systemctl stop shijhon
+sudo -u shijhon sh -c 'cd /var/lib/shijhon &&
+    install -m 600 snapshots/shijhon-schema37-20261112T153000Z-4.sqlite3 restored.sqlite3 &&
+    rm -f shijhon.sqlite3-wal shijhon.sqlite3-shm && mv restored.sqlite3 shijhon.sqlite3'
+```
+
+Restore what changed since with it, from the same time: Navidrome's data, the placeholder
+folder and, with music imports, the imports folder
+([in detail](reference/advanced-deployment.md#restoring-a-backup)). Only then switch to the
+older tag, which starts Shijhon again. Work done since the update is lost.
 
 ### The Navidrome version
 
@@ -323,9 +358,28 @@ your service's user, Navidrome's group, your placeholder folder and your usage f
 
 ## Backups
 
-Stop Shijhon, save its state folder and the placeholder folder together, and start it
-again. With music imports, save the imports folder too. The archive contains the settings
-saved on the dashboard, secrets included, so keep it private.
+`shijhon backup` copies Shijhon's database while Shijhon runs, with SQLite's online backup,
+and checks the copy. Add `config.services.shijhon.package` to `environment.systemPackages`
+to get the command, and run it as the service's user:
+
+```sh
+sudo -u shijhon shijhon backup --database /var/lib/shijhon/shijhon.sqlite3
+```
+
+It writes a folder into `/var/lib/shijhon/backups` with the copy and a `README.txt`, and
+prints what it holds. Run it as the service's user: it needs to write to the database's
+folder, because SQLite makes the files it needs to read a database in WAL mode
+consistently beside it. Run this way it holds neither your settings, which are in your NixOS
+configuration, nor the service account's password file. The database holds the settings
+saved on the dashboard, secrets included, so the folder is readable by the service's user
+only. Copy it somewhere safe and remove it from the state folder.
+
+For a set to restore together, stop Shijhon and save its state folder and the placeholder
+folder together, then start it again. This also keeps the password file the module created.
+With music imports, save the imports folder too. With `libraryWritable` and **Also fix files
+in your music folder** on, Shijhon changes the artist tags of files in your library and
+records in its state what undoes each change, so back up the library at the same time. The
+archive contains the settings saved on the dashboard, secrets included, so keep it private.
 
 ```sh
 sudo systemctl stop shijhon

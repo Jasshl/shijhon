@@ -70,8 +70,14 @@ import anyio
 import anyio.lowlevel
 
 from shijhon.matching.albums import Album, Keys, Recordings, Song, keys, same_keys, same_name
-from shijhon.matching.grouping import album_artist, album_key, identity, same_native_album
+from shijhon.matching.grouping import (
+    album_artist,
+    album_key,
+    identity,
+    same_native_album,
+)
 from shijhon.matching.normalize import fold
+from shijhon.music_imports.facts import first_track_artist
 from shijhon.music_imports.facts import year as tag_year
 from shijhon.quality import LOSSLESS_FORMATS, Minimum, Quality
 
@@ -107,10 +113,17 @@ class Incoming:
         return str(self.facts.get("artist") or "")
 
     @cached_property
+    def track_artist(self) -> str:
+        """The first of its track artists as Navidrome reads them (``grouping.first_artist``:
+        its artists list's first, else its artist tag's first value, split when the tag
+        has one value)."""
+        return first_track_artist(self.facts)
+
+    @cached_property
     def album_artist(self) -> str:
         """As Navidrome has it (``matching/grouping.py``): the album artist tag, else
-        "Various Artists" for a compilation, else the track artist."""
-        return album_artist(self.tags, self.artist)
+        "Various Artists" for a compilation, else its first track artist."""
+        return album_artist(self.tags, self.track_artist)
 
     @cached_property
     def tags(self) -> Tags:
@@ -405,7 +418,7 @@ def _groups(items: Iterable[Incoming]) -> list[list[Incoming]]:
     name stands alone."""
     groups: dict[tuple[str, ...], list[Incoming]] = {}
     for item in items:
-        key = album_key(item.tags, item.artist) if fold(item.album) else ("", item.id)
+        key = album_key(item.tags, item.track_artist) if fold(item.album) else ("", item.id)
         groups.setdefault(key, []).append(item)
     return sorted(groups.values(), key=lambda g: (-len(g), min(i.id for i in g)))
 
@@ -756,7 +769,7 @@ async def _joining(
     joined = f'Adds a song to the library\'s album "{album.name}".'
     said = _DISTINCT + " " if item.distinct else ""
     if tags is not None:
-        if same_native_album(item.tags, tags, a_artist=item.artist, b_artist=album.artist):
+        if same_native_album(item.tags, tags, a_artist=item.track_artist, b_artist=album.artist):
             return Decision(NEW, album=album, reason=said + joined)
     elif (
         identity(item.facts.get("album")) == identity(album.name)
@@ -793,7 +806,7 @@ def _joining_incoming(item: Incoming, primary: Incoming) -> Decision:
     album the same way."""
     said = _DISTINCT + " " if item.distinct else ""
     if same_native_album(
-        item.tags, primary.tags, a_artist=item.artist, b_artist=primary.artist
+        item.tags, primary.tags, a_artist=item.track_artist, b_artist=primary.track_artist
     ) or not primary.facts.get("album_tags"):
         return Decision(NEW, album_item=primary.id, reason=said.strip())
     if item.taggable:
@@ -801,7 +814,7 @@ def _joining_incoming(item: Incoming, primary: Incoming) -> Decision:
             COPY,
             album_item=primary.id,
             tags_from="item:" + primary.id,
-            target_key=album_key(primary.tags, primary.artist),
+            target_key=album_key(primary.tags, primary.track_artist),
             reason=(
                 f'{said}Added to the album "{primary.album}" of this import as a copy carrying '
                 "that album's details. Your file stays unchanged."

@@ -212,6 +212,8 @@ def test_without_a_newer_export_nothing_is_taken_out(exported: Exported) -> None
         assert "no usage export made after" in done.refused
         assert "is the exporter running?" in done.refused
         assert done.refused.endswith("Artist x-stale - Album x-stale was put back")
+        # (A notification says the export is late, not that the cleanup is blocked.)
+        assert done.export_late
         assert in_library(world, release) and in_library(world, other)
         assert world.placeholder_files() == files
         assert not any(world.nd.native("GET", f"song/{s}").json()["missing"] for s in songs)

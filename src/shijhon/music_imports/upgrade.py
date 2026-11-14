@@ -18,10 +18,10 @@ place (same folder and base name, its own suffix); a scan and the importer's own
 read must show the same song ID at the new path with the new size; only then does the
 item record the upgraded file as its published file (``upgraded_from`` keeps what it
 replaced). Anything short of that - a mismatch, an error, a stop - puts the imported file
-back and drops the intent: the next start finishes such a roll back first. The replaced
-file stays retained privately in the imports root, counted against the person's storage
-as the upgraded one is. Removing the import takes the upgraded file out; restoring it puts
-the upgraded file back.
+back (with the time of now, so that Navidrome reads it again) and drops the intent: the
+next start finishes such a roll back first. The replaced file stays retained privately in
+the imports root, counted against the person's storage as the upgraded one is. Removing
+the import takes the upgraded file out; restoring it puts the upgraded file back.
 """
 
 from __future__ import annotations
@@ -393,6 +393,9 @@ class Upgrades:
                 try:
                     descriptor = storage.file(item["final_name"], final=True)
                 except FileNotFoundError:
+                    # The time of now: Navidrome reads a file again only when it is newer
+                    # than its record, and this one is older than the file it replaces.
+                    os.utime(item["staging_name"], dir_fd=storage.incoming, follow_symlinks=False)
                     storage.place(item["staging_name"], item["final_name"])
                 else:
                     os.close(descriptor)

@@ -35,7 +35,8 @@ from mutagen.oggvorbis import OggVorbis
 from mutagen.trueaudio import TrueAudio
 from mutagen.wave import WAVE
 
-from shijhon.catalog.model import CatalogRelease, CatalogTrack, ReleaseKind
+from shijhon.catalog.model import CatalogRef, CatalogRelease, CatalogTrack, ReleaseKind
+from shijhon.matching.normalize import credit_names, credited_names, features_in_title
 
 Tags = dict[str, list[str]]
 
@@ -101,6 +102,11 @@ ALBUM_TAGS: dict[str, tuple[str, ...]] = {
     "media": ("tmed", "media", "----:com.apple.itunes:media", "wm/media", "imed"),
     "grouping": ("grp1", "grouping", "©grp", "wm/contentgroupdescription"),
 }  # fmt: skip
+
+# Track artists: the artist tag (one display text, or several values) and the multi-valued
+# artists tag, Navidrome 0.64.2's aliases in order.
+ARTIST_ALIASES = ("tpe1", "artist", "\xa9art", "author", "iart")
+ARTISTS_ALIASES = ("txxx:artists", "artists", "----:com.apple.itunes:artists", "wm/artists")
 
 # The Vorbis key a placeholder uses for each logical tag (each is one of its aliases).
 VORBIS_KEY = {name: name for name in ALBUM_TAGS} | {
@@ -213,11 +219,44 @@ def album_tags_of(path: Path) -> Tags:
 # --- building placeholder tags ---------------------------------------------------------
 
 
+def listed_artists(
+    names: tuple[str, ...], refs: tuple[CatalogRef, ...], credit: str, title: str = ""
+) -> list[str] | None:
+    """The individual artists written as ``artists``/``albumartists`` (Navidrome then
+    credits each of them, not the joined credit as one artist): the catalog's names when
+    it lists more than one, else the credit's parts when the catalog names as many artist
+    items (``credited_names``); None for one artist."""
+    if names:
+        return list(names) if len(names) > 1 else None
+    return credited_names(credit, len(refs), title) or None
+
+
+def track_artists(track: CatalogTrack, release: CatalogRelease) -> list[str] | None:
+    """A track's individual artists (``listed_artists``); a track credited exactly as its
+    album, with none of its own, has the album's."""
+    listed = listed_artists(track.artists, track.artist_refs, track.artist, track.title)
+    if listed is None and track.artist == release.artist and not track.artist_refs:
+        listed = listed_artists(release.artists, release.artist_refs, release.artist, track.title)
+    return listed
+
+
+def needs_credits(track: CatalogTrack) -> bool:
+    """Whether a track's credit may name several artists the catalog listed with neither
+    their names nor their items: its artist items are worth asking for (not with a
+    featured artist in its title, which keeps the credit whole: ``credited_names``)."""
+    return (
+        not track.artists
+        and not track.artist_refs
+        and len(credit_names(track.artist)) > 1
+        and not features_in_title(track.title)
+    )
+
+
 def catalog_album_tags(release: CatalogRelease) -> Tags:
     """Album tags for a catalog-only album (no owned files to copy from)."""
     tags: Tags = {"album": [release.title], "albumartist": [release.artist]}
-    if len(release.artists) > 1:
-        tags["albumartists"] = list(release.artists)
+    if artists := listed_artists(release.artists, release.artist_refs, release.artist):
+        tags["albumartists"] = artists
     if release.release_date:
         tags["releasedate"] = [release.release_date]
         tags["recordingdate"] = [release.release_date]
@@ -251,8 +290,8 @@ def placeholder_tags(
     }
     comments["title"] = [track.title]
     comments["artist"] = [track.artist]
-    if len(track.artists) > 1:
-        comments["artists"] = list(track.artists)
+    if artists := track_artists(track, release):
+        comments["artists"] = artists
     comments["tracknumber"] = [str(track.number)]
     comments["discnumber"] = [str(track.disc)]
     if track.isrc:

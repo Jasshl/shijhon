@@ -173,7 +173,7 @@
         <p class="source-meta">{% if item.version %}<span>Version <code>{{ item.version }}</code></span>{% endif %}{% if item.starts.tried %}<span>Played {{ item.starts.played }} of its last {{ item.starts.tried }} starts{% if item.starts.usual is not none %}, usually after {{ item.starts.usual|number }} s{% endif %}</span>{% endif %}</p>
       </div>
       <div class="source-health">
-        <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}</p>
+        <p{% if item.health.light == "error" %} class="status-error"{% endif %}>{{ item.health.words }}{% if item.health.code %} <code>{{ item.health.code }}</code>{% endif %}{% if item.health.link %} <a class="source-link" href="{{ item.health.link }}" rel="noreferrer noopener">Sign in</a>{% endif %}</p>
 {% if item.health.detail %}
         <p class="source-detail">{{ item.health.detail }}</p>
 {% endif %}
@@ -204,7 +204,7 @@
           <span class="start-time">{{ start.at|hm }}</span>
           <span class="start-song"><span class="start-title">{{ start.title }}</span> <span class="muted">{{ start.artist }}</span></span>
           <span class="start-purpose muted">{{ start.purpose }}</span>
-          <span class="start-result">{% if start.served %}{{ start.served }} after {{ start.seconds|number }} s{% else %}<span class="status-error">No audio after {{ start.seconds|number }} s</span>{% endif %}</span>
+          <span class="start-result">{% if start.served %}{{ start.served }} after {{ start.seconds|round(1)|number }} s{% else %}<span class="status-error">No audio after {{ start.seconds|round(1)|number }} s</span>{% endif %}</span>
         </summary>
 {% if start.steps or start.ended %}
         <ol class="start-steps">
@@ -249,6 +249,9 @@
 {% if storage %}
       <div><dt>Placeholders</dt><dd>{{ storage.placeholders|count }} song{{ "s" if storage.placeholders != 1 }}, {{ storage.placeholder_bytes|size }}</dd></div>
       <div><dt>Saved audio</dt><dd>{{ storage.delivered|count }} song{{ "s" if storage.delivered != 1 }}, {{ storage.delivered_bytes|size }}</dd></div>
+{% endif %}
+{% if library_read_only %}
+      <div><dt>Music folder</dt><dd class="muted">Not writable for Shijhon, in all or in part: <strong>Also fix files in your music folder</strong> leaves a file as it is while the folder or the file is read-only for Shijhon's user or owned by another user.</dd></div>
 {% endif %}
     </dl>
   </div>

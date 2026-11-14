@@ -476,6 +476,61 @@ def test_a_discovery_review_needs_history_and_keeps_the_refreshes_asked_for(
     anyio.run(run)
 
 
+def test_publishing_an_agent_s_own_replacement_preview_needs_no_context_permission(
+    tmp_path: Path,
+) -> None:
+    """The songs of a replacement are the agent's own: publishing its preview reads no
+    history, also on a playlist whose description uses history. A server refresh preview
+    of that playlist is chosen from history, so publishing it still needs history."""
+
+    async def run() -> None:
+        async with app_at(tmp_path / "db") as (app, http):
+            service = app.service
+            native = install(service)
+            ident = await dashboard_playlist(
+                service, native, use_history=True, save_instructions=True, cadence="weekly"
+            )
+            agent = await connect(http, "create status")
+            replaced = await call(
+                http,
+                agent,
+                "replace_playlist_tracks",
+                {
+                    "request_id": ident,
+                    "idempotency_key": "own-preview",
+                    "tracks": tracks("Grey Tide"),
+                    "preview": True,
+                },
+            )
+            assert replaced["ok"], replaced
+            await latest(service, ident)
+            waiting = (await service.repo.runs(ident))[0]
+            assert waiting["state"] == "preview"
+            review = {"request_id": ident, "run_id": waiting["id"], "action": "publish"}
+            done = await call(http, agent, "review_playlist_preview", review)
+            assert done["ok"], done
+            assert (await service.repo.run(waiting["id"]))["state"] in ("publishing", "published")
+            await service.repo.update(
+                waiting["id"], "published", (await service.repo.run(waiting["id"]))["data"]
+            )
+
+            # (A refresh reads history, so asking for one needs it.)
+            history = await connect(http, "create status history")
+            refreshed = await call(
+                http, history, "manage_playlist_refresh", {"request_id": ident, "action": "preview"}
+            )
+            assert refreshed["ok"], refreshed
+            queued = (await service.repo.runs(ident))[0]
+            chosen = {**queued["data"], "selected": [SONGS["Night Bloom"].model_dump()]}
+            await service.repo.update(queued["id"], "preview", chosen)
+            review = {"request_id": ident, "run_id": queued["id"], "action": "publish"}
+            denied = await call(http, agent, "review_playlist_preview", review)
+            assert denied["error"]["missing_permissions"] == ["history"]
+            assert (await service.repo.run(queued["id"]))["state"] == "preview"
+
+    anyio.run(run)
+
+
 def test_an_edit_keeps_the_user_s_repeated_song_and_remove_takes_one_copy(
     tmp_path: Path,
 ) -> None:

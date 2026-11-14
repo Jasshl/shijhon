@@ -7,7 +7,8 @@ artists and library artists' pages with additions) - each catalog entry must hav
 keys Navidrome 0.64.2 always emits for its type and every key its own entries of that type
 have in the same answer, with the same JSON types; every artist reference has an ID.
 Lists (getAlbumList2, getRandomSongs, getStarred2) carry no catalog entries: Navidrome
-answers them alone.
+answers them alone - but for the newest albums of an account that follows artists, whose
+new releases are the artist page's entries checked here (``test_G_new_releases.py``).
 
 The schema is Navidrome 0.64.2's (``server/subsonic/responses/responses.go``: Child,
 AlbumID3, ArtistID3, ArtistID3Ref; OpenSubsonic fields included, as Navidrome emits them
@@ -405,7 +406,10 @@ def test_catalog_albums_and_songs(world: DeliveryWorld, client: SubsonicClient) 
     song = client.ok("getSong", {"id": f"sh.tr.demo.{item('song-duo-feat')}"})["song"]
     own_song = client.ok("getSong", {"id": own["song"][0]["id"]})["song"]
     assert check("song", [own_song, song]) == (1, 1)
-    assert len(song["artists"]) == 2  # "A feat. B": two artists, each with an ID
+    # "A & B" with two artist items, titled "... (feat. C)": the items may be the duo and C,
+    # so the credit stays one artist, as its placeholder's tags write it.
+    assert [p["name"] for p in song["artists"]] == [song["artist"]]
+    assert song["artists"][0]["id"]
 
 
 def test_artist_pages(world: DeliveryWorld, client: SubsonicClient) -> None:

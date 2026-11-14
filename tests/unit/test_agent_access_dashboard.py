@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import anyio
+import httpx
 import pytest
 from pydantic import SecretStr
 
@@ -443,5 +444,211 @@ async def test_server_ai_is_one_form_with_every_connection(tmp_path: Path) -> No
         form = page[page.index('action="/shijhon/playlists/host-ai"') :]
         assert '<option value="claude" selected>' in form
         assert 'value="invented-runner-model"' in form
+    finally:
+        await app.shutdown()
+
+
+async def test_a_refused_server_ai_form_leaves_the_local_ai_switch_as_it_was(
+    tmp_path: Path,
+) -> None:
+    """The switch is saved first, so that the connection saved with it may use a private
+    address; when the connection is refused, the switch is given back."""
+    app = ShijhonApp(_settings(tmp_path))
+    await app.startup()
+    try:
+        assert app.services is not None and app.services.playlists is not None
+        service = app.services.playlists
+        admin = person(True, "admin-id")
+        await service.repo.connect(
+            Connection(
+                user_id="admin-id", username="listener", token=SecretStr("t"), salt=SecretStr("s")
+            )
+        )
+        service.connection = AsyncMock(return_value=await service.repo.connection("admin-id"))
+        service.client.validate = AsyncMock()
+        service.client.principal = AsyncMock(return_value=SimpleNamespace(is_admin=True))
+        pages = PlaylistPages(app.dashboard)
+
+        def posted(form: dict[str, str]) -> Any:
+            return SimpleNamespace(state=SimpleNamespace(form=form))
+
+        refused = await pages.host_ai(
+            posted(
+                {
+                    "backend": "api",
+                    "endpoint": "http://192.168.1.30:8080/v1",
+                    "model": "",
+                    "allow_private_api": "true",
+                }
+            ),
+            admin,
+        )
+        assert refused.status_code == 200
+        assert "Enter an API base URL and model" in bytes(refused.body).decode()
+        assert not service.curator.settings.allow_private_api
+        assert app.dashboard.running is not None
+        assert not app.dashboard.running.playlists.allow_private_api
+        assert not await service.repo.shared_ai()
+
+        # Accepted, the switch stays saved with the connection.
+        saved = await pages.host_ai(
+            posted(
+                {
+                    "backend": "api",
+                    "endpoint": "http://192.168.1.30:8080/v1",
+                    "model": "invented-model",
+                    "allow_private_api": "true",
+                }
+            ),
+            admin,
+        )
+        assert saved.status_code == 303, bytes(saved.body).decode()
+        assert service.curator.settings.allow_private_api
+    finally:
+        await app.shutdown()
+
+
+async def test_a_refused_server_ai_form_never_undoes_one_accepted_meanwhile(
+    tmp_path: Path,
+) -> None:
+    """Two administrators' forms at once: one refused while the other, accepted, switches
+    local AI on. Giving back the refused form's switch does not undo the accepted one."""
+    app = ShijhonApp(_settings(tmp_path))
+    await app.startup()
+    try:
+        assert app.services is not None and app.services.playlists is not None
+        service = app.services.playlists
+        admin = person(True, "admin-id")
+        await service.repo.connect(
+            Connection(
+                user_id="admin-id", username="listener", token=SecretStr("t"), salt=SecretStr("s")
+            )
+        )
+        connection = await service.repo.connection("admin-id")
+        service.connection = AsyncMock(return_value=connection)
+        service.client.validate = AsyncMock()
+        service.client.principal = AsyncMock(return_value=SimpleNamespace(is_admin=True))
+        pages = PlaylistPages(app.dashboard)
+        entered, release = anyio.Event(), anyio.Event()
+
+        async def owned(session: Session) -> Connection:
+            if not entered.is_set():  # the refused form waits here, its switch saved
+                entered.set()
+                await release.wait()
+            return connection
+
+        pages.owned_connection = owned  # type: ignore[method-assign]
+        answers: dict[str, Any] = {}
+
+        async def submit(label: str, model: str) -> None:
+            form = {
+                "backend": "api",
+                "endpoint": "http://192.168.1.30:8080/v1",
+                "model": model,
+                "allow_private_api": "true",
+            }
+            request = SimpleNamespace(state=SimpleNamespace(form=form))
+            answers[label] = await pages.host_ai(request, admin)  # type: ignore[arg-type]
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(submit, "refused", "")
+            await entered.wait()
+            group.start_soon(submit, "accepted", "invented-model")
+            await anyio.wait_all_tasks_blocked()
+            release.set()
+        assert answers["refused"].status_code == 200
+        assert answers["accepted"].status_code == 303
+        assert (await service.repo.shared_ai())["model"] == "invented-model"
+        assert service.curator.settings.allow_private_api
+        assert app.dashboard.running is not None
+        assert app.dashboard.running.playlists.allow_private_api
+    finally:
+        await app.shutdown()
+
+
+async def test_revoking_an_agent_over_http_needs_no_navidrome(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Revoke form, posted as a browser does, while Navidrome cannot be asked: the
+    signed-in session and its form token are enough, for the account's own agents only.
+    Other personal forms still need the check, and a form without its token is refused."""
+    from shijhon.access import AccessDenied, AccessService, AccessUnavailable
+    from shijhon.dashboard.app import SESSION_COOKIE
+    from shijhon.playlists.model import Definition
+
+    app = ShijhonApp(_settings(tmp_path))
+    await app.startup()
+    try:
+        assert app.services is not None and app.services.playlists is not None
+        service = app.services.playlists
+        assert app.dashboard.sessions is not None
+        cookie, session = await app.dashboard.sessions.create("listener", "listener-id")
+        await service.repo.connect(_connection(""))
+        await service.repo.connect(_connection("").model_copy(update={"user_id": "someone-else"}))
+        service.connection = AsyncMock()  # (Navidrome's check of the account, for minting)
+        mine = digest(
+            await service.requests.mint("listener-id", "Mine", history=False, library=False)
+        )
+        theirs = digest(
+            await service.requests.mint("someone-else", "Theirs", history=False, library=False)
+        )
+        del service.connection
+        asked = AsyncMock(side_effect=AccessUnavailable)
+        monkeypatch.setattr(AccessService, "personal", asked)
+
+        async def revoked(grant: str) -> bool:
+            row = await service.repo.store.fetchone(
+                "SELECT revoked FROM playlist_agent_tokens WHERE id=?", [grant]
+            )
+            return bool(row["revoked"])
+
+        transport = httpx.ASGITransport(app.dashboard)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test", cookies={SESSION_COOKIE: cookie}
+        ) as http:
+            form = {"csrf": session.csrf, "action": "revoke"}
+            expired = await http.post(
+                "/shijhon/playlists/agents", data={**form, "csrf": "stale", "agent": mine}
+            )
+            assert expired.status_code == 403 and not await revoked(mine)
+            other = await http.post("/shijhon/playlists/agents", data={**form, "agent": theirs})
+            assert other.status_code == 303 and not await revoked(theirs)
+            done = await http.post("/shijhon/playlists/agents", data={**form, "agent": mine})
+            assert done.status_code == 303
+            assert done.headers["location"] == "/shijhon/playlists#agents"
+            assert await revoked(mine)
+            assert asked.await_count == 0
+
+            checked = await http.post("/shijhon/playlists/forget", data=form)
+            assert checked.status_code == 503 and asked.await_count == 1
+
+            # The account's access is gone in Navidrome: this unchecked route still shows
+            # nothing personal, whatever the form asks.
+            await service.repo.connect(
+                _connection("").model_copy(update={"history_user": "private-invented-history"})
+            )
+            await service.repo.create_discovery(
+                "listener-id",
+                "private-mix-key",
+                Definition(name="Private invented discoveries", mode="discovery", count=4),
+            )
+            asked.side_effect = AccessDenied
+            for odd in ({"action": "unsupported"}, {}, {"action": "revoke", "agent": "x"}):
+                answer = await http.post(
+                    "/shijhon/playlists/agents", data={"csrf": session.csrf, **odd}
+                )
+                assert answer.status_code in (303, 400), answer.status_code
+                assert "Private invented" not in answer.text
+                assert "private-invented-history" not in answer.text
+            assert asked.await_count == 1
+            listed = await http.get("/shijhon/playlists")  # the page itself is checked
+            assert listed.status_code == 303 and "reason=access" in listed.headers["location"]
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as http:
+            signed_out = await http.post(
+                "/shijhon/playlists/agents", data={"action": "revoke", "agent": theirs}
+            )
+            assert signed_out.status_code == 303 and "/sign-in" in signed_out.headers["location"]
+            assert not await revoked(theirs)
     finally:
         await app.shutdown()

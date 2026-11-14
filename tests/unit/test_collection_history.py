@@ -14,9 +14,11 @@ from shijhon.catalog.model import CatalogRef, CatalogTrack
 from shijhon.collection.contracts import Actor, CollectionError, Query
 from shijhon.collection.history import History
 from shijhon.collection.origins import Origins
-from shijhon.collection.service import Collection
+from shijhon.collection.service import LIMIT_REACHED, Collection
+from shijhon.placeholders.daily_cap import DailyLimitReached
 from shijhon.store import Store, apply_migrations
 from shijhon.store.db import _bundled_migrations
+from shijhon.views.commits import CommitError
 from shijhon.views.ids import album_id, artist_id
 from tests.unit.test_collection import FakeAccess, finish, managed_link, song
 from tests.unit.test_collection_personal import credit, mutate
@@ -338,6 +340,31 @@ async def test_failed_or_partial_restore_never_enables_missing_history(collectio
     assert "private" not in result["error"]
     assert not await store.fetchone("SELECT 1 FROM collection_membership")
     assert (await service.index_state("one", "1")).generation == before
+
+
+@pytest.mark.parametrize("among_tasks", [False, True])
+async def test_a_restore_refused_by_the_daily_cap_says_so_and_enables_nothing(
+    collection, among_tasks
+):
+    """The account's daily cap on adding stops a change that would add releases back: the
+    change says why (its own fixed words), can be retried, and nothing is enabled."""
+    store, _, service = collection
+    await History(store).record_catalog(Actor("one", frozenset({"1"})), "1", [recording()])
+
+    async def restore(*args, authorize):
+        await authorize()
+        if among_tasks:  # refused where recordings are prepared side by side
+            refused = CommitError(0, "any words", category="daily_limit")
+            raise ExceptionGroup("tasks", [refused])
+        raise DailyLimitReached
+
+    service.restore = restore
+    op = await prepare(service)
+    await service.approve("one", op)
+    result = await finish(service, op)
+    assert result["state"] == "failed" and result["error"] == LIMIT_REACHED
+    assert "daily limit of added releases is reached" in result["error"]
+    assert not await store.fetchone("SELECT 1 FROM collection_membership")
 
 
 async def test_missing_original_is_visible_but_never_sent_to_catalog_restore(collection):

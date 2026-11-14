@@ -77,6 +77,8 @@ class FakeTrack:
     rate_limit_streams: int = 0  # first N /stream calls answer 429
     rate_limit_audio: int = 0  # first N audio requests answer 429
     stream_status: int | None = None  # /stream answers this status (e.g. 503: not ready)
+    # The JSON body of a stream_status or first_byte_status answer (default: an error).
+    error_body: dict[str, Any] | None = None
     gone_streams: int = 0  # first N /stream calls answer 404 (an ID that is not there yet)
     available: bool = True  # resolve-isrc finds it
     stream_extra: dict[str, Any] = field(default_factory=dict)
@@ -126,6 +128,7 @@ class FakeAddon:
         self.refuse_lookups = False  # resolve-isrc answers 403 (a refusal, not a miss)
         self.manifest_delay = 0.0  # seconds before /manifest.json answers
         self.manifest_status: int | None = None  # /manifest.json answers this status
+        self.manifest_body: dict[str, Any] | None = None  # ... with this JSON body
         self.retry_after: str | None = "1"  # the Retry-After of every 429 (None: none)
         self.rate_limit_availability = 0  # first N /availability calls answer 429
         self.rate_limit_prepare = False  # /availability with prepare=true answers 429
@@ -204,6 +207,8 @@ class FakeAddon:
             if self.manifest_delay:
                 await asyncio.sleep(self.manifest_delay)
             if self.manifest_status is not None:
+                if self.manifest_body is not None:
+                    return JSONResponse(self.manifest_body, status_code=self.manifest_status)
                 return (
                     self._limited()
                     if self.manifest_status == 429
@@ -324,7 +329,8 @@ class FakeAddon:
                 calls = self.stream_calls[key] = self.stream_calls.get(key, 0) + 1
                 generation = self.generation[track.isrc] = self.generation.get(track.isrc, 0) + 1
             if track.stream_status is not None:
-                return JSONResponse({"error": "unavailable"}, status_code=track.stream_status)
+                body = track.error_body or {"error": "unavailable"}
+                return JSONResponse(body, status_code=track.stream_status)
             if calls <= track.rate_limit_streams:
                 return self._limited()
             if calls <= track.gone_streams:
@@ -418,6 +424,8 @@ class FakeAddon:
             if track.first_byte_delay:
                 await asyncio.sleep(track.first_byte_delay)
             if track.first_byte_status is not None:
+                if track.error_body is not None:
+                    return JSONResponse(track.error_body, status_code=track.first_byte_status)
                 return Response(status_code=track.first_byte_status)
             if track.truncate_after is not None:
                 payload_sent = payload[: track.truncate_after]  # Content-Length still promises all

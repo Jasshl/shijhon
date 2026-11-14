@@ -70,14 +70,29 @@ from shijhon.navidrome.usage import (
     recorded_paths,
     seen_uses,
 )
-from shijhon.placeholders.engine import PlaceholderEngine, used_here
-from shijhon.proxy.app import RequestContext
+from shijhon.placeholders.daily_cap import (
+    MESSAGE,
+    REACHED,
+    DailyLimitReached,
+    adding_for_request,
+    reached,
+)
+from shijhon.placeholders.engine import (
+    PlaceholderEngine,
+    Removal,
+    Statements,
+    UsageCheck,
+    used_here,
+)
+from shijhon.proxy.app import Reply, RequestContext
 from shijhon.proxy.auth import CheckFailed
 from shijhon.proxy.params import RestCall
+from shijhon.proxy.responses import subsonic_error
 
 if TYPE_CHECKING:
     from shijhon.fill.fills import Fills
     from shijhon.navidrome.checks import PlaceholderWrites
+    from shijhon.notifications import Notices
     from shijhon.views.commits import Commits
 
 log = logging.getLogger(__name__)
@@ -148,10 +163,12 @@ def listing(
     unused_days: float,
     catalog_albums: bool = True,
     fills: bool = True,
+    only: str | None = None,
 ) -> Listing:
     """What the cleanup would take out now, and what it keeps and why (read only). The
     uses it sees are those of every release with placeholders (``seen``) - also of the
-    kinds the settings leave alone, and of those not due."""
+    kinds the settings leave alone, and of those not due. ``only``: of this release alone
+    (one release asked about, as ``Cleanup.take_out_now`` does)."""
     found = Listing(now, [], unused_days=unused_days)
     if why := not_navidrome(navidrome):
         found.refused = f"what is read as Navidrome's records is not its database ({why})"
@@ -160,7 +177,9 @@ def listing(
     usage, recorded = Usage(navidrome), seen_uses(shijhon)
     releases = shijhon.execute(
         "SELECT ref, album_id, owned_album_id, title, artist, created_at"
-        " FROM releases WHERE removing_at IS NULL ORDER BY created_at, ref"
+        " FROM releases WHERE removing_at IS NULL AND (? IS NULL OR ref = ?)"
+        " ORDER BY created_at, ref",
+        [only, only],
     ).fetchall()
     for release in releases:
         rows = shijhon.execute(
@@ -189,7 +208,7 @@ def listing(
         if not (fills if fill else catalog_albums):
             continue  # a kind the settings leave alone: its uses are noted all the same
         known = float(release["created_at"])
-        if known >= since:
+        if only is None and known >= since:  # (one release asked about: whatever its age)
             found.waiting += 1
             due = known + unused_days * DAY
             found.next_due = due if found.next_due is None else min(found.next_due, due)
@@ -229,6 +248,11 @@ def foreign(navidrome: sqlite3.Connection, unused: list[Candidate]) -> str:
 
 
 PUT_BACK = "the release was put back"
+# Why one release cannot be taken out on request: nothing says who uses it.
+NO_USAGE = (
+    "Shijhon cannot see whether anyone uses its songs: set [navidrome] usage_export_path"
+    " (or database_path), as the cleanup needs it"
+)
 NOT_BACK_YET = "the release is put back by the repairs (not confirmed yet)"
 
 
@@ -306,6 +330,8 @@ class Swept:
     outcomes: dict[str, str] = field(default_factory=dict)
     refused: str = ""  # why nothing was taken out (placeholders may not be written now)
     stopped: str = ""  # why it stopped before the end ("switched off", an error's type)
+    # The usage export a removal asked for did not arrive (``refused`` says so too).
+    export_late: bool = False
 
 
 class Cleanup:
@@ -372,6 +398,10 @@ class Cleanup:
         self._preview_failed: tuple[tuple[Any, ...], str] | None = None
         self._failure_said = False  # (said once at least, before another is made)
         self._running_checks = 0
+        # Where a blocked check, and a usage export that does not arrive, are reported
+        # (``notifications.py``; None: nowhere). The daily check's alone: not the
+        # dashboard's dry runs, which someone is looking at.
+        self.notices: Notices | None = None
 
     async def run(self) -> None:
         if self.usage is None:
@@ -388,16 +418,25 @@ class Cleanup:
         while True:
             again = self.interval
             try:
-                await self.sweep()
+                done = await self.sweep()
             except NotFresh as exc:  # no export to act on: it waits, and says so
                 self.failed = (time.time(), str(exc))
                 log.warning("cleanup: nothing is checked: %s", exc)
                 again = min(again, self.listing_wait)
+                self._noticed(export_late=True, blocked=None)
             except Exception as exc:  # the next check tries again
                 self.failed = (time.time(), why_failed(exc))
                 log.warning("cleanup failed: %s", why_failed(exc))
+            else:
+                # (Off: nothing is taken out, so nothing is blocked.)
+                blocked = bool(done.refused) and not done.export_late
+                self._noticed(export_late=done.export_late, blocked=blocked)
             self.next_at = time.time() + again
             await anyio.sleep(again)
+
+    def _noticed(self, *, export_late: bool, blocked: bool | None) -> None:
+        if self.notices is not None:
+            self.notices.cleanup_checked(export_late=export_late, blocked=blocked)
 
     def _listing(
         self,
@@ -405,6 +444,7 @@ class Cleanup:
         unused_days: float | None = None,
         catalog_albums: bool | None = None,
         fills: bool | None = None,
+        only: str | None = None,
     ) -> Listing:
         """What a check would take out now: with its settings, or the ones given. From the
         usage export only one that covers ``mark`` (made after the check asked)."""
@@ -430,6 +470,7 @@ class Cleanup:
                 unused_days=self.unused_days if unused_days is None else unused_days,
                 catalog_albums=(self.catalog_albums if catalog_albums is None else catalog_albums),
                 fills=(self.fills if fills is None else fills) and self.filler is not None,
+                only=only,
             )
             found.snapshot, found.mark, found.exported = snapshot, mark, self.usage.export
             return found
@@ -663,6 +704,56 @@ class Cleanup:
                 done.failed,
             )
 
+    async def take_out_now(self, ref: str, also: Statements) -> Removal:
+        """One fill taken out now, whatever its age and the cleanup's mode - for the owner
+        who fills its album from another release - by the cleanup's own rule and checks:
+        nothing anyone used even once goes (``Removal.kept`` says why it stays), the
+        records of use must be this library's current ones, read after this moment
+        (``Removal.refused``: why they could not say; ``NotFresh``: no usage export came),
+        looked at again under the release's locks and once its files are gone. ``also``:
+        statements for the removal's transaction (the album's match). The uses seen are
+        noted, as every check's are.
+
+        Unlike a check's removal, the release is not kept as a record: the owner chose
+        another release for the album, so a use of one of its old IDs must not bring it
+        back - and Navidrome gives a song of the new release the ID the old release's song
+        had where both have it under the same number and title (measured), which a record
+        of the old one would claim."""
+        if self.usage is None:
+            return Removal(refused=NO_USAGE)
+        if self.writes is not None and (why := await self.writes.refused(fresh=True)):
+            return Removal(refused=why)
+        with self._checking():
+            mark = await self._asked(self.manual_wait)
+            async with self._listing_lock:
+                found = await anyio.to_thread.run_sync(
+                    lambda: self._listing(
+                        mark, unused_days=0, catalog_albums=True, fills=True, only=ref
+                    ),
+                    abandon_on_cancel=True,
+                )
+                await self.engine.note_uses(found.seen, found.at)
+            if found.refused:
+                return Removal(refused=found.refused)
+            candidate = next((c for c in found.due if c.ref == ref), None)
+            if candidate is None:  # not in the library, or without a song of its own
+                return Removal()
+            if candidate.kept:
+                return Removal(kept=candidate.kept)
+            refused: list[str] = []
+            check = self._check(candidate, found, refused)
+            async with self._listing_lock:  # (never beside a listing, as a check's own)
+                removal = await self.engine.remove_release(
+                    ref, check=check, also=also, record=False
+                )
+            if refused:
+                removal.refused = refused[0]
+                if removal.unfinished:
+                    removal.refused = removal.refused.replace(PUT_BACK, NOT_BACK_YET)
+            if removal.removed and self.changed is not None:
+                self.changed()
+            return removal
+
     async def _take_out(self, candidate: Candidate, done: Swept) -> None:
         also = None
         if candidate.fill:
@@ -684,35 +775,10 @@ class Cleanup:
         assert listed is not None
         name = f"{candidate.artist} - {candidate.title}"
 
-        async def check(rows: list[Any], gone: bool) -> list[str]:
-            """Checked again under the release's locks, and once its files are gone."""
-            for sql, kept in KEPT_RELEASE:
-                if await self.engine.store.fetchone(sql, [candidate.ref]):
-                    return [kept]
-            candidate.songs = [str(r["song_id"]) for r in rows]
-            candidate.paths = recorded_paths(rows)
-            if why := used_here(rows) or past(await self.engine.seen_uses(candidate.ref), ()):
-                return why
-            # What the listing was read from shows the release before it is touched; once
-            # its files are gone, only what is read after that (the export: one made
-            # after this moment, asked for and waited for with the release's locks held).
-            try:
-                mark = await self._asked(self.removal_wait) if gone else listed.mark
-                assert mark is not None
-                why, known = await anyio.to_thread.run_sync(
-                    self._navidrome, candidate, gone, mark, listed.snapshot
-                )
-            except NotFresh as exc:
-                refused.append(str(exc) + (f"; {name} was put back" if gone else ""))
-                return [NO_EXPORT]
-            if why in REFUSALS:
-                # Not this library's current database: this release stays (put back when
-                # its files are gone already), and the check ends here.
-                refused.append(stale(candidate, gone, why))
-            elif known:  # seen now: recorded, as a listing's are
-                await self.engine.note_uses({candidate.ref: why}, self.clock())
-            return why
+        def late() -> None:
+            done.export_late = True
 
+        check = self._check(candidate, listed, refused, late)
         try:
             # (never beside a listing: what one saw is recorded before this looks)
             async with self._listing_lock:
@@ -740,6 +806,52 @@ class Cleanup:
             done.outcomes[candidate.ref] = "taken out"
         else:
             done.outcomes[candidate.ref] = "gone"  # no longer in the library
+
+    def _check(
+        self,
+        candidate: Candidate,
+        listed: Listing,
+        refused: list[str],
+        late: Callable[[], None] | None = None,
+    ) -> UsageCheck:
+        """A removal's own look at who uses the release (``PlaceholderEngine.remove_release``):
+        what it finds keeps the release; why what it read cannot say goes to ``refused``.
+        ``late``: called when the export it waited for did not come (the daily check
+        reports that as a late export, not as a blocked cleanup)."""
+        name = f"{candidate.artist} - {candidate.title}"
+
+        async def check(rows: list[Any], gone: bool) -> list[str]:
+            """Checked again under the release's locks, and once its files are gone."""
+            for sql, kept in KEPT_RELEASE:
+                if await self.engine.store.fetchone(sql, [candidate.ref]):
+                    return [kept]
+            candidate.songs = [str(r["song_id"]) for r in rows]
+            candidate.paths = recorded_paths(rows)
+            if why := used_here(rows) or past(await self.engine.seen_uses(candidate.ref), ()):
+                return why
+            # What the listing was read from shows the release before it is touched; once
+            # its files are gone, only what is read after that (the export: one made
+            # after this moment, asked for and waited for with the release's locks held).
+            try:
+                mark = await self._asked(self.removal_wait) if gone else listed.mark
+                assert mark is not None
+                why, known = await anyio.to_thread.run_sync(
+                    self._navidrome, candidate, gone, mark, listed.snapshot
+                )
+            except NotFresh as exc:
+                refused.append(str(exc) + (f"; {name} was put back" if gone else ""))
+                if late is not None:
+                    late()
+                return [NO_EXPORT]
+            if why in REFUSALS:
+                # Not this library's current database: this release stays (put back when
+                # its files are gone already), and the check ends here.
+                refused.append(stale(candidate, gone, why))
+            elif known:  # seen now: recorded, as a listing's are
+                await self.engine.note_uses({candidate.ref: why}, self.clock())
+            return why
+
+        return check
 
     def _navidrome(
         self, candidate: Candidate, gone: bool, mark: Mark, listed: Snapshot | None
@@ -813,7 +925,12 @@ class OldIds:
     A view, a cover and a plain stream are answered from the release's record instead,
     writing nothing (``views/removed.py``, ``delivery/intercept.py``), so a client syncing
     its old IDs never undoes the cleanup. Credentials first; a failure leaves the
-    request to Navidrome."""
+    request to Navidrome. The releases are added back for the request's account, under
+    its daily cap on adding (``placeholders/daily_cap.py``): the places for all of them,
+    and for what the request's catalog items would add, are taken in one step - a request
+    that does not fit adds nothing back and is answered with the cap's error, and its
+    releases can still be added back at once for anyone else. (A converted stream, which
+    plays from the record when its release cannot come back, is not refused: ``use``.)"""
 
     def __init__(
         self,
@@ -855,22 +972,23 @@ class OldIds:
             found = {v for v in found if engine.removed_song(v) or engine.removing_song(v)}
         return found
 
-    async def __call__(self, call: RestCall, ctx: RequestContext) -> None:
+    async def __call__(self, call: RestCall, ctx: RequestContext) -> Reply | None:
+        """None: the request goes on; an answer: the request's (the daily cap's error)."""
         if call.name not in USES:
-            return
+            return None
         engine = self.engine
         wanted = sorted(
             v for v in self.used(call) if engine.removed_release(v) or engine.removing(v)
         )
         if not wanted:
-            return
+            return None
         try:
-            if await ctx.caller() is None:
-                return  # Navidrome answers with its own credential error
+            if (caller := await ctx.caller()) is None:
+                return None  # Navidrome answers with its own credential error
             if call.name == "jukeboxControl" and (
                 self.jukebox_enabled is not None and not await self.jukebox_enabled()
             ):
-                return  # the jukebox is off: Shijhon answers 501, nothing is placed
+                return None  # the jukebox is off: Shijhon answers 501, nothing is placed
             for value in wanted:  # being taken out now: its end decides (the release's lock)
                 if (ref := engine.removing(value)) is not None:
                     async with engine.lock_for(ref):
@@ -886,23 +1004,65 @@ class OldIds:
         except CheckFailed:  # no verdict on the credentials: the proxy's error
             raise
         except Exception:  # Navidrome unreachable: the proxy answers
+            return None
+        due = [ref for ref in sorted(refs) if self.engine.restore_due(ref)]
+        if not due:
+            return None
+        with adding_for_request(ctx.kept, caller.username):
+            if not await self._places(call, ctx, due):
+                # The account's daily cap has no room for all the request would add:
+                # nothing is added back, and the request is told so - never answered
+                # "ok" about a song that is not there.
+                log.info("an old ID (%s): not added back: %s", call.name, REACHED)
+                return subsonic_error(call, 0, MESSAGE, self._server())
+            for ref in due:
+                try:
+                    await self._add_back(ref, call.name)
+                except Exception as exc:  # never a 500: Navidrome answers the request
+                    self._not_added_back(ref, call.name, exc)
+                    if reached(exc):
+                        return subsonic_error(call, 0, MESSAGE, self._server())
+        return None
+
+    def _server(self) -> dict[str, object]:
+        return self.commits.server() if self.commits is not None else {}
+
+    async def _places(self, call: RestCall, ctx: RequestContext, due: list[str]) -> bool:
+        """The request's places under its account's daily cap, taken in one step before
+        anything is added back: for the releases its old IDs bring back and those its
+        catalog items would add (``views.commits``, which then uses them). False: they do
+        not all fit, and nothing was taken. The places no write used are given back when
+        the request's handlers are done."""
+        cap = self.engine.daily_cap
+        if cap is None or not cap.on:
+            return True
+        adds: list[str] = []
+        if self.commits is not None:
+            adds = await self.commits.new_releases(self.commits.would_add(call.name, call))
+        try:
+            places = await cap.reserve_all([*due, *adds])
+        except DailyLimitReached:
+            return False
+        cap.keep(places)
+        ctx.closing.callback(cap.give_back, places)
+        return True
+
+    def _not_added_back(self, ref: str, method: str, exc: Exception) -> None:
+        reason = getattr(exc, "reason", None) or type(exc).__name__
+        if reached(exc):
+            # The account's daily cap: nothing failed, and anyone else's use adds the
+            # release back at once (no wait before the next try).
+            log.info("an old ID of %s (%s): not added back: %s", ref, method, reason)
             return
-        for ref in sorted(refs):
-            if not self.engine.restore_due(ref):
-                continue
-            try:
-                await self._add_back(ref, call.name)
-            except Exception as exc:  # never a 500: Navidrome answers the request
-                self.engine.restore_failed(ref)  # not tried again for a while
-                reason = getattr(exc, "reason", None) or type(exc).__name__
-                log.warning("an old ID of %s (%s): not added back: %s", ref, call.name, reason)
+        self.engine.restore_failed(ref)  # not tried again for a while
+        log.warning("an old ID of %s (%s): not added back: %s", ref, method, reason)
 
     async def use(self, call: RestCall, ctx: RequestContext, song_id: str) -> bool:
         """A use a handler found (a stream its audio needs converting for): its
         release added back first, as ``__call__`` does. True when it is back."""
         engine = self.engine
         try:
-            if await ctx.caller() is None:
+            if (caller := await ctx.caller()) is None:
                 return False
             if (ref := engine.removing_song(song_id)) is not None:
                 async with engine.lock_for(ref):
@@ -913,11 +1073,10 @@ class OldIds:
         if ref is None or not engine.restore_due(ref):
             return False
         try:
-            await self._add_back(ref, call.name)
+            with adding_for_request(ctx.kept, caller.username):
+                await self._add_back(ref, call.name)
         except Exception as exc:  # never a 500: it plays from the record
-            engine.restore_failed(ref)
-            reason = getattr(exc, "reason", None) or type(exc).__name__
-            log.warning("an old ID of %s (%s): not added back: %s", ref, call.name, reason)
+            self._not_added_back(ref, call.name, exc)
             return False
         return engine.removed_release(song_id) is None
 
@@ -927,6 +1086,9 @@ class OldIds:
             return  # added back meanwhile
         name = f"{stored['artist']} - {stored['title']}"
         owned = stored["owned_album_id"]
+        if self.engine.daily_cap is not None and self.engine.daily_cap.on:
+            # The account's daily cap, looked at before any work (the write asks again).
+            await self.engine.daily_cap.check([ref])
         if owned and self.fills is not None:
             await self.fills.fill_album(str(owned), f"an old ID ({method})")
             if await self.engine.removed_record(ref) is not None:

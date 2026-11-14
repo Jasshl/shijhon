@@ -36,6 +36,11 @@ if TYPE_CHECKING:
 
 
 MOST_PER_ARTIST = 10  # the highest max_per_artist any playlist takes
+# What a run says of the songs the account's daily cap on adding left out.
+LIMIT_LEFT_OUT = (
+    "The daily limit of added releases was reached, so songs whose releases are not in the "
+    "library yet were left out. The rest was published. They can be added again later."
+)
 
 
 class RequestError(PlaylistError):
@@ -303,16 +308,31 @@ class Requests:
             [time.time(), ident, owner],
         )
 
+    async def _unregistered(self, grant: Any) -> bool:
+        """Whether the grant came from an OAuth client that is no longer registered: its
+        tokens are refused then, and so is the work the grant authorizes. A grant that is
+        not OAuth-backed (no client) is none."""
+        client = grant["oauth_client"]
+        if not client:
+            return False
+        row = await self.store.fetchone("SELECT 1 FROM agent_oauth_clients WHERE id=?", [client])
+        return row is None
+
     async def grant(self, ident: str, scope: str) -> tuple[Connection, dict[str, Any]]:
+        """The owner's connection and the grant while the grant stands (not revoked, of
+        this library, its OAuth client still registered) with ``scope``: what authorizes
+        an agent's work, also the work that goes on after its call."""
         row = await self.store.fetchone("SELECT * FROM playlist_agent_tokens WHERE id=?", [ident])
         if not row or row["revoked"] or row["library"] != self.library:
+            raise RequestError("The agent connection is invalid or revoked.", 401)
+        if await self._unregistered(row):
             raise RequestError("The agent connection is invalid or revoked.", 401)
         if scope not in json.loads(row["scopes"]):
             raise RequestError("This agent connection does not grant that operation.", 403)
         connection = await self.service.connection(row["owner"])
-        # Native validation can wait while this grant is revoked.
+        # Native validation can wait while this grant is revoked or its client removed.
         fresh = await self.store.fetchone("SELECT * FROM playlist_agent_tokens WHERE id=?", [ident])
-        if not fresh or dict(fresh) != dict(row):
+        if not fresh or dict(fresh) != dict(row) or await self._unregistered(fresh):
             raise RequestError("The agent connection is invalid or revoked.", 401)
         return connection, dict(fresh)
 
@@ -338,8 +358,9 @@ class Requests:
     ) -> None:
         """``context``: the run reads the context the request's saved instructions use
         (not so for tracks an agent chose)."""
-        if Definition.model_validate_json(mix["definition"]).mode == "import":
-            await self.service.imports.guard(mix)
+        mode = Definition.model_validate_json(mix["definition"]).mode
+        if mode == "import":
+            await self.service.imports.guard(mix, actor)
             return
         row = await self.store.fetchone("SELECT * FROM playlist_requests WHERE id=?", [mix["id"]])
         if row and row["library"] != self.library:
@@ -349,11 +370,25 @@ class Requests:
             if actor and row and context:
                 _, grant = await self.grant(actor, "create")
                 self.context_scopes(PlaylistRequest.model_validate_json(row["input"]), grant)
+            elif actor and not row and mode == "discovery" and context:
+                await self.agent(mix["owner"], actor, "history")  # its selection reads history
             return
         if not row:
-            if Definition.model_validate_json(mix["definition"]).mode != "discovery":
+            if mode != "discovery":
                 raise RequestError("This creation request is no longer available.", 403)
-            return  # Legacy discovery mix.
+            # A discovery mix's work runs under its creator's authority: the agent that
+            # made it while its grant lasts, or the owner (''). NULL: made before the
+            # creator was kept, and so the account's.
+            made = await self.store.fetchone(
+                "SELECT creator FROM playlist_discovery_requests WHERE id=?", [mix["id"]]
+            )
+            if made is None or made["creator"] is None:
+                return
+            if made["creator"]:
+                await self.agent(mix["owner"], made["creator"], "history")
+            else:
+                await self.service.connection(mix["owner"])
+            return
         spec = PlaylistRequest.model_validate_json(row["input"])
         if row["creator"]:
             connection, grant = await self.grant(row["creator"], "create")
@@ -374,6 +409,16 @@ class Requests:
             raise RequestError("This request belongs to another owner.", 403)
         return connection
 
+    async def agent(self, owner: str, grant: str, *scopes: str) -> Connection:
+        """The owner's connection while agent ``grant`` may still change the owner's
+        playlists and holds ``scopes`` now (what the work it asked for reads)."""
+        connection, row = await self.grant(grant, "create")
+        if connection.user_id != owner:
+            raise RequestError("This request belongs to another owner.", 403)
+        if not set(scopes) <= set(json.loads(row["scopes"])):
+            raise RequestError("This agent connection does not grant that operation.", 403)
+        return connection
+
     async def grants_library(self, actor: str) -> bool:
         """Whether ``actor`` (an agent grant; "" for the owner) may now read the library."""
         if not actor:
@@ -384,6 +429,7 @@ class Requests:
             and not grant["revoked"]
             and grant["library"] == self.library
             and "library" in json.loads(grant["scopes"])
+            and not await self._unregistered(grant)
         )
 
     async def reads_library(self, ident: str) -> bool:
@@ -405,6 +451,7 @@ class Requests:
             and not grant["revoked"]
             and grant["library"] == self.library
             and "library" in json.loads(grant["scopes"])
+            and not await self._unregistered(grant)
         )
 
     @staticmethod
@@ -562,6 +609,17 @@ class Requests:
             "name": spec.name,
             "count": spec.count,
             "refreshes": bool(mix["enabled"]),
+            # Songs the account's daily cap on adding left out of this run.
+            **(
+                {
+                    "daily_limit": {
+                        "left_out": int(run["data"]["daily_limit"]),
+                        "detail": LIMIT_LEFT_OUT,
+                    }
+                }
+                if run["data"].get("daily_limit")
+                else {}
+            ),
             "selected": [
                 {
                     **{k: s.get(k, "") for k in ("artist", "title", "album", "reason")},
@@ -615,17 +673,23 @@ class Requests:
         acting = {} if actor is None else {"actor": actor}
         await self.guard(mix, acting)
         runs = await self.service.repo.runs(ident)
-        done = [r for r in runs if r["data"].get("addition")]
+        # Every addition the playlist took, not only those among its latest runs.
+        done = await self.store.fetchall(
+            "SELECT json_extract(data,'$.addition.key') AS key,"
+            " json_extract(data,'$.addition.hash') AS hash FROM playlist_runs"
+            " WHERE mix=? AND json_extract(data,'$.addition') IS NOT NULL",
+            [ident],
+        )
         for run in done:
-            if run["data"]["addition"]["key"] == key:
-                if run["data"]["addition"]["hash"] != digest(addition.canonical()):
+            if run["key"] == key:
+                if run["hash"] != digest(addition.canonical()):
                     raise RequestError("This request key was already used with other tracks.", 409)
                 return False
         latest = runs[0]
         # A run that published, or one that left the playlist as it was: a failed
-        # selection, or a preview discarded.
+        # selection, a preview discarded, or a refresh the daily cap put off.
         if not (
-            latest["state"] in ("published", "discarded")
+            latest["state"] in ("published", "discarded", "postponed")
             or (latest["state"] == "failed" and not latest["data"].get("selected"))
         ):
             raise RequestError(

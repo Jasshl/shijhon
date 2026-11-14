@@ -3,23 +3,24 @@ rule, manifests, sign-in limits, admin checks and recent errors."""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, Field, SecretStr
 
-from shijhon.access import AccessDenied, AccessService, AccessUnavailable
+from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
 from shijhon.app import ShijhonApp
 from shijhon.catalog.addon import NOT_ENABLED, AddonCatalog
 from shijhon.catalog.base import CatalogError
 from shijhon.config import DeliverySettings, Settings, catalog_settings, load_settings
 from shijhon.dashboard import sections
 from shijhon.dashboard.addons import parse_manifest
-from shijhon.dashboard.auth import Attempts, Sessions, client_key
+from shijhon.dashboard.auth import Attempts, Session, Sessions, client_key
 from shijhon.dashboard.errors import RecentErrors
 from shijhon.dashboard.fields import (
     Group,
@@ -504,6 +505,54 @@ async def test_startup_uses_the_saved_values(
 
 
 @pytest.mark.anyio
+async def test_the_plan_shown_is_the_order_plays_ask_and_saves_back_unchanged(
+    tmp_path: Path,
+) -> None:
+    """A catalog-only add-on sits between two add-ons of one step. While its manifest is
+    read, the plan leaves it out; once it cannot be read, the plan shows it - after the
+    plan's steps, as plays ask it - and the plan saved back as shown (a time or the checks
+    changed) keeps the step whole."""
+    from types import SimpleNamespace
+
+    from shijhon.dashboard.addons import Check, ManifestInfo
+
+    app = ShijhonApp(_settings(tmp_path))
+    await app.startup()
+    try:
+        assert app.services is not None
+        sources, dashboard = app.services.sources, app.dashboard
+        a = await sources.add("A", "https://a.example.invalid/cfg")
+        x = await sources.add("X", "https://x.example.invalid/cfg")
+        b = await sources.add("B", "https://b.example.invalid/cfg")
+        await sources.arrange([([a, b], 3.0)])
+        stored = await dashboard._stored()
+        assert [s.id for s in stored] == [a, x, b]
+        catalog = ManifestInfo("X", "1", (), streams=False)
+        dashboard.checks._checks[x] = (dashboard.checks._key(stored[1]), Check(0, catalog, None))
+        session = SimpleNamespace(csrf="invented")
+
+        def shown() -> list[list[int]]:
+            plan = dashboard._plan(stored, session)  # type: ignore[arg-type]
+            assert plan is not None
+            return [[entry["id"] for entry in step["addons"]] for step in plan["steps"]]
+
+        assert shown() == [[a, b]] and dashboard._step_numbers(stored) == {a: 1, b: 1}
+        # Its manifest cannot be read now: maybe it streams - asked after the plan.
+        dashboard.checks._checks[x] = (
+            dashboard.checks._key(stored[1]),
+            Check(0, None, "no answer"),
+        )
+        assert shown() == [[a, b], [x]]
+        assert dashboard._step_numbers(stored) == {a: 1, b: 1, x: 2}
+        await sources.arrange([(ids, 3.0) for ids in shown()])
+        assert [s.id for s in await sources.streaming()] == [a, b, x]
+        # (Saved as shown, it takes the place it was shown in: after the step.)
+        assert [(s.id, s.step) for s in await dashboard._stored()] == [(a, 1), (b, 1), (x, 2)]
+    finally:
+        await app.shutdown()
+
+
+@pytest.mark.anyio
 async def test_the_addon_list_is_the_dashboards_once_changed_there(tmp_path: Path) -> None:
     addons = [{"name": "One", "base_url": "https://one.example.invalid/cfg"}]
     settings = _settings(tmp_path, addons=addons)
@@ -827,6 +876,8 @@ def _changed(value: Any, key: str) -> Any:
         return "Elsewhere"
     if isinstance(value, int):
         return value + 1
+    if key == "urls":  # (notification addresses: a secret, none by default)
+        return SecretStr("ntfy://elsewhere")
     return value * 2 + 1
 
 
@@ -1292,16 +1343,6 @@ async def test_an_addon_list_from_the_environment_always_applies(
         assert [s.name for s in await app.services.sources.enabled()] == ["FromEnv"]
     finally:
         await app.shutdown()
-
-
-def test_older_times_carry_their_day() -> None:
-    import time as clock
-
-    from shijhon.dashboard.app import when
-
-    now = clock.time()
-    assert re.fullmatch(r"\d\d:\d\d", when(now))
-    assert re.fullmatch(r"\d{1,2} \w+, \d\d:\d\d", when(now - 3 * 86400))
 
 
 @pytest.mark.parametrize(
@@ -1831,3 +1872,53 @@ async def test_a_dry_run_counts_the_deferred_albums_it_would_fill(
     with caplog.at_level(logging.INFO, logger="shijhon"):
         await passing.run_once()
     assert "in all" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_refused_plan_says_what_of_it_was_saved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed plan, nested past what JSON reading allows, is refused like any other
+    (409, not a server error). When the steps are refused after the plan's two settings were
+    saved (an add-on removed in between), the notice says the settings were saved."""
+    app = ShijhonApp(_settings(tmp_path))
+    await app.startup()
+    try:
+        assert app.services is not None
+        one = await app.services.sources.add("One", "https://one.example.invalid/x")
+        two = await app.services.sources.add("Two", "https://two.example.invalid/x")
+        admin = Session(
+            "hash",
+            "admin",
+            "csrf",
+            9_999_999_999,
+            "admin-id",
+            Principal("admin-id", "admin", True, frozenset({1})),
+        )
+
+        def posted(plan: str) -> Any:
+            return SimpleNamespace(state=SimpleNamespace(form={"plan": plan}))
+
+        before = [(s.id, s.step_seconds) for s in await app.services.sources.stored()]
+        nested = await app.dashboard.addons_plan(posted("[" * 100_000), admin)
+        assert nested.status_code == 409
+        assert "Plan not saved" in app.dashboard._flash["hash"].words
+        assert [(s.id, s.step_seconds) for s in await app.services.sources.stored()] == before
+
+        async def removed_meanwhile(*args: Any, **kwargs: Any) -> None:
+            raise ValueError("an add-on removed meanwhile")
+
+        monkeypatch.setattr(app.services.sources, "arrange", removed_meanwhile)
+        plan = {"steps": [{"addons": [one, two], "seconds": 4}], "checks": True, "handover": 1.5}
+        refused = await app.dashboard.addons_plan(posted(json.dumps(plan)), admin)
+        assert refused.status_code == 409
+        words = app.dashboard._flash["hash"].words
+        assert "steps not saved" in words and "ready checks were saved" in words
+        running = app.dashboard.running or app.configured
+        assert running.delivery.ready_checks and running.delivery.ready_handover_seconds == 1.5
+
+        # When nothing of the settings changed, the usual refusal.
+        await app.dashboard.addons_plan(posted(json.dumps(plan)), admin)
+        assert app.dashboard._flash["hash"].words.startswith("Plan not saved")
+    finally:
+        await app.shutdown()

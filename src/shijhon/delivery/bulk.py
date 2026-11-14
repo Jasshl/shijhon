@@ -42,6 +42,7 @@ from shijhon.delivery.playback import (
     _Paced,
     _Reacquire,
     _Refused,
+    _SignIn,
 )
 from shijhon.delivery.playback import (
     log as playback_log,
@@ -267,7 +268,8 @@ class _Patience:
             self.paused += seconds
             if self.paused >= PAUSED_WAIT:
                 reason = (
-                    "its add-ons stayed paused (rate limited, cooling down or awaiting a manifest)"
+                    "its add-ons stayed paused (rate limited, cooling down, needing their"
+                    " operator to sign in or awaiting a manifest)"
                     f" for {PAUSED_WAIT / 60:g} minutes"
                 )
                 playback_log.info("no audio for %r: %s", self.title, reason)
@@ -280,11 +282,12 @@ class _Patience:
 
 
 def _limited(exc: Exception) -> bool:
-    """An attempt that "too many requests" ended, or kept from being sent: nothing about
-    the song - a background song asks that add-on again once its time has passed."""
+    """An attempt that "too many requests" ended, or kept from being sent, or the add-on's
+    answer that its operator must sign in again: nothing about the song - a background song
+    asks that add-on again once its time has passed (the operator may have signed in)."""
     if isinstance(exc, AddonError):
-        return exc.kind in ("rate_limited", "cooling")
-    return isinstance(exc, (_Limited, _Cooling))
+        return exc.kind in ("rate_limited", "cooling", "sign_in")
+    return isinstance(exc, (_Limited, _Cooling, _SignIn))
 
 
 @dataclass(eq=False)
@@ -576,7 +579,7 @@ class BulkAcquisition:
             choices = []
             for source in self._sources:
                 if self.deliverer.registry.cooling(source.id):
-                    excluded.append(f"{source.name}: cooling down")
+                    excluded.append(f"{source.name}: {self.deliverer._passed_over(source)}")
                 else:
                     choices.append(_Choice(source))
         else:
@@ -614,15 +617,15 @@ class BulkAcquisition:
             except AddonError as exc:
                 self.deliverer._source_error(choice.source, exc)
                 choice.paused = _limited(exc)
-                if not choice.permitted and exc.kind in ("timeout", "failed", "preparing"):
+                paused = ("timeout", "failed", "preparing", "sign_in")
+                if not choice.permitted and exc.kind in paused:
                     if exc.kind == "timeout" and not exc.shared and waits.held() is None:
                         self.deliverer._errored(choice.source, exc.reason)
                     choice.paused = True
-                    choice.exclusion = (
-                        "its manifest read timed out"
-                        if exc.kind == "timeout"
-                        else "its manifest is temporarily unavailable"
-                    )
+                    choice.exclusion = {
+                        "timeout": "its manifest read timed out",
+                        "sign_in": "its operator must sign in again",
+                    }.get(exc.kind, "its manifest is temporarily unavailable")
             except pacing.Blocked:
                 choice.paused = True
             finally:

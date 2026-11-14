@@ -69,6 +69,17 @@ def test_every_artist_reference_has_an_id() -> None:
     assert entry["created"] == "2020-02-01T00:00:00Z"  # an impossible day is left out
 
 
+def test_a_title_naming_a_featured_artist_keeps_the_credit_whole_as_the_tags_do() -> None:
+    from shijhon.placeholders.tags import listed_artists
+
+    featured = CatalogTrack(SONG, "Song (feat. Cora)", "Ana & Bo", 180_000, artist_refs=(A, B))
+    # The two items may be the duo and Cora: one artist, as the placeholder's tags say.
+    assert people(song_entry(featured)) == [("Ana & Bo", "sh.ar.demo.1")]
+    assert listed_artists((), featured.artist_refs, featured.artist, featured.title) is None
+    plain = CatalogTrack(SONG, "Song", "Ana & Bo", 180_000, artist_refs=(A, B))
+    assert people(song_entry(plain)) == [("Ana", "sh.ar.demo.1"), ("Bo", "sh.ar.demo.2")]
+
+
 def test_item_references_round_trip() -> None:
     ref = item_artist(CatalogRef("demo", "900000001"), "t", 2)
     assert parse_item_artist(ref.id) == ("t", "900000001", 2)

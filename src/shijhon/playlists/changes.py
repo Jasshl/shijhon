@@ -382,8 +382,11 @@ class Changes:
         except PlaylistError as exc:
             raise SetupRequired("listening_history", str(exc)) from None
 
-    async def discover(self, owner: str, key: str, mix: DiscoveryMix) -> tuple[str, bool]:
-        """Create a discovery mix and its first run. The caller holds changes."""
+    async def discover(
+        self, owner: str, key: str, mix: DiscoveryMix, *, creator: str
+    ) -> tuple[str, bool]:
+        """Create a discovery mix and its first run. ``creator``: the agent grant whose
+        authority its work runs under (``Requests.guard``). The caller holds changes."""
         if not KEY.fullmatch(key):
             raise RequestError("Send an Idempotency-Key of 8 to 128 plain characters.")
         definition = mix.definition()
@@ -398,16 +401,17 @@ class Changes:
             await self.service.requests.room(owner)
         try:
             ident = await self.service.repo.create_discovery(
-                owner, key, definition, enable_after=mix.enable_refreshes
+                owner, key, definition, enable_after=mix.enable_refreshes, creator=creator
             )
         except PlaylistError as exc:
             raise RequestError(str(exc), 409) from None
         self.service.notify()
         return ident, not old
 
-    async def rediscover(self, owner: str, ident: str, mix: DiscoveryMix) -> None:
+    async def rediscover(self, owner: str, ident: str, mix: DiscoveryMix, *, actor: str) -> None:
         """New rules for a discovery mix: as on the dashboard, pending runs are discarded
-        and a new one starts. The caller holds changes."""
+        and a new one starts, ``actor``'s work (``Requests.guard``). The caller holds
+        changes."""
         _, definition = await self.mix(owner, ident)
         if definition.mode != "discovery":
             raise RequestError("Only a discovery mix takes discovery rules.")
@@ -430,5 +434,5 @@ class Changes:
                 "UPDATE playlist_mixes SET definition=?,enabled=0 WHERE id=?",
                 [spec.model_dump_json(), ident],
             )
-        await self.service.repo.enqueue(ident, enable_after=mix.enable_refreshes)
+        await self.service.repo.enqueue(ident, enable_after=mix.enable_refreshes, actor=actor)
         self.service.notify()

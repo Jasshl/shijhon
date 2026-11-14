@@ -9,7 +9,7 @@ nothing.
 - They are kept in Shijhon's database (in `state_dir`, mode 0600), secrets included.
   "Use the configuration's" next to a secret removes the saved secret.
 - Most apply at once, and the cleanup's from its next check. These apply after a restart:
-  - every `[catalog]` setting except `artwork_size`;
+  - every `[catalog]` setting except `artwork_size` and `user_releases_per_day`;
   - `[delivery] delivered_days`, `delivered_gb`, `user_routings`, `user_downloads`, `dash`
     and `dash_cache_mb`;
   - `[fill] enabled`, `complete_lists`, `pass_start_seconds` and
@@ -65,7 +65,8 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 
 | Setting | What it sets |
 |---|---|
-| `state_dir` (`var`) | Shijhon's database, downloads under way and the cover cache |
+| `state_dir` (`var`) | Shijhon's database, the snapshots taken before upgrades (`snapshots`), backups made with `shijhon backup` (`backups`), downloads under way and the cover cache |
+| `upgrade_snapshots` (on) | Before a start migrates the database to a newer schema, a checked copy of it goes into `snapshots` in `state_dir`, named for the schema it holds. Once it is complete, the newest snapshot of that schema and of the highest other schema are kept and older ones removed. When the copy cannot be written, the start migrates and starts without it and removes no snapshot to make room. The log says why, administrators see it on the dashboard until one dismisses it, and the notifications report it once ([upgrades](../deployment.md#upgrades)). Off: the database is migrated without a copy, and nothing is shown or reported. In the file or the environment only (`SHIJHON_UPGRADE_SNAPSHOTS`) |
 | `log_level` (`INFO`), `log_debug` (`[]`) | The log level (`CRITICAL`, `FATAL`, `ERROR`, `WARNING`, `WARN`, `INFO`, `DEBUG` or `NOTSET`; case and surrounding spaces ignored); loggers logged at debug level whatever it says, e.g. `["shijhon.covers"]`: one line per catalog cover request |
 | `[server] host` (`127.0.0.1`), `port` (8765) | Where Shijhon listens; port 1–65535 |
 | `[server] dashboard` (on) | Off: `/shijhon/` goes to Navidrome like any other path |
@@ -131,10 +132,11 @@ set in the file or the environment.
 | `artwork_cache_mb` (1024), `artwork_cache_days` (30) | The cache of catalog covers in `state_dir`. 0 MB: none kept on disk |
 | `cover_sizes` | Covers are fetched at the next of these sizes up from the one asked for. Empty: the exact size |
 | `prefetch_covers` (50), `prefetch_parallel` (4), `prefetch_burst_pages` (4), `prefetch_burst_seconds` (10) | The covers of the first catalog items of an artist page or search result are fetched ahead, this many at a time. An app shown that many pages within that time gets none meanwhile. 0 covers: off |
+| `new_releases_most_played` (25), `new_releases_artists_per_day` (150) | For people who turned [new releases](../how-it-works.md#new-releases) on: how many of their most played artists are followed besides the artists of their favorites (0: their favorites alone), and how many artists one person's daily check asks the catalog about. Both apply at once |
 | `[search] min_query_length` (3) | Shorter searches get only Navidrome's answer |
 | `[search] artist_pages` (on) | Catalog releases on your library's artist pages |
-| `[search] discography_max_age_days` (7) | Saved artist discographies and top songs are refreshed in the background after this |
-| `[search] artist_sync_pages` (10), `artist_sync_seconds` (10) | An app that opens this many artist pages without a saved discography within this time is syncing: those pages get only the library's answer |
+| `[search] discography_max_age_days` (7) | Saved artist discographies, top songs and the lists of radios from catalog items are refreshed in the background after this |
+| `[search] artist_sync_pages` (10), `artist_sync_seconds` (10) | An app that opens this many artist pages without a saved discography within this time is syncing: those pages get only the library's answer. The same numbers hold, counted apart, for top songs and for radios from catalog items without a saved list |
 | `[search] guard_searches` (60), `guard_window_seconds` (20), `guard_pause_seconds` (60) | An app that sends this many different searches within the window gets only the library's answers for the pause |
 | `[search] song_only_additions` (on), `song_settle_seconds` (0.15) | Catalog results for searches that ask for songs only, and how long such a search waits before the catalog is asked |
 | `[search] song_burst_searches` (4), `song_burst_seconds` (0.5), `song_burst_pause_seconds` (2) | This many different song-only searches within this time are a burst, answered from the library until the app has been quiet for the pause |
@@ -146,8 +148,19 @@ set in the file or the environment.
 | `complete_lists` (on) | A partly owned album carries its complete song count and length in album lists and search results too, before and after its fill (in your library's lists, while all its original songs are selected). Off: lists keep the counts of Navidrome or of your library selection |
 | `open_budget_seconds` (3) | How long the first view of an album waits for its match; after it the view has only your songs, and the match continues in the background |
 | `sync_albums` (10), `sync_seconds` (10) | An app that views this many never-matched albums within this time is syncing: those are matched in the background |
-| `retry_hours` (1), `background_pause_seconds` (5) | After a failed match (then doubling); between background matches |
+| `retry_hours` (1), `background_pause_seconds` (5) | After a failed match (then doubling); between background matches, and after each fill and each release whose track list the library pass changes |
 | `pass_start_seconds` (60), `pass_interval_hours` (6), `pass_requests_per_second` (1) | The library pass starts this long after startup, looks for new albums this often, and sends the catalog this many requests a second |
+
+### `[notifications]`
+
+Also on the Notifications page; the settings are listed in
+[configuration.md](../configuration.md#notifications). They apply at once. In the
+environment, `SHIJHON_NOTIFICATIONS__URLS` holds the addresses, separated by spaces. Each
+notification has 20 seconds at its addresses, and one is sent at a time. Shijhon uses
+Apprise as a library: the addresses are passed to it directly, with no Apprise
+configuration files, no attachments and no plugins loaded from disk, and Apprise keeps
+nothing on disk. Several states that begin together, in imports or playlist refreshes,
+arrive as one notification, and at most 256 wait to be sent at once.
 
 ### `[audiomuse]`
 

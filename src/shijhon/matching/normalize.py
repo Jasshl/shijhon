@@ -54,8 +54,13 @@ _ARTIST_SPLIT = re.compile(
 )
 
 
+_NOT_ALNUM_ASCII = re.compile(r"[^a-z0-9]+")
+
+
 def fold(text: str | None) -> str:
     """Lower case, no accents, letters and digits only (spaces removed)."""
+    if text and text.isascii():  # the same result, several times faster (most text)
+        return _NOT_ALNUM_ASCII.sub("", text.lower())
     decomposed = unicodedata.normalize("NFKD", text or "")
     plain = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
     return "".join(ch for ch in plain.casefold() if ch.isalnum())
@@ -229,6 +234,30 @@ def featured_names(credit: str | None) -> list[str]:
     Ash & Ember" or "Quill & Marrow" stay whole."""
     parts = [p.strip().rstrip(")]").strip() for p in _FEATURING.split(credit or "")]
     return [p for p in parts if p]
+
+
+# A featured artist named in a title ("Song (feat. B)", "Song [with B]").
+_TITLE_FEATURE = re.compile(r"[\(\[]\s*(?:feat\.?|featuring|ft\.?|with)\s", re.I)
+
+
+def features_in_title(title: str | None) -> bool:
+    """Whether a title names a featured artist ("Song (feat. B)", "Song [with B]")."""
+    return bool(_TITLE_FEATURE.search(title or ""))
+
+
+def credited_names(credit: str | None, items: int, title: str = "") -> list[str]:
+    """The individual artists of a credit for which a catalog names ``items`` artist items
+    but no names: its parts split on "feat." alone, else on every separator, when there
+    are as many as the items (more than one); else none. "A & B" with two items is A and
+    B; "Salt, Ash & Ember" with one stays one band. A ``title`` naming a featured artist
+    ("Song (feat. C)") makes the count prove nothing - the items may be the band and C -
+    so such a credit stays whole."""
+    if items < 2 or features_in_title(title):
+        return []
+    for parts in (featured_names(credit), credit_names(credit)):
+        if len(parts) == items:
+            return parts
+    return []
 
 
 _AND = re.compile(r"\s+and\s+|\s*[&+]\s*", re.I)

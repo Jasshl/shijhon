@@ -53,12 +53,15 @@ import httpx
 from shijhon.catalog.model import ITEM_ID
 from shijhon.delivery import pacing
 from shijhon.delivery.addon import (
+    NEEDS_SIGN_IN,
+    SIGN_IN_SECONDS,
     AddonError,
     Availability,
     StreamInfo,
     Wanted,
     of_catalog,
     own_track,
+    sign_in_needed,
 )
 from shijhon.delivery.dash import CapacityLease, Dash, DashError, Link, Stream, link_key
 from shijhon.delivery.length import PEEK_BYTES, audio_kind, audio_length, complete, peek
@@ -150,8 +153,8 @@ class _Paced(_TimedOut):
     """The request's time ran out while it waited for its turn at the add-on's limits (its
     requests a second, its audio openings at once) - or after it had waited there for
     more than a moment, which the add-on then did not have: a timeout for the routing, and
-    nothing the add-on did - not its failure, nothing toward a cooldown or the measured
-    order, and a client's retry asks it again."""
+    nothing the add-on did - not its failure, nothing toward a cooldown or among its
+    recorded attempts, and a client's retry asks it again."""
 
 
 class _Joining(_TimedOut):
@@ -168,7 +171,7 @@ class _Joining(_TimedOut):
 
 class _Preparing(_TimedOut):
     """The add-on was still preparing the song (an HTTP 503 with a ``Retry-After``): not
-    ready in time. Its time without audio goes into the measured order; no error, and no
+    ready in time. It is recorded among its attempts, as one without audio; no error, and no
     failure for the song that a client's retry - or a routing that continues this one -
     would pass the add-on over for: by then the song may be ready. ``waited_out``: the
     attempt waited for it until its time ran out (or until less was left than the next
@@ -179,6 +182,11 @@ class _Preparing(_TimedOut):
     def __init__(self, reason: str, *, waited_out: bool) -> None:
         super().__init__(reason)
         self.waited_out = waited_out
+
+
+class _SignIn(_Failed):
+    """The add-on said its operator must sign in again (``needs_sign_in``): no error of its
+    own - it is passed over for a while, and shown as needing sign-in."""
 
 
 class _Cooling(_Failed):
@@ -240,21 +248,21 @@ class _Missing(Exception):
 @dataclass
 class Leftover:
     """What a routing that ended without audio left to try: its order, the add-on track IDs
-    known, the sources done with (they failed or lacked the song) and the one the client's
-    wait cap cut short while it was still preparing the song."""
+    known, the sources done with (they failed or lacked the song) and those the client's
+    wait cap cut short while they were still preparing the song."""
 
     at: float = 0.0
     order: list[int] = field(default_factory=list)
     hints: dict[int, str] = field(default_factory=dict)
     done: set[int] = field(default_factory=set)
-    cut: int | None = None
+    cut: list[int] = field(default_factory=list)  # in the order they were cut short
     planned: bool = False  # it got as far as its plan (else nothing to continue)
     # Of ``done``, those given up on while they may still have been preparing the song
     # (stopped for another add-on's audio, or for one that has the song ready): no failure
     # for a client's retry.
     slow: set[int] = field(default_factory=set)
     # Those that said they were preparing the song when their time ran out: not done with -
-    # a routing that continues this one asks them again (after the one cut short).
+    # a routing that continues this one asks them again (after those cut short).
     preparing: set[int] = field(default_factory=set)
 
 
@@ -388,7 +396,8 @@ def _done(
     trace = _TRACE.get()
     if trace is not None:
         if cut:
-            trace.left.cut = source.id
+            if source.id not in trace.left.cut:
+                trace.left.cut.append(source.id)
         elif preparing:
             trace.left.preparing.add(source.id)
         else:
@@ -886,7 +895,7 @@ class Deliverer:
         ``waited``: how long the client has waited already (its turn): the wait cap counts
         it. ``departure``: set by the caller when the client leaves before its answer.
         ``resume``: continue the song's routing that ended without audio a moment ago (a
-        download-first fetch whose request now streams the source format) - the source
+        download-first fetch whose request now streams the source format) - the sources
         its wait cap cut short first, then those it did not try - instead of a new one.
         ``heard``: the audio goes to a client (False: it is fetched for the library - a
         download-first fetch, which is no play of the song). ``download``: a download-first
@@ -1110,6 +1119,10 @@ class Deliverer:
             why[source.id] = unknown  # until read (also when the time runs out)
             try:
                 manifest = manifest or await source.addon.manifest()
+            except AddonError as exc:  # (a sign-in it says it needs: as at a play's read)
+                if exc.kind == "sign_in":
+                    self._source_error(source, exc)
+                return
             except Exception:
                 return
             if manifest.downloads:
@@ -1229,7 +1242,7 @@ class Deliverer:
             return
         now = self.clock()
         record = self._failed_at.pop(track.key, {})  # newest last: the oldest go first
-        for source_id in left.slow | ({left.cut} if left.cut is not None else set()):
+        for source_id in left.slow | set(left.cut):
             record.pop(source_id, None)
         for source_id in left.done - left.slow:
             record[source_id] = now
@@ -1276,14 +1289,15 @@ class Deliverer:
         return False
 
     async def _left_plan(self, left: Leftover) -> tuple[list[Source], dict[int, str]]:
-        """A continued routing's order: the source the wait cap cut short while it was
-        preparing the song, then those that said they were preparing it - in the routing's
-        order -, then those the routing did not try (in its order); never again those it is
-        done with (they failed or lacked the song a moment ago)."""
+        """A continued routing's order: the sources the wait cap cut short while they were
+        preparing the song (in the order they were cut short), then those that said they
+        were preparing it - in the routing's order -, then those the routing did not try
+        (in its order); never again those it is done with (they failed or lacked the song a
+        moment ago)."""
         enabled = {s.id: s for s in await self.registry.streaming()}
         unordered = sorted(i for i in left.preparing if i not in left.order)
         preparing = unordered + [i for i in left.order if i in left.preparing]
-        order = ([left.cut] if left.cut is not None else []) + preparing + left.order
+        order = left.cut + preparing + left.order
         plan: list[Source] = []
         for source_id in order:
             source = enabled.get(source_id)
@@ -1677,8 +1691,10 @@ class Deliverer:
                     self._failure(pin.source, exc, pin)
                     if fresh and at_zero:
                         self._count_timeout(pin.source, exc)
-                elif not isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused)):
-                    self.registry.failed(pin.source, str(exc))  # its old link (not the add-on's)
+                elif not isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused, _SignIn)):
+                    # Its old link's failure (not the add-on's) - not a sign-in its operator
+                    # owes.
+                    self.registry.failed(pin.source, str(exc))
                 if fresh and at_zero and not _spared(exc):  # the attempt's record
                     took = pin.looked_before + pin.lookup_seconds + pin.link_seconds
                     took += self.clock() - asked - exc.waited
@@ -1900,7 +1916,7 @@ class Deliverer:
         trace = _TRACE.get()
         for source in enabled:
             if source not in candidates:
-                note = f"{source.name}: cooling down"
+                note = f"{source.name}: {self._passed_over(source)}"
                 if trace is not None and note not in trace.steps:
                     trace.add(note)
         hints: dict[int, str] = {}
@@ -2070,6 +2086,8 @@ class Deliverer:
                     info = None if track_id is None else await _link(source, track_id, preparing)
         except AddonError as exc:
             self._source_error(source, exc)
+            if exc.kind == "sign_in":  # passed over for a while (``_source_error``)
+                raise _SignIn(exc.reason) from None
             if exc.kind == "unavailable":  # a refusal, or a resource it lacks: not "absent"
                 raise _Missing(exc.reason) from None
             if exc.kind == "cooling":  # not asked (a rate limit's time has not passed)
@@ -2170,7 +2188,7 @@ class Deliverer:
             if source.id in tried:
                 continue
             if self.registry.cooling(source.id):
-                _step(f"{source.name}: cooling down")
+                _step(f"{source.name}: {self._passed_over(source)}")
                 continue
             if self._lacks(source, track):
                 _done(source)
@@ -2181,11 +2199,15 @@ class Deliverer:
             usable.append(source)
         if not usable:
             # Every add-on left cools down: they are asked all the same (one may deliver),
-            # rather than no audio at once.
+            # rather than no audio at once - not one passed over until its operator signs
+            # in (it would only say so again).
             cooling = [
                 s
                 for s in await self.registry.streaming()
-                if s.id not in tried and self.registry.cooling(s.id) and not self._lacks(s, track)
+                if s.id not in tried
+                and self.registry.cooling(s.id)
+                and not self.registry.passed_over_for_sign_in(s.id)
+                and not self._lacks(s, track)
             ]
             if cooling:
                 _step("every add-on cools down: asked all the same")
@@ -2223,6 +2245,20 @@ class Deliverer:
             _stop("no source delivered")
         return None
 
+    def _still_asked(self, steps: list[list[Source]]) -> list[list[Source]]:
+        """The steps not begun, without the add-ons passed over for sign-in since the plan
+        was made (a readiness check said so meanwhile); a step left empty goes, and its
+        time with it."""
+        kept: list[list[Source]] = []
+        for step in steps:
+            left = [s for s in step if not self.registry.passed_over_for_sign_in(s.id)]
+            for source in step:
+                if source not in left:
+                    _step(f"{source.name}: {NEEDS_SIGN_IN}")
+            if left:
+                kept.append(left)
+        return kept
+
     def _arranged(self, steps: list[list[Source]], checks: _Checks) -> list[list[Source]]:
         """The steps left, by the checks' answers: the add-ons that have the song ready
         first, together; those that have not last, one at a time."""
@@ -2256,7 +2292,9 @@ class Deliverer:
                     checks.asked.add(source.id)
                     checks.ready_seen.set()
             except AddonError as exc:  # it cannot tell
-                if exc.kind == "rate_limited":  # ... and is left alone for a while
+                # ... and is left alone for a while (a rate limit), or passed over until
+                # its operator signs in.
+                if exc.kind in ("rate_limited", "sign_in"):
                     self._source_error(source, exc)
             except Exception as exc:  # timeouts and broken answers: it cannot tell
                 log.debug("availability check of %s failed: %s", source.name, type(exc).__name__)
@@ -2529,6 +2567,7 @@ class Deliverer:
         hard = (cap if cap is not None else float("inf")) + CAP_GRACE / 2
         try:
             async with anyio.create_task_group() as racing:
+                pending = self._still_asked(pending)
                 next_at = join(pending.pop(0), racing) if pending else float("inf")
                 while True:
                     nudge[0] = anyio.Event()
@@ -2546,6 +2585,9 @@ class Deliverer:
                         # so far).
                         if checks is not None and checks.answers:
                             pending = self._arranged(pending, checks)
+                        pending = self._still_asked(pending)
+                        if not pending:  # (each one left said it needs sign-in meanwhile)
+                            continue
                         if cap is not None and cap <= now:
                             break
                         next_at = join(pending.pop(0), racing)
@@ -2897,18 +2939,40 @@ class Deliverer:
         shared (counted there)."""
         if exc.kind in ("cooling", "preparing") or exc.shared:
             return
+        if exc.kind == "sign_in":
+            self._needs_sign_in(source, exc.url)
+            return
         self.registry.failed(source, exc.reason)
         if exc.kind == "rate_limited":
             self._rate_limited(source, exc.retry_after)
         elif exc.kind in _ERRORS:
             self._errored(source, exc.reason)
 
+    def _needs_sign_in(self, source: Source, url: str | None) -> None:
+        """The add-on said its operator must sign in again: no failure of its own, nor an
+        error toward its cooldown, but passed over for ``SIGN_IN_SECONDS`` (asked again after
+        it: by then perhaps signed in) and shown as needing sign-in until it delivers audio
+        again (or is changed, or turned off and on); logged when it is new."""
+        if self.registry.needs(source.id, "sign_in", url, SIGN_IN_SECONDS):
+            log.warning(
+                "add-on %s needs its operator to sign in again%s; passed over for %d minutes"
+                " at a time until it delivers again (or is asked again on the Add-ons page)",
+                source.name,
+                " (its page for it is on the Add-ons page)" if url else "",
+                SIGN_IN_SECONDS // 60,
+            )
+
+    def _passed_over(self, source: Source) -> str:
+        """Why the routing passes a source over now, for its steps."""
+        signing_in = self.registry.passed_over_for_sign_in(source.id)
+        return NEEDS_SIGN_IN if signing_in else "cooling down"
+
     def _failure(self, source: Source, exc: _Failed, pin: Pin | None = None) -> None:
         """A failed attempt at ``source`` (its link or its audio), in its diagnostics; an
         error counts toward its cooldown - once for a link (``pin``)."""
-        if isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused)):
+        if isinstance(exc, (_Wrong, _Unusable, _Paced, _Cooling, _Refused, _SignIn)):
             # Counted once, where it was found; a wait at its limits is not its failure, nor
-            # audio a request refused by its own terms.
+            # audio a request refused by its own terms, nor a sign-in its operator owes.
             return
         self.registry.failed(source, str(exc))
         if isinstance(exc, _Error) and not (pin is not None and pin.errored):
@@ -3070,6 +3134,14 @@ class Deliverer:
             except (RuntimeError, ValueError) as exc:  # closed client, malformed URL or header
                 raise _Failed(type(exc).__name__) from None
             try:
+                signed_out = None
+                if response.status_code == 503:
+                    # (Its body, small, read within the request's time: else a plain 503.)
+                    with anyio.move_on_after(max(0.1, deadline - self.clock())):
+                        signed_out = await sign_in_needed(response)
+                if signed_out is not None:
+                    self._needs_sign_in(pin.source, signed_out.url)
+                    raise _SignIn(NEEDS_SIGN_IN)
                 if response.status_code == 412 and expect is not None and not mine and not own_tag:
                     # The play's own ETag was asked for: that link's file is another one.
                     raise _Other("another file (HTTP 412)")
@@ -3197,6 +3269,7 @@ class Deliverer:
             capacity,
             _BULK_REUSE.get()
             or (capacity is not None and (not capacity.active or capacity.owner is not None)),
+            signed_out=partial(self._needs_sign_in, pin.source),
         )
         wanted = pin.seconds
         tolerance = max(
@@ -3305,7 +3378,9 @@ class Deliverer:
         """A join's failure as the routing's: a manifest Shijhon does not play, or a
         preview, is unusable audio (the add-on's failure in its diagnostics, once a join),
         and so is one without a quality in the range chosen (no failure of the add-on's);
-        an expired link is re-resolved; the others are as a direct link's would be."""
+        an expired link is re-resolved; a manifest or a segment that says the add-on's
+        operator must sign in again is that (``_SignIn``); the others are as a direct
+        link's would be."""
         if exc.kind == "capacity":
             return _Reacquire(str(exc))
         if exc.kind == "range":
@@ -3334,6 +3409,9 @@ class Deliverer:
             return _Paced(str(exc))
         if exc.kind == "rate_limited":
             return _Limited(str(exc))
+        if exc.kind == "sign_in":  # (no error: passed over for a while, as for a link's)
+            self._needs_sign_in(pin.source, exc.url)
+            return _SignIn(NEEDS_SIGN_IN)
         return _Failed(str(exc))  # another answer
 
     def _delivered(self, pin: Pin, opened: Opened, asked: float) -> None:
@@ -3591,10 +3669,10 @@ def _paced(exc: BaseException) -> bool:
 
 def _spared(exc: BaseException) -> bool:
     """Nothing the add-on did: it never had the request's time (``_Paced``), was not
-    asked (``_Cooling``), or the request refused its audio by its own terms (``_Refused``)
-    - no attempt of its own to measure, and no failure for the song that a client's retry
-    would skip it for."""
-    return isinstance(exc, (_Paced, _Cooling, _Refused))
+    asked (``_Cooling``), the request refused its audio by its own terms (``_Refused``),
+    or its operator must sign in again (``_SignIn``) - no attempt of its own to measure,
+    and no failure for the song that a client's retry would skip it for."""
+    return isinstance(exc, (_Paced, _Cooling, _Refused, _SignIn))
 
 
 def _unfinished(exc: BaseException) -> bool:

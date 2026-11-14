@@ -24,6 +24,7 @@ from shijhon.catalog.addon import (
     NO_IDENTITY,
     NOT_ENABLED,
     AddonCatalog,
+    AddonCatalogs,
     adapter,
     artwork_address,
     unmarked,
@@ -108,6 +109,7 @@ class Listed:
     pace: AddonPace | None = None
     budget: float | None = None
     key: str = ""  # (empty: the one it got when added under its name)
+    streams: bool = True  # (its manifest lists "stream")
 
     def __post_init__(self) -> None:
         self.key = self.key or addon_key(self.name)
@@ -127,8 +129,22 @@ class Registry:
     def key_of(self, name: str) -> str:
         return next((s.key for s in self.sources if s.name == name), addon_key(name))
 
+    needed: list[tuple[int, str, str | None, float]] = field(default_factory=list)
+
     def cooling(self, source_id: int) -> bool:
         return source_id in self.cooled
+
+    def passed_over_for_sign_in(self, source_id: int) -> bool:
+        return False
+
+    def needs(self, source_id: int, kind: str, url: str | None, seconds: float) -> bool:
+        self.needed.append((source_id, kind, url, seconds))
+        return len(self.needed) == 1
+
+    answers: list[int] = field(default_factory=list)
+
+    def answered(self, source_id: int) -> None:
+        self.answers.append(source_id)
 
 
 @dataclass
@@ -1051,3 +1067,64 @@ async def test_the_check_reads_the_manifest_again() -> None:
     with pytest.raises(CatalogError) as failed:
         await w.catalog.check()
     assert failed.value.reason == NO_CATALOG
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("streams", [True, False])
+async def test_a_catalog_answer_that_its_operator_must_sign_in_is_noted(streams: bool) -> None:
+    """The add-on's catalog answers ``needs_sign_in``: unavailable for now, and noted for the
+    add-on with its page - passed over by plays for a while only when it streams."""
+    w = world()
+    w.registry.sources[0].streams = streams
+    body = {"error": "needs_sign_in", "url": "https://user:pw@manage.example.invalid/x"}
+    w.server.status["search"] = httpx.Response(503, json=body)
+    with pytest.raises(CatalogError) as failed:
+        await w.catalog.search("anything", 5)
+    assert failed.value.kind == "unavailable" and failed.value.reason == "needs sign-in"
+    seconds = 600 if streams else 0
+    assert w.registry.needed == [(1, "sign_in", "https://manage.example.invalid/x", seconds)]
+    # Its catalog answers again: one with a catalog only is signed in again; one that
+    # streams only once it delivers audio.
+    del w.server.status["search"]
+    await w.catalog.search("anything", 5)
+    assert set(w.registry.answers) == (set() if streams else {1})
+
+
+@pytest.mark.anyio
+async def test_a_manifest_sign_in_shared_by_catalog_requests_is_noted_once_with_its_page() -> None:
+    """Catalog requests that wait for one manifest read that says the operator must sign
+    in: noted once, with its page - not again without it by those that waited."""
+    w = world()
+    page = "https://manage.example.invalid/x"
+    w.server.status["manifest.json"] = httpx.Response(
+        503, json={"error": "needs_sign_in", "url": page}
+    )
+    w.server.delay["manifest.json"] = 0.2
+    failures: list[CatalogError] = []
+
+    async def search(term: str) -> None:
+        try:
+            await w.catalog.search(term, 5)
+        except CatalogError as exc:
+            failures.append(exc)
+
+    async with anyio.create_task_group() as group:
+        for term in ("one", "two", "three"):
+            group.start_soon(search, term)
+    assert len(failures) == 3 and w.server.count("manifest.json") == 1
+    # (Its manifest unknown: shown, not passed over.)
+    assert w.registry.needed == [(1, "sign_in", page, 0)]
+
+
+@pytest.mark.anyio
+async def test_the_list_of_catalogs_notes_a_manifest_that_says_sign_in() -> None:
+    w = world()
+    page = "https://manage.example.invalid/x"
+    w.server.status["manifest.json"] = httpx.Response(
+        503, json={"error": "needs_sign_in", "url": page}
+    )
+    catalogs = AddonCatalogs(w.registry)  # type: ignore[arg-type]
+    unanswered: set[str] = set()
+    assert await catalogs.catalogs(unanswered, set()) == []
+    assert unanswered == {NAME}
+    assert w.registry.needed == [(1, "sign_in", page, 0)]

@@ -94,7 +94,7 @@ async def test_stored_lists_every_addon_in_order(tmp_path: Path) -> None:
                 Reach.LOOPBACK,
                 40,
                 key=addon_key("Two"),
-                step=2,  # (its step stays when only the order changes)
+                step=1,  # (the steps follow the order: plays ask by step)
             ),
             StoredSource(
                 one,
@@ -106,7 +106,7 @@ async def test_stored_lists_every_addon_in_order(tmp_path: Path) -> None:
                 Reach.PUBLIC,
                 None,
                 key=addon_key("One"),
-                step=1,
+                step=2,
             ),
         ]
         assert [s.name for s in await sources.enabled()] == ["Two"]
@@ -693,6 +693,39 @@ async def test_add_ons_left_out_of_the_plan_keep_their_places(tmp_path: Path) ->
 
 
 @pytest.mark.anyio
+async def test_a_new_order_takes_the_steps_along(tmp_path: Path) -> None:
+    """Plays ask by step (``streaming``): a new order of the list numbers the steps in it,
+    neighbours that shared a step still sharing one; add-ons left out follow. Plays and the
+    list then agree on the order."""
+    store = await Store.open(tmp_path / "state.sqlite3")
+    sources = SourceRegistry(store)
+
+    async def agree() -> list[tuple[str, int]]:
+        listed = [(s.name, s.step) for s in await sources.enabled()]
+        assert [(s.name, s.step) for s in await sources.streaming()] == listed
+        return listed
+
+    try:
+        one = await sources.add("One", "https://one.example.invalid/x")
+        two = await sources.add("Two", "https://two.example.invalid/x")
+        three = await sources.add("Three", "https://three.example.invalid/x")
+        await sources.reorder([three, two, one])
+        assert await agree() == [("Three", 1), ("Two", 2), ("One", 3)]
+        await sources.arrange([([one, two], 3.0), ([three], 3.0)])
+        await sources.reorder([three, one, two])
+        assert await _steps(sources) == [("Three", 1, 3.0), ("One", 2, 3.0), ("Two", 2, 3.0)]
+        await sources.reorder([one, two])  # (Three left out: after them)
+        assert await agree() == [("One", 1), ("Two", 1), ("Three", 2)]
+        await sources.reorder([two, three])  # (One, of Two's step, left out: parted)
+        assert await agree() == [("Two", 1), ("Three", 2), ("One", 3)]
+        await sources.reorder([one, three, 12345, one])  # (Two left out; no such add-on)
+        assert await agree() == [("One", 1), ("Three", 2), ("Two", 3)]
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_the_files_list_sets_the_steps(tmp_path: Path) -> None:
     store = await Store.open(tmp_path / "state.sqlite3")
     sources = SourceRegistry(store)
@@ -751,6 +784,54 @@ async def test_the_files_list_sets_the_step_and_download_times_and_slow_after(
         assert (await sources.enabled())[0].slow_after is None
         with pytest.raises(ValueError):
             await sources.update(1, slow_after=0.5)
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_an_add_on_that_needs_sign_in_is_passed_over_until_it_answers(
+    tmp_path: Path,
+) -> None:
+    store = await Store.open(tmp_path / "state.sqlite3")
+    now = [100.0]
+    sources = SourceRegistry(store, clock=lambda: now[0])
+    try:
+        one = await sources.add("One", "https://one.example.invalid/x")
+        assert sources.needs(one, "sign_in", "https://one.example.invalid/manage", 600)
+        assert not sources.needs(one, "sign_in", "https://one.example.invalid/manage", 600)
+        assert sources.cooling(one)
+        now[0] += 601  # asked again after its time, still noted until it answers otherwise
+        assert not sources.cooling(one) and sources.attention(one) is not None
+        sources.needs(one, "sign_in", None, 600)
+        sources.answered(one)
+        assert sources.attention(one) is None and not sources.cooling(one)
+        # A cooldown of its own since stays.
+        sources.needs(one, "sign_in", None, 600)
+        sources.cool_down(one, 3600)
+        sources.answered(one)
+        assert sources.cooling(one)
+    finally:
+        await sources.aclose()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_no_longer_needing_sign_in_keeps_a_cooldown_from_before(tmp_path: Path) -> None:
+    store = await Store.open(tmp_path / "state.sqlite3")
+    now = [100.0]
+    sources = SourceRegistry(store, clock=lambda: now[0])
+    try:
+        one = await sources.add("One", "https://one.example.invalid/x")
+        sources.cool_down(one, 3600)  # (errors in a row) - longer than the sign-in's window
+        sources.needs(one, "sign_in", None, 600)
+        assert sources.passed_over_for_sign_in(one)
+        sources.answered(one)
+        assert sources.cooling(one) and not sources.passed_over_for_sign_in(one)
+        # A catalog's add-on is noted, not passed over (no time).
+        two = await sources.add("Two", "https://two.example.invalid/x")
+        sources.needs(two, "sign_in", None, 0)
+        assert sources.attention(two) is not None and not sources.cooling(two)
     finally:
         await sources.aclose()
         await store.close()

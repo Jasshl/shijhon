@@ -17,7 +17,7 @@ from collections.abc import AsyncIterable, Awaitable, Callable, Mapping, Sequenc
 from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import aiosqlite
 import anyio
@@ -33,6 +33,7 @@ from shijhon.music_imports import catalog_audio as audio
 from shijhon.music_imports import tagmap
 from shijhon.music_imports.assets import AssetResolver
 from shijhon.music_imports.catalog_audio import CatalogSongAudio
+from shijhon.music_imports.facts import first_track_artist
 from shijhon.music_imports.model import (
     FORMATS,
     MANIFEST_PAGE_SIZE,
@@ -70,8 +71,12 @@ from shijhon.music_imports.overlap import (
 from shijhon.music_imports.paths import Destinations
 from shijhon.music_imports.storage import Storage
 from shijhon.music_imports.upgrade import Upgrades
+from shijhon.placeholders.daily_cap import reached
 from shijhon.quality import Minimum
 from shijhon.store import Store
+
+if TYPE_CHECKING:
+    from shijhon.music_imports.lists import ImportLists
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +103,7 @@ class CatalogVersions(Protocol):
         *,
         fingerprint: str,
         authorize: Callable[[], Awaitable[None]],
+        owner: str,
     ) -> dict[str, str]: ...
 
 
@@ -211,12 +217,18 @@ _STATUS_ITEMS = (  # constant fragments only
 # Stop keeps reserved what an unplaced item retains: its received bytes. A linked file's
 # reservation goes only once its bytes are deleted (``MusicImports._release_linked``,
 # which also does it for stopped imports), and so does a given-up or unfinished copy's
-# (``discarding``: ``MusicImports._discard_copies``).
+# (``discarding``: ``MusicImports._discard_copies``), and a file given its artist list
+# before it was placed, whose copy and original both stay until deleted (or a copy being
+# made or given up: ``artist_lists`` row in phase 'write'; ``music_imports/lists.py``).
 _RELEASE_UNPLACED = (
     "UPDATE music_import_items SET reserved_size="
     "CASE WHEN received_cleanup='deleted' THEN 0"
     " WHEN state='linked' AND outcome IN ('linked','low_quality') THEN reserved_size"
-    " WHEN state='discarding' THEN reserved_size ELSE received_size END"
+    " WHEN state='discarding' THEN reserved_size"
+    " WHEN EXISTS(SELECT 1 FROM artist_lists a WHERE a.kind='import'"
+    " AND a.item_id=music_import_items.id AND (a.phase='write' OR (a.state='written'"
+    " AND a.staging_after=music_import_items.staging_name))) THEN reserved_size"
+    " ELSE received_size END"
     " WHERE job_id=? AND state NOT IN ('uploading','placing','placed','complete')"
 )
 
@@ -381,6 +393,9 @@ class MusicImports:
         # The playback quality gate's cached facts of a song whose audio changed.
         self.forget = forget
         self.upgrades = Upgrades(self)
+        # Artist lists given to files as they are published (``lists.py``; set by the
+        # artist lists' worker).
+        self.lists: ImportLists | None = None
         self.storage = Storage(library_path, imports_folder, managed_folder)
         self.assets = AssetResolver(
             store,
@@ -1208,9 +1223,28 @@ class MusicImports:
             " AND i.job_id<>? AND i.digest IN (SELECT value FROM json_each(?))",
             [self.library_id, self.storage.root_id, job_id, json.dumps(sorted(set(digests)))],
         )
+        # A file published as a copy with its artist lists (``lists.py``) is found by the
+        # digest of the file it was made from too (its received original, say).
+        listed = await self.store.fetchall(
+            "SELECT a.sha_before AS digest,i.final_name,i.staging_name,i.expected_size,"
+            "i.digest AS held_digest,t.song_id,t.track_key,t.album_id,t.title,t.album,"
+            "t.artist,t.year,t.duration,t.original,t.metadata"
+            " FROM artist_lists a JOIN music_import_items i ON i.id=a.item_id"
+            " JOIN music_import_jobs j ON j.id=i.job_id"
+            " JOIN collection_tracks t ON t.library_id=j.library_id AND t.song_id=i.song_id"
+            " AND t.present=1 WHERE a.kind='import' AND a.state='written'"
+            " AND a.staging_after=i.staging_name AND j.library_id=? AND j.root_id=?"
+            " AND i.state='complete' AND i.job_id<>?"
+            " AND a.sha_before IN (SELECT value FROM json_each(?))",
+            [self.library_id, self.storage.root_id, job_id, json.dumps(sorted(set(digests)))],
+        )
+        evidence: list[dict[str, Any]] = [
+            *(dict(r, held=r["digest"]) for r in rows),
+            *(dict(r, held=r["held_digest"]) for r in listed),
+        ]
         found: dict[str, LibrarySong] = {}
         untold: dict[str, ImportError] = {}
-        for row in rows:
+        for row in evidence:
             if row["digest"] in found:
                 continue
             try:
@@ -1219,7 +1253,7 @@ class MusicImports:
                     row["final_name"],
                     row["staging_name"],
                     row["expected_size"],
-                    row["digest"],
+                    row["held"],
                 )
             except ImportError as exc:
                 if exc.code != "identity":
@@ -1232,7 +1266,7 @@ class MusicImports:
                 metadata = json.loads(row["metadata"] or "{}")
             except ValueError:
                 metadata = {}
-            found[row["digest"]] = LibrarySong.of_index(dict(row), metadata, placeholder=False)
+            found[row["digest"]] = LibrarySong.of_index(row, metadata, placeholder=False)
         for digest, error in untold.items():
             if digest not in found:  # (another import's file holding them will do)
                 raise error
@@ -1423,7 +1457,7 @@ class MusicImports:
             facts = _facts(dict(row)) if row else {}
             tags = facts.get("album_tags")
             if isinstance(tags, dict) and tags:
-                return tags, album_artist(tags, str(facts.get("artist") or ""))
+                return tags, album_artist(tags, first_track_artist(facts))
         return None, ""
 
     async def _copy(self, job: dict[str, Any], item: dict[str, Any]) -> None:
@@ -1659,6 +1693,8 @@ class MusicImports:
             )
         for row in rows:
             await anyio.to_thread.run_sync(self.storage.discard_attempt, row["staging_name"])
+            await self._discard_listed(row["id"], row["staging_name"])  # (its list's original)
+            await self._discard_pending_copy(row["id"])
             await self.store.execute(
                 "DELETE FROM music_import_items WHERE id=? AND state='discarding'", [row["id"]]
             )
@@ -2000,6 +2036,11 @@ class MusicImports:
                     await anyio.to_thread.run_sync(
                         self.storage.discard_unpublished, item["staging_name"]
                     )
+                    # (The file a list's copy was made from too, and a copy taken back
+                    # whose deletion is pending, before the reservation that counts them
+                    # goes.)
+                    await self._discard_listed(item["id"], item["staging_name"])
+                    await self._discard_pending_copy(item["id"])
                 except Exception as exc:
                     # Public ImportError messages are safe; OS errors can contain paths.
                     reason = str(exc) if isinstance(exc, ImportError) else type(exc).__name__
@@ -2017,6 +2058,43 @@ class MusicImports:
                     [item["id"]],
                 )
         return bool(rows)
+
+    async def _discard_listed(self, item_id: str, staging: str) -> None:
+        """A file given its artist lists for a publication that never came (``lists.py``):
+        the file the copy ``staging`` was made from goes too, and the list's record.
+        Raises when it cannot be deleted: the caller keeps the item's reservation, which
+        counts it. Deleting it again is harmless (a stop between the two is repeated)."""
+        listed = await self.store.fetchone(
+            "SELECT key,staging_before FROM artist_lists WHERE item_id=? AND kind='import'"
+            " AND state='written' AND phase='' AND staging_after=?",
+            [item_id, staging],
+        )
+        if listed is None:
+            return
+        await anyio.to_thread.run_sync(self.storage.discard_unpublished, listed["staging_before"])
+        await self.store.execute("DELETE FROM artist_lists WHERE key=?", [listed["key"]])
+
+    async def _discard_pending_copy(self, item_id: str) -> None:
+        """A copy made for an artist list that is being given up (its ``artist_lists`` row
+        in phase 'write', ``lists.py``: a take-back whose deletion a stop or a refusal left)
+        goes, and the row's phase: before the item's reservation, which counts it, goes.
+        Raises when it cannot be deleted. (Under the import's lock: never a copy being
+        made.)"""
+        row = await self.store.fetchone(
+            "SELECT a.key,a.work,i.staging_name FROM artist_lists a JOIN music_import_items i"
+            " ON i.id=a.item_id WHERE a.item_id=? AND a.kind='import' AND a.phase='write'",
+            [item_id],
+        )
+        if row is None:
+            return
+        name = str(json.loads(row["work"] or "{}").get("staging") or "")
+        if name and name != row["staging_name"]:
+            await anyio.to_thread.run_sync(self.storage.discard_attempt, name)
+        await self.store.execute(
+            "UPDATE artist_lists SET state='failed',reason='interrupted',phase='',work=NULL"
+            " WHERE key=? AND phase='write'",
+            [row["key"]],
+        )
 
     async def resume(self, owner_id: str, job_id: str) -> dict[str, Any]:
         async with self._locks.hold(job_id):
@@ -2634,6 +2712,8 @@ class MusicImports:
             )
         for row in rows:
             await anyio.to_thread.run_sync(self.storage.discard_attempt, row["staging_name"])
+            await self._discard_listed(row["id"], row["staging_name"])  # (its list's original)
+            await self._discard_pending_copy(row["id"])
             await self.store.execute(
                 "UPDATE music_import_items SET reserved_size=0 WHERE id=? AND state='linked'",
                 [row["id"]],
@@ -2670,7 +2750,7 @@ class MusicImports:
         else:
             try:
                 songs = await self.catalog.add(
-                    release, tracks, fingerprint=fingerprint, authorize=authorize
+                    release, tracks, fingerprint=fingerprint, authorize=authorize, owner=owner
                 )
                 refused = ""
             except CatalogRefused as exc:
@@ -2678,6 +2758,14 @@ class MusicImports:
             except ImportError:
                 raise
             except Exception as exc:
+                if reached(exc):
+                    # The account's daily cap on adding: the import waits (its own
+                    # words on the page), and goes on from here when it is resumed.
+                    raise ImportError(
+                        "daily_limit",
+                        "The daily limit of added releases is reached, so the catalog's "
+                        "version was not added. Resume later to add it.",
+                    ) from None
                 raise ImportError(
                     "catalog", "The catalog's version could not be added yet. Resume to retry."
                 ) from exc
@@ -2905,6 +2993,16 @@ class MusicImports:
         return batch
 
     async def _publish_batch(self, job: dict[str, Any], batch: list[dict[str, Any]]) -> None:
+        if self.lists is not None:
+            # (Files that name several artists in one text: each artist, when the catalogs
+            # list them - before they are placed, so Navidrome never shows the joined one.)
+            async def still() -> None:  # (stopped meanwhile: raises)
+                await self._publishing(
+                    job["owner_id"], job["id"], revision=job["approved_revision"]
+                )
+
+            await still()
+            await self.lists.at_publish_batch(job, batch, still)
         for item in batch:
             await self._place(job, item)
         owner, job_id, revision = job["owner_id"], job["id"], job["approved_revision"]

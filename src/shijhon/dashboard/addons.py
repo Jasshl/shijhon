@@ -28,7 +28,14 @@ import httpx
 
 from shijhon.dashboard.fields import Invalid, parse_number
 from shijhon.delivery import pacing
-from shijhon.delivery.addon import Manifest, addon_base, allows_downloads, sendable
+from shijhon.delivery.addon import (
+    NEEDS_SIGN_IN,
+    Manifest,
+    addon_base,
+    allows_downloads,
+    sendable,
+    sign_in_needed,
+)
 from shijhon.delivery.netpolicy import Reach, Resolver, denied, policy_client, system_resolver
 from shijhon.delivery.pacing import AddonPace
 from shijhon.delivery.sources import MAX_LIMIT, StoredSource
@@ -111,6 +118,17 @@ class Check:
     at: float  # wall clock
     manifest: ManifestInfo | None
     error: str | None  # a short reason when the manifest could not be read
+    # Its answer was that its operator must sign in again (``error``: "needs sign-in"),
+    # with the add-on's page for it when it named one.
+    page: str | None = None
+
+
+class SignInNeeded(ValueError):
+    """The add-on answered that its operator must sign in again (``needs_sign_in``)."""
+
+    def __init__(self, page: str | None) -> None:
+        super().__init__(NEEDS_SIGN_IN)
+        self.page = page
 
 
 class Busy(ValueError):
@@ -326,6 +344,10 @@ async def fetch_manifest(
             async with get as response:
                 if response.status_code == 429 and asked:
                     asked[-1].limited(pacing.retry_after(response.headers.get("retry-after")))
+                if response.status_code == 503 and (
+                    (signed_out := await sign_in_needed(response)) is not None
+                ):
+                    raise SignInNeeded(signed_out.url)
                 if response.status_code != 200:
                     raise ValueError(f"HTTP {response.status_code}")
                 body = b""
@@ -380,6 +402,11 @@ class ManifestChecks:
         """The add-on's manifest, read just now at its address (not asked for again)."""
         self._checks[addon.id] = (self._key(addon), Check(self.clock(), manifest, None))
 
+    def again(self, addon_id: int) -> None:
+        """The add-on's manifest is read again at the next look (its operator says it
+        answers now)."""
+        self._checks.pop(addon_id, None)
+
     async def check(self, addons: list[StoredSource]) -> None:
         """Read the manifests that are due, all together, each within 5 s: an enabled
         add-on's once a minute, a disabled one's until it was read once (for its settings
@@ -427,6 +454,8 @@ class ManifestChecks:
                 if self.known(addon) is not None:
                     return  # what was read before stands; the next look asks again
                 result = Check(self.clock(), None, str(exc))
+            except SignInNeeded as exc:
+                result = Check(self.clock(), None, NEEDS_SIGN_IN, exc.page)
             except ValueError as exc:
                 result = Check(self.clock(), None, str(exc))
             except Exception as exc:  # a broken add-on must not break the page

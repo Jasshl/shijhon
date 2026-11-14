@@ -25,6 +25,7 @@ from tests.harness.dash_fixtures import dash_audio
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 MANIFEST = "https://manifests.example/t/1/out.mpd?sig=made-up"
 CDN = "https://cdn.example/seg/"
+SIGN_IN_PAGE = "https://manage.example/x"
 
 
 class Server:
@@ -42,6 +43,9 @@ class Server:
         self.ranges = True  # the segments answer a range (a probe's one byte)
         self.span: str | None = None  # a range's Content-Range instead ("bytes 0-0/*")
         self.segment_delay = 0.0  # each media segment's (not a probe's)
+        # "manifest", or "segment" (a media segment's): that answers that the add-on's
+        # operator must sign in again
+        self.signed_out: str | None = None
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
         self.seen.append(request)
@@ -50,7 +54,11 @@ class Server:
             await anyio.sleep(self.delay)
         if request.url.host == "manifests.example" and self.moved:
             return httpx.Response(302, headers={"location": "https://mirror.example/out.mpd"})
-        if request.url.host in ("manifests.example", "mirror.example"):
+        manifest = request.url.host in ("manifests.example", "mirror.example")
+        media = not manifest and "init" not in request.url.path
+        if (self.signed_out == "manifest" and manifest) or (self.signed_out == "segment" and media):
+            return httpx.Response(503, json={"error": "needs_sign_in", "url": SIGN_IN_PAGE})
+        if manifest:
             if isinstance(self.manifest, Exception):
                 raise self.manifest
             if self.manifest is not None:
@@ -162,6 +170,27 @@ async def test_a_manifest_s_failure_is_told_as_a_direct_link_s_would_be(
     with pytest.raises(DashError) as failed:
         await joined(Dash(tmp_path, FFMPEG), link(server))
     assert (failed.value.kind, str(failed.value)) == (kind, reason)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("at", ["manifest", "segment"])
+async def test_a_manifest_or_segment_that_says_sign_in_is_told_so_with_its_page(
+    tmp_path: Path, at: str
+) -> None:
+    """A 503 that says the add-on's operator must sign in is no error of the add-on's: the
+    join says so, with the page it named, and does not ask again (a plain 503 is an error,
+    asked twice)."""
+    server = Server(dash_audio(f"unit-sign-in-{at}", 6))
+    server.signed_out = at
+    with pytest.raises(DashError) as failed:
+        await joined(Dash(tmp_path, FFMPEG), link(server))
+    assert (failed.value.kind, failed.value.url) == ("sign_in", SIGN_IN_PAGE)
+    hosts = [r.url.host for r in server.seen]
+    if at == "manifest":
+        assert hosts == ["manifests.example"]
+    else:
+        media = [r for r in server.seen if r.url.host == "cdn.example" and "init" not in r.url.path]
+        assert len({str(r.url) for r in media}) == len(media)  # (none asked again)
 
 
 @pytest.mark.anyio

@@ -27,6 +27,7 @@ from shijhon.delivery.sources import Source
 from tests.conftest import NavidromeFactory
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_addon import FakeAddon
+from tests.harness.logs import collected
 
 CHECKS = ("stream", "isrc", "availability")
 STEP = 1.0  # each step's time
@@ -496,3 +497,95 @@ def test_after_its_first_bytes_a_stalled_stream_fails_within_the_request_timeout
         with pytest.raises(httpx.RemoteProtocolError):  # (cut short: the add-on stalled)
             world.client().request("stream", {"id": song})
         assert time.monotonic() - started < 1.0 + 1.5
+
+
+SIGN_IN = {"error": "needs_sign_in", "url": "https://signed-out.example.invalid/manage"}
+
+
+@pytest.mark.parametrize("where", ["link", "audio"])
+def test_an_add_on_that_needs_its_operator_to_sign_in_is_passed_over(
+    world: DeliveryWorld, where: str
+) -> None:
+    """It answers that its operator must sign in again (HTTP 503, ``needs_sign_in``, its
+    page for it): the next step joins at once, it is no error toward its cooldown, it is
+    noted as needing sign-in with its page, and later plays pass it over for a while."""
+    signed_out, other = world.addon(f"Signed-Out-{where}"), world.addon(f"Signed-In-{where}")
+    arrange(world, [signed_out], [other], seconds=3.0)
+    song, fakes, audio = world.placeholder_track(f"sign-in-{where}", [signed_out, other])
+    if where == "link":
+        fakes[signed_out].stream_status = 503
+    else:
+        fakes[signed_out].first_byte_status = 503
+    fakes[signed_out].error_body = SIGN_IN
+    started = time.monotonic()
+    with collected("shijhon.delivery.playback") as lines:
+        assert play(world, song) == audio.read_bytes()
+    assert time.monotonic() - started < 1.5  # not its step's 3 s
+    assert any(step.startswith(f"{signed_out.name}: needs sign-in") for step in latest(world).steps)
+    found = source(world, signed_out.name)
+    needs = world.services.sources.attention(found.id)
+    assert needs is not None and (needs.kind, needs.url) == ("sign_in", SIGN_IN["url"])
+    # Noted for a notification too (sent where an address is set: test_Q_notifications).
+    notices = world.services.notices
+    assert notices is not None and notices.states[f"addon:{found.id}"].active
+    # No failure of its own: no error, no timeout, no failed start in its record.
+    assert found.stats.errors_since_success == 0 and found.stats.timeouts_since_delivery == 0
+    assert found.stats.failures == 0 and found.stats.failures_since_success == 0
+    assert not [a for a in found.stats.recent if not a.delivered]
+    asked = len(signed_out.requests("stream"))
+    later, fakes, audio = world.placeholder_track(f"sign-in-{where}-later", [signed_out, other])
+    assert play(world, later) == audio.read_bytes()
+    assert len(signed_out.requests("stream")) == asked  # passed over for now
+    assert f"{signed_out.name}: needs sign-in" in latest(world).steps
+    # Its window over, it is asked again - and says so again: not logged a second time.
+    world.services.sources._signing_in.pop(found.id)
+    again, fakes, audio = world.placeholder_track(f"sign-in-{where}-again", [signed_out, other])
+    if where == "link":
+        fakes[signed_out].stream_status = 503
+    else:
+        fakes[signed_out].first_byte_status = 503
+    fakes[signed_out].error_body = SIGN_IN
+    with collected("shijhon.delivery.playback") as more:
+        assert play(world, again) == audio.read_bytes()
+    assert len(signed_out.requests("stream")) > asked
+    said = [line for line in lines + more if "needs its operator to sign in" in line]
+    assert len(said) == 1
+    # A lookup's answer (it lacks a song) does not say it is signed in again; audio does.
+    world.services.sources._signing_in.pop(found.id)
+    lacked, fakes, audio = world.placeholder_track(f"sign-in-{where}-lacked", [other])
+    assert play(world, lacked) == audio.read_bytes()
+    assert world.services.sources.attention(found.id) is not None
+    world.services.sources._signing_in.pop(found.id, None)
+    fine, fakes, audio = world.placeholder_track(f"sign-in-{where}-fine", [signed_out, other])
+    assert play(world, fine) == audio.read_bytes()
+    assert latest(world).served == signed_out.name
+    assert world.services.sources.attention(found.id) is None
+    # Once it answers otherwise (its operator signed in), it is no longer noted so.
+    world.services.sources.answered(found.id)
+    assert world.services.sources.attention(found.id) is None
+    assert not world.services.sources.cooling(found.id)
+
+
+@pytest.mark.parametrize("url", ["javascript:alert(1)", "http://[abc"])
+def test_a_sign_in_answer_without_a_page_or_with_another_body_is_told_apart(
+    world: DeliveryWorld, url: str
+) -> None:
+    """``needs_sign_in`` with a page that is no http address (or can't be read at all)
+    still needs sign-in, without a page - no error; another 503 body is an add-on error as
+    before."""
+    tag = "js" if url.startswith("javascript") else "bad"
+    plain, broken = world.addon(f"Sign-In-No-Page-{tag}"), world.addon(f"Plain-503-{tag}")
+    arrange(world, [plain], [broken])
+    song, fakes, _ = world.placeholder_track(f"sign-in-no-page-{tag}", [plain, broken])
+    fakes[plain].stream_status = fakes[broken].stream_status = 503
+    fakes[plain].error_body = {"error": "needs_sign_in", "url": url}
+    response = world.client().request("stream", {"id": song})
+    assert b"audio unavailable" in response.content
+    found = source(world, plain.name)
+    needs = world.services.sources.attention(found.id)
+    assert needs is not None and needs.url is None
+    assert found.stats.errors_since_success == 0  # (not "unexpected ValueError")
+    assert world.services.sources.attention(source(world, broken.name).id) is None
+    steps = latest(world).steps
+    assert any(step.startswith(f"{plain.name}: needs sign-in") for step in steps)
+    assert any(step.startswith(f"{broken.name}: add-on error (HTTP 503)") for step in steps)

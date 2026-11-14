@@ -7,10 +7,12 @@ and one process, so a migration framework would add more than it saves.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Iterable
+import time
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from importlib import resources
 from pathlib import Path
@@ -21,6 +23,9 @@ import anyio
 import anyio.to_thread
 
 from shijhon.delivery.addon import addon_key
+from shijhon.store import backup, skipped
+
+log = logging.getLogger(__name__)
 
 _MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -91,9 +96,30 @@ def _statements(sql: str) -> list[str]:
     return statements
 
 
-def prepare_database(path: Path) -> None:
-    """Create the database privately (add-on settings may hold secrets) and migrate it."""
+def prepare_database(
+    path: Path, *, snapshot: bool = True, clock: Callable[[], float] = time.time
+) -> None:
+    """Create the database privately (add-on settings may hold secrets) and migrate it.
+    ``snapshot``: an existing database at an older schema is first copied into
+    ``snapshots/`` beside it (``store/backup.py``). When that copy cannot be written, for
+    whatever reason, the upgrade goes on without it: a warning is logged, and the upgraded
+    database keeps a record of it for the dashboard and the notifications
+    (``store/skipped.py``)."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    failed: Exception | None = None
+    if snapshot:
+        latest = latest_schema()
+        try:
+            backup.snapshot_before_upgrade(path, latest)
+        except Exception as exc:
+            failed = exc
+            log.warning(
+                "startup: the database snapshot before the upgrade to schema %d could not be"
+                " written, so the upgrade goes on without one: %s",
+                latest,
+                exc if isinstance(exc, backup.CopyError) else type(exc).__name__,
+                exc_info=not isinstance(exc, backup.CopyError),
+            )
     if not path.exists():
         os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))
     # Also when it existed (and its journal files: SQLite gives them the database's mode).
@@ -103,7 +129,18 @@ def prepare_database(path: Path) -> None:
     setup = sqlite3.connect(path, isolation_level=None)
     try:
         setup.execute("PRAGMA journal_mode = WAL")
-        apply_migrations(setup)
+        before = int(setup.execute("PRAGMA user_version").fetchone()[0])
+        after = apply_migrations(setup)
+        # (Only an upgrade of an existing database: a new one needed no snapshot.)
+        if failed is not None and 0 < before < after:
+            try:
+                skipped.record(setup, skipped.of(failed, before, after, clock()))
+            except sqlite3.Error as exc:  # (the upgrade is done: the start goes on)
+                log.warning(
+                    "startup: the record of the upgrade without a snapshot could not be"
+                    " saved, so the dashboard will not show it: %s",
+                    exc,
+                )
     finally:
         setup.close()
 
@@ -129,8 +166,10 @@ class Store:
         self._readers = anyio.CapacityLimiter(READERS)
 
     @classmethod
-    async def open(cls, path: Path) -> Store:
-        await anyio.to_thread.run_sync(prepare_database, path)
+    async def open(cls, path: Path, *, snapshot: bool = True) -> Store:
+        """``snapshot``: a snapshot before an upgrade of the schema, which the upgrade goes
+        on without when it cannot be written (``prepare_database``)."""
+        await anyio.to_thread.run_sync(lambda: prepare_database(path, snapshot=snapshot))
         conn = await aiosqlite.connect(path, isolation_level=None)
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA foreign_keys = ON")

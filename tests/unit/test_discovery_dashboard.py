@@ -46,6 +46,7 @@ async def discovery(tmp_path):
     )
     dashboard = Dashboard(None)
     dashboard.services.playlists = service
+    dashboard.services.catalog = dashboard.services.radio = None  # no catalog: no radio
     dashboard.agent_access = lambda: ("", False)  # no agent address
     dashboard.env.filters.update(when=lambda value: "Today", day=lambda value: "Today")
     original_render = dashboard._render
@@ -174,3 +175,22 @@ async def test_discovery_keys_are_owner_scoped_and_failed_creation_rolls_back(di
     assert not await repo.store.fetchone(
         "SELECT id FROM playlist_discovery_requests WHERE request_key='failed-key'"
     )
+
+
+async def test_the_owner_s_runs_of_an_agent_s_discovery_mix_are_the_owner_s_work(discovery):
+    """What the owner publishes or asks for on the dashboard is the owner's work
+    (``Requests.guard``), also on a mix an agent made and may have been disconnected since,
+    whose own runs and refreshes need that agent."""
+    pages, session, repo = discovery
+    spec = Definition(name="Agent discoveries", mode="discovery", count=4)
+    ident = await repo.create_discovery(session.user_id, "agent-key-1", spec, creator="grant-1")
+    first = (await repo.runs(ident))[0]
+    assert "actor" not in first["data"]  # the agent's, while its grant lasts
+    await repo.update(first["id"], "preview", first["data"])
+    published = await pages.action(post({"action": "publish", "run": first["id"]}, ident), session)
+    assert published.status_code == 303
+    assert (await repo.run(first["id"]))["data"]["actor"] == ""
+    await repo.update(first["id"], "published", (await repo.run(first["id"]))["data"])
+    asked = await pages.action(post({"action": "preview"}, ident), session)
+    assert asked.status_code == 303
+    assert (await repo.runs(ident))[0]["data"]["actor"] == ""

@@ -77,6 +77,9 @@ folder = "_shijhon"          # inside the library
 # Or the catalog of one of your add-ons, when it has one:
 # kind = "addon"
 # addon = "First add-on"     # its name, as in [[addons]]
+# How many catalog releases an account that is not an administrator may add within 24
+# hours (0: no limit):
+# user_releases_per_day = 0
 
 # The cleanup takes releases with no recorded use out of the library again, `unused_days`
 # after they were added. `shijhon cleanup` lists what it would take out.
@@ -85,6 +88,13 @@ folder = "_shijhon"          # inside the library
 # unused_days = 30
 # catalog_albums = true      # catalog albums added to the library
 # fills = true               # songs added to partly owned albums
+
+# Notifications (docs/configuration.md#notifications): an add-on that needs sign-in, a
+# blocked cleanup, a stale usage export, an import waiting for review, a failed playlist
+# refresh - through Apprise. Off while urls is empty.
+# [notifications]
+# urls = "ntfy://my-topic"   # or SHIJHON_NOTIFICATIONS__URLS in the environment
+# usage_export = true        # each kind can be switched off
 
 # Sound analysis (docs/sound-analysis.md): facts about how songs sound, from AudioMuse-AI,
 # for described playlists. Off while url is empty.

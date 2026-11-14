@@ -1137,11 +1137,25 @@ class DownloadFirst:
                     return failure
             final = partial.with_name(f"{uuid.uuid4().hex}{suffix}")
             await anyio.Path(partial).rename(final)
+            audio = final
+
+            async def fits(current: Any) -> str | None:
+                """The song's length was corrected while its audio was fetched (the
+                library pass's reading of its track list): the audio was found and
+                accepted for the length before, and is the song's only if it is within the
+                tolerance of the corrected one too - asked under the song's lock, of the
+                row as it is then."""
+                if current["duration_ms"] == row["duration_ms"]:
+                    return None
+                return await anyio.to_thread.run_sync(
+                    self._other_length, audio, current["duration_ms"]
+                )
+
             try:
                 # Inspection and local conversion can take time. A surviving caller must
                 # still accept placement once they finish, before the engine starts its write.
                 await report(progress, "verifying")
-                await self.engine.replace_with_delivered(row["song_id"], final)
+                await self.engine.replace_with_delivered(row["song_id"], final, fits=fits)
             except ReplaceError as exc:
                 return str(exc)
             # (A play going on keeps its link: its later ranges stay on its file.)

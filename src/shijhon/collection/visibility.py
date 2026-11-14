@@ -430,6 +430,28 @@ class Visibility:
             await self.prepare_foreign(binding, principal, token)
         return await self.index.stats_many(binding, REAL_AUDIO, kind, list(dict.fromkeys(idents)))
 
+    async def selection(self, username: str) -> Shown | None:
+        """What an account's selection shows of given songs or albums, for a list that
+        adds catalog items beside the library's (as a selected search tells its
+        additions). ``username``: an account Navidrome just named (a verified caller, a
+        dashboard session). None: it has no selection of the configured library. Raises
+        one of ``FAILURES`` when the selection cannot be told."""
+        principal = await self.access.grants(username)
+        if not principal.can_access(self.access.navidrome.library_id):
+            return None
+        binding = await self.binding(principal)
+        if binding.foreign:
+            if self.prepare_foreign is None:
+                raise SetupRequired
+            token = await self.token_for(principal) if self.token_for else None
+            await self.prepare_foreign(binding, principal, token)
+        mode: Selection | None = REAL_AUDIO if self.real_audio(username) else None
+
+        async def shown(kind: str, idents: Sequence[str]) -> frozenset[str]:
+            return await self.index.shown(binding, mode, kind, idents)
+
+        return shown
+
     async def not_found(self, call: RestCall) -> LibraryAnswer | None:
         """Navidrome's own answer to the request for an item it does not have (its "not
         found" error), in the format asked for."""

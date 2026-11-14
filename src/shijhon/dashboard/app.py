@@ -18,14 +18,15 @@ import json
 import logging
 import os
 import time
-from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import SplitResult, parse_qsl, quote, urlsplit
+from urllib.parse import SplitResult, parse_qsl, quote, urlencode, urlsplit
 
 import anyio
 import httpx
 from jinja2 import Environment, PackageLoader, StrictUndefined
+from markupsafe import Markup
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import (
@@ -38,6 +39,7 @@ from starlette.responses import (
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
+from shijhon import __version__
 from shijhon.access import AccessDenied, AccessService, AccessUnavailable, Principal
 from shijhon.catalog import plugin
 from shijhon.catalog.addon import AddonCatalog
@@ -84,6 +86,7 @@ from shijhon.dashboard.fields import (
 )
 from shijhon.dashboard.library_setup import Pages as LibrarySetupPages
 from shijhon.dashboard.music_imports import Pages as MusicImportPages
+from shijhon.dashboard.new_releases import Pages as NewReleasePages
 from shijhon.dashboard.playlists import Pages as PlaylistPages
 from shijhon.dashboard.saved import (
     ACCENTS,
@@ -100,21 +103,24 @@ from shijhon.dashboard.saved import (
     out_of_place,
     withheld,
 )
+from shijhon.dashboard.times import day, hm, instant, when
 from shijhon.delivery import pacing
-from shijhon.delivery.addon import AddonError
+from shijhon.delivery.addon import NEEDS_SIGN_IN, AddonError
 from shijhon.delivery.bulk import effective_capacity
 from shijhon.delivery.netpolicy import Reach, Resolver, system_resolver
 from shijhon.delivery.pacing import AddonPace, Limits, origin
 from shijhon.delivery.quality_gate import CHOICES as QUALITY_CHOICES
 from shijhon.delivery.sources import MAX_LIMIT, USUAL_STARTS, NameTaken, StoredSource, usual_seconds
-from shijhon.fill.fills import ChoiceRefused
+from shijhon.fill.fills import IN_LIBRARY, Changed, ChoiceRefused, FillPending, InUse
 from shijhon.locks import KeyedLocks
 from shijhon.navidrome import connect
 from shijhon.navidrome.client import NavidromeError
+from shijhon.navidrome.usage import NotFresh
 from shijhon.placeholders.engine import MaterializeError
 from shijhon.playlists.model import Connection
 from shijhon.proxy.forwarding import Forwarding
-from shijhon.store import Store
+from shijhon.store import Store, skipped
+from shijhon.store.skipped import Skipped
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -150,11 +156,17 @@ QUALITY_WORDS = {
 SESSION_COOKIE = "shijhon_session"
 SIGNIN_COOKIE = "shijhon_signin"
 MAX_FORM_BYTES = 64 * 1024
+STATUS_SECONDS = 8.0  # an agent's server status waits this long for the checks it shares
 # The sidebar: (heading, ((page, label), ...)). Everyone sees "Music"; administrators
 # also see "Server", the installation's settings and health.
 MUSIC_NAV = (
     "Music",
-    (("collection", "Collection"), ("playlists", "Playlists"), ("downloads", "Downloads")),
+    (
+        ("collection", "Collection"),
+        ("playlists", "Playlists"),
+        ("downloads", "Downloads"),
+        ("new-releases", "New releases"),
+    ),
 )
 NAV = (
     MUSIC_NAV,
@@ -168,11 +180,14 @@ NAV = (
             ("agent-access", "Agent access"),
             ("sound", "Sound analysis"),
             ("cleanup", "Cleanup"),
+            ("notifications", "Notifications"),
             ("diagnostics", "Diagnostics"),
         ),
     ),
 )
 PERSONAL_NAV = (MUSIC_NAV,)
+# The pages every account may open after signing in (the others are administrators').
+PERSONAL_PAGES = (*(page for page, _ in MUSIC_NAV[1]), "appearance", "quality")
 ACCENT_NAMES = {
     "green": "Deep green",
     "teal": "Teal",
@@ -185,6 +200,7 @@ PAGE_SECTIONS = {
     "catalog": "catalog",
     "sound": "audiomuse",
     "agent-access": "agents",
+    "notifications": "notifications",
 }
 SECTION_WORDS = {
     "playback": (
@@ -198,6 +214,11 @@ SECTION_WORDS = {
     "sound": (
         "Sound analysis",
         "AudioMuse-AI analyzes how your songs sound; described playlists use it as a hint.",
+    ),
+    "notifications": (
+        "Notifications",
+        "Shijhon tells you when something needs a person, through Apprise: on your phone, in a"
+        " chat or by email, without opening the dashboard.",
     ),
     "agent-access": (
         "Agent access",
@@ -217,6 +238,10 @@ HEADERS = {
 }
 # The page that waits for a restart: its script file and what that asks, nothing more.
 RESTARTING_POLICY = HEADERS["content-security-policy"] + "; script-src 'self'; connect-src 'self'"
+# Times are <time> elements (``times``); a page with one has the script that writes them in
+# the browser's zone, at the end of its body.
+TIME_ELEMENT = "<time datetime="
+TIME_SCRIPT = '<script src="{prefix}/static/times.js" defer></script>\n'
 FAILING_IN_A_ROW = 3  # failures without a success before an add-on shows "Error"
 # Saved audio: whether streams are kept, and its limits - on the Cleanup page, not with
 # Playback's other settings.
@@ -242,6 +267,7 @@ def _page_of(section: str, key: str) -> str:
         "cleanup": "Cleanup",
         "agents": "Agent access",
         "playlists": "Playlists",
+        "notifications": "Notifications",
     }
     return pages.get(section, "Sound analysis")
 
@@ -359,6 +385,7 @@ CATALOG_LIMITS = ("requests_per_second", "request_burst")
 MAX_ADDON_NAME = 100
 # The plan's own delivery settings: saved with the plan on Add-ons, not on Playback.
 PLAN_SETTINGS = ("ready_checks", "ready_handover_seconds")
+NEEDS_SIGN_IN_WORDS = "Needs sign-in"  # an add-on that said its operator must sign in
 RECENT_STARTS = USUAL_STARTS  # an add-on's latest attempts that the plan shows its speed from
 # What a routing at byte zero was for, in Diagnostics' words.
 PURPOSES = {
@@ -404,19 +431,19 @@ class Refused(Exception):
         self.response = response
 
 
-def hm(at: float) -> str:
-    return time.strftime("%H:%M", time.localtime(at))
+def _library_search(text: str) -> str:
+    """A search of the Library page's lists as it is kept in links and forms."""
+    return " ".join(text[: library.SEARCH_LENGTH].split())
 
 
-def day(at: float) -> str:
-    moment = time.localtime(at)
-    return f"{moment.tm_mday} {time.strftime('%B', moment)}"
-
-
-def when(at: float) -> str:
-    """14:05 today, else 12 September, 14:05."""
-    today = time.localtime().tm_yday == time.localtime(at).tm_yday and abs(time.time() - at) < 86400
-    return hm(at) if today else f"{day(at)}, {hm(at)}"
+def _library_back(form: dict[str, str], pages: str, anchor: str) -> str:
+    """Where a Library action returns to: the list it came from, at its page, under the
+    search it was shown with."""
+    search = _library_search(form.get("q", ""))
+    found = {"q": search} if search else {}
+    number = form.get("page", "1")
+    found[pages] = number if number.isdigit() and len(number) < 7 else "1"
+    return f"/library?{urlencode(found)}#{anchor}"
 
 
 def printable(text: str) -> str:
@@ -472,6 +499,9 @@ class Dashboard:
         self.running: Settings | None = None  # what the services use now
         self.problems: dict[str, str] = {}
         self.addons_handed_back = False
+        # An upgrade that went on without its snapshot, read once at startup (only a start
+        # writes it): shown to administrators until one dismisses it.
+        self.skipped: Skipped | None = None
         self.catalog_check: status.CatalogCheck | None = None
         self.describer = library.Describer()
         self.jobs = library.Jobs()
@@ -508,6 +538,9 @@ class Dashboard:
             Route("/addons/plan", page(self.addons_plan), methods=["POST"]),
             Route("/addons/enabled", page(self.addons_enabled), methods=["POST"]),
             Route("/addons/{addon:int}/enabled", page(self.addon_enabled), methods=["POST"]),
+            Route(
+                "/addons/{addon:int}/check-again", page(self.addon_check_again), methods=["POST"]
+            ),
             Route("/addons/{addon:int}/settings", page(self.addon_settings), methods=["POST"]),
             Route("/addons/{addon:int}/remove", page(self.addon_remove), methods=["POST"]),
             Route("/playback", page(self.section_page), methods=["GET", "POST"]),
@@ -516,18 +549,24 @@ class Dashboard:
             Route("/catalog/wait", page(self.catalog_wait_save), methods=["POST"]),
             Route("/sound", page(self.section_page), methods=["GET", "POST"]),
             Route("/agent-access", page(self.section_page), methods=["GET", "POST"]),
+            Route("/notifications", page(self.section_page), methods=["GET", "POST"]),
+            Route("/notifications/test", page(self.notification_test), methods=["POST"]),
             Route("/library", page(self.library_page), methods=["GET"]),
             Route("/library/policy", page(self.library_save), methods=["POST"]),
             Route("/library/pass", page(self.library_save), methods=["POST"]),
             Route("/library/settings", page(self.library_save), methods=["POST"]),
             Route("/library/review/{album}", page(self.library_review), methods=["POST"]),
             Route("/library/no-match/{album}", page(self.library_recheck), methods=["POST"]),
+            Route("/library/change/{album}", page(self.library_change), methods=["POST"]),
+            Route("/library/bulk", page(self.library_bulk), methods=["POST"]),
+            Route("/library/bulk/stop", page(self.library_bulk_stop), methods=["POST"]),
             Route("/cleanup", page(self.cleanup_page), methods=["GET"]),
             Route("/cleanup/settings", page(self.cleanup_save), methods=["POST"]),
             Route("/cleanup/downloads", page(self.cleanup_save), methods=["POST"]),
             Route("/cleanup/check", page(self.cleanup_check), methods=["POST"]),
             Route("/diagnostics", page(self.diagnostics_page), methods=["GET"]),
             Route("/restart", page(self.restart_now), methods=["POST"]),
+            Route("/upgrade-alert", page(self.upgrade_alert_dismiss), methods=["POST"]),
             Route("/restarting", page(self.restarting_page), methods=["GET"]),
             Route("/alive", self.alive, methods=["GET"]),
             Route(
@@ -537,6 +576,7 @@ class Dashboard:
             Mount("/static", _Static(packages=[("shijhon.dashboard", "static")])),
         ]
         routes.extend(DownloadPages(self).routes())
+        routes.extend(NewReleasePages(self).routes())
         routes.extend(PlaylistPages(self).routes())
         routes.extend(LibrarySetupPages(self).routes())
         routes.extend(MusicImportPages(self).routes())
@@ -601,19 +641,58 @@ class Dashboard:
             pending=await self._pending() if session and session.is_admin else [],
             # "Restart Shijhon" is offered where something starts Shijhon again.
             can_restart=bool(session and session.is_admin) and self.host.can_restart,
+            upgraded=self.skipped if session and session.is_admin else None,
+            attention=await self._attention() if session and session.is_admin else {},
             **context,
         )
         headers = dict(HEADERS)
-        if template == "playlists.html":
-            headers["content-security-policy"] += "; script-src 'self'"
-        elif template in {
+        # A page that shows a time has the script that writes it in the browser's zone.
+        timed = TIME_ELEMENT in html
+        if timed:
+            html = html.replace("</body>", TIME_SCRIPT.format(prefix=PATH) + "</body>", 1)
+        if template in {
             "addons.html",
             "collection.html",
+            "library.html",
+            "_library_lists.html",
             "music_imports.html",
             "music_import_manage.html",
         }:
             headers["content-security-policy"] += "; script-src 'self'; connect-src 'self'"
+        elif timed or template == "playlists.html":
+            headers["content-security-policy"] += "; script-src 'self'"
         return HTMLResponse(html, status_code, headers=headers)
+
+    async def _attention(self) -> dict[str, tuple[int, str]]:
+        """The sidebar's counts, by page, with their words: albums in the Library's review
+        list and add-ons whose operator must sign in (as the Add-ons page shows them). Read
+        from Shijhon's own database and memory, nothing asked elsewhere; a count that can't
+        be read is left out, and none is shown for nothing."""
+        services, store = self.services, self.store
+        found: dict[str, tuple[int, str]] = {}
+        if services is None or store is None:
+            return found
+
+        async def review() -> int:
+            fills = services.fills
+            return 0 if fills is None else await library.review_count(store, fills.scope)
+
+        async def signing_in() -> int:
+            return sum(self._signing_in(addon) for addon in await services.sources.stored())
+
+        async def number(page: str, count: Callable[[], Awaitable[int]]) -> int:
+            try:
+                return await count()
+            except Exception:  # (the page shows without it)
+                log.debug("the sidebar's count for %s could not be read", page, exc_info=True)
+                return 0
+
+        if albums := await number("library", review):
+            found["library"] = (albums, f"{albums:,} album{'s' if albums != 1 else ''} to review")
+        if addons := await number("addons", signing_in):
+            needs = "add-ons need" if addons != 1 else "add-on needs"
+            found["addons"] = (addons, f"{addons:,} {needs} sign-in")
+        return found
 
     async def _form(self, request: Request) -> dict[str, str]:
         """A submitted form (URL-encoded; an empty body is an empty form). A field sent twice
@@ -636,19 +715,24 @@ class Dashboard:
 
     async def _session(self, request: Request, *, cached: bool = False) -> Session:
         """Verify the owner; only collection sub-resources reuse a proof for three seconds."""
-        if self.sessions is None:
-            raise Refused(PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS))
-        token = request.cookies.get(SESSION_COOKIE)
-        session = await self.sessions.get(token)
-        if session is None:
-            where = request.url.path if request.method == "GET" else f"{PATH}/collection"
-            raise Refused(self._see(f"/sign-in?next={quote(where, safe='/')}"))
+        session = await self._local_session(request)
         async with self._verification.hold(session.token_hash):
             known = self._verified.get(session.token_hash) if cached else None
             if known and known[0] > time.monotonic():
                 return replace(session, username=known[1].username, principal=known[1])
             self._verified.pop(session.token_hash, None)
             return await self._verify_session(session, cached=cached)
+
+    async def _local_session(self, request: Request) -> Session:
+        """The request's signed-in, unexpired session as this installation knows it, before
+        any check with Navidrome."""
+        if self.sessions is None:
+            raise Refused(PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS))
+        session = await self.sessions.get(request.cookies.get(SESSION_COOKIE))
+        if session is None:
+            where = request.url.path if request.method == "GET" else f"{PATH}/collection"
+            raise Refused(self._see(f"/sign-in?next={quote(where, safe='/')}"))
+        return session
 
     async def _verify_session(self, session: Session, *, cached: bool) -> Session:
         assert self.sessions is not None
@@ -696,20 +780,30 @@ class Dashboard:
         form_reader: Callable[[Request], Awaitable[dict[str, str]]] | None = None,
         require_admin: bool = False,
         cache_identity: bool = False,
+        verify: bool = True,
     ) -> Callable[[Request], Awaitable[Response]]:
         """Own-account pages; identity/library verification precedes form reads/work.
 
         Collection adapters can wrap their routes with this callback. Session.user_id
         is immutable; session.principal contains this request's current native grants.
+        ``verify`` False: the signed-in session and its form token are the authority, with
+        no check with Navidrome (and no current grants), for a form that can only take the
+        account's own access away, so that it works while Navidrome is down.
         """
+        if not verify and require_admin:
+            raise ValueError("an administrator's page is always verified")
 
         async def endpoint(request: Request) -> Response:
             try:
                 session = (
-                    await self._session(request, cached=True)
+                    await self._local_session(request)
+                    if not verify
+                    else await self._session(request, cached=True)
                     if cache_identity and request.method in ("GET", "HEAD")
                     else await self._session(request)
                 )
+                if not verify and not session.user_id:  # (verification fails closed too)
+                    raise Refused(self._see("/sign-in?reason=access"))
                 if require_admin and not session.is_admin:
                     raise Refused(
                         PlainTextResponse(
@@ -967,7 +1061,7 @@ class Dashboard:
             target = f"{PATH}/{'addons' if principal.is_admin else 'collection'}"
         if not principal.is_admin and not any(
             target.split("?", 1)[0] == f"{PATH}/{p}" or target.startswith(f"{PATH}/{p}/")
-            for p in ("collection", "playlists", "downloads", "appearance", "quality")
+            for p in PERSONAL_PAGES
         ):
             target = f"{PATH}/collection"
         response = RedirectResponse(target, status_code=303, headers=HEADERS)
@@ -1153,6 +1247,8 @@ class Dashboard:
             extra = await self._sound_status(saved)
         if page == "agent-access":
             extra = self._agent_status(saved)
+        if page == "notifications":
+            extra = self._notification_status()
         groups = sections.rows(
             section,
             self.host.configured,
@@ -1218,6 +1314,7 @@ class Dashboard:
             else ("Not saved" if problems and not first_step else ""),
             "saved_ok": bool(flash and flash.status),
             "words": flash.words if flash else "",
+            "tone": flash.tone if flash else "info",
             "problem": self.problems.get(section),
             "extra": extra,
             # The catalog whose adapter settings the form holds (sections.SHOWN_KIND).
@@ -1297,11 +1394,13 @@ class Dashboard:
         interim: list[str] | None = None,
         *,
         whole: bool = True,
+        held: bool = False,
     ) -> tuple[sections.Submitted, sections.Written | None, list[str]]:
         """Check and save a form's settings of one section, and apply the live ones: (the
-        submission, what was written or None when it has problems, the keys applied)."""
+        submission, what was written or None when it has problems, the keys applied).
+        ``held``: the caller holds the section's saves (``_section_saves``)."""
         assert self.saved is not None
-        async with self._section_saves.hold(section):
+        async with contextlib.nullcontext() if held else self._section_saves.hold(section):
             saved = await self.saved.all()
             names = await self._addon_names(section)
             submitted = await sections.submit(
@@ -1386,6 +1485,22 @@ class Dashboard:
                     next=target,
                 )
         return self._see(f"/restarting?boot={self.boot}&next={quote(target, safe='/')}")
+
+    async def upgrade_alert_dismiss(self, request: Request, session: Session) -> Response:
+        """Dismiss the alert about an upgrade without its snapshot: its record goes, and the
+        state its notification was sent for ends."""
+        target = _own_page(request.state.form.get("next", ""))
+        if self.skipped is not None and self.store is not None:
+            await skipped.dismiss(self.store)
+            self.skipped = None
+            notices = self.services.notices if self.services is not None else None
+            if notices is not None:
+                notices.upgraded_without_snapshot(None)
+            log.info(
+                "dashboard: %s dismissed the alert about the upgrade without a snapshot",
+                printable(session.username),
+            )
+        return RedirectResponse(target, status_code=303, headers=HEADERS)
 
     async def restarting_page(self, request: Request, session: Session) -> Response:
         """The page shown while Shijhon restarts. Asked of the run that is restarting: the
@@ -1584,6 +1699,55 @@ class Dashboard:
             "plain": "true" if running.startswith("http://") and host not in LOOPBACK_HOSTS else "",
         }
 
+    def _notification_status(self) -> dict[str, Any]:
+        """The Notifications page's status: how many addresses are in use, and the outcome
+        of the last notification when it could not be sent (never an address)."""
+        services = self.services
+        notices = services.notices if services is not None else None
+        if notices is None:
+            return {"running": False, "addresses": 0, "failed": None, "sent": None}
+        failed = notices.last_failed
+        sent = notices.last_sent
+        return {
+            "running": True,
+            "addresses": len(notices.settings.addresses()),
+            # (Said only while no notification went out after it.)
+            "failed": failed if failed is not None and (sent is None or sent < failed[0]) else None,
+            "sent": sent,
+        }
+
+    async def notification_test(self, request: Request, session: Session) -> Response:
+        """ "Send a test notification": sent now to the addresses in use, and whether each
+        took it - in words that never name an address."""
+        services = self.services
+        notices = services.notices if services is not None else None
+
+        def note(words: str, tone: str) -> Response:
+            self._remember(session, Flash("notifications", words=words, tone=tone))
+            return self._see("/notifications")
+
+        if notices is None:
+            return note("Shijhon is starting: try again in a moment.", "error")
+        if not notices.settings.addresses():
+            return note("No address is set: enter one and save, then send a test.", "error")
+        outcome = await notices.test()
+        log.info(
+            "dashboard: %s sent a test notification: %s",
+            printable(session.username),
+            outcome.words(),
+        )
+        if outcome.ok:
+            return note(
+                "The test notification was sent. If it did not arrive, check the address with"
+                " its service.",
+                "ok",
+            )
+        return note(
+            f"The test notification could not be sent: {outcome.words()}. Check the address"
+            " and its token with the service; the log says no more than this.",
+            "error",
+        )
+
     async def catalog_wait_save(self, request: Request, session: Session) -> Response:
         """The Catalog page's second form: how long a search or an artist page waits for
         the catalog (``[search] budget_seconds``, applied at once)."""
@@ -1687,9 +1851,20 @@ class Dashboard:
         text = json.dumps(content, sort_keys=True, default=str)
         return hmac.new(self._form_key, text.encode(), hashlib.sha256).hexdigest()[:32]
 
+    def _signing_in(self, addon: StoredSource) -> bool:
+        """Whether the add-on shows "Needs sign-in" (``_health``): on, and it or its manifest
+        said its operator must sign in."""
+        if not addon.enabled:
+            return False
+        if self.services is not None and self.services.sources.attention(addon.id) is not None:
+            return True
+        check = self.checks.known(addon)
+        return check is not None and check.error == NEEDS_SIGN_IN
+
     def _health(self, addon: StoredSource) -> dict[str, Any]:
-        """Light and words: off; the manifest unreachable; cooling down; failing (3 failures
-        in a row without a success: one missing song is not an error); OK."""
+        """Light and words: off; needing its operator to sign in (it said so: with its page
+        for it, ``link``); the manifest unreachable; cooling down; failing (3 failures in a
+        row without a success: one missing song is not an error); OK."""
         services = self.services
         check = self.checks.known(addon)
         found = services.sources.stats(addon.id) if services is not None else None
@@ -1700,19 +1875,53 @@ class Dashboard:
             "code": None,
             "attention": False,
             "detail": "",
+            "link": None,
+            "state": "not_checked",  # the same in one word, for an agent's status
         }
         if not addon.enabled:
-            return {**health, "light": "off", "words": "Off"}
+            return {**health, "light": "off", "words": "Off", "state": "off"}
+        needs = services.sources.attention(addon.id) if services is not None else None
+        if needs is not None:
+            if self._catalog_only(addon):  # (not passed over: its catalog is asked as before)
+                again = "shown so until its catalog answers again"
+            elif until is not None:
+                again = Markup("passed over until {}, then asked again").format(when(until))
+            else:
+                again = "asked again at the next play"
+            return {
+                **health,
+                "light": "error",
+                "words": NEEDS_SIGN_IN_WORDS,
+                "attention": True,
+                "link": needs.url,
+                "detail": Markup("It said so at {}; {}.").format(when(needs.since), again),
+                "state": "needs_sign_in",
+            }
+        if check is not None and check.error == NEEDS_SIGN_IN:  # (its manifest's answer)
+            return {
+                **health,
+                "light": "error",
+                "words": NEEDS_SIGN_IN_WORDS,
+                "attention": True,
+                "link": check.page,
+                "detail": Markup("Its manifest said so at {}.").format(hm(check.at)),
+                "state": "needs_sign_in",
+            }
         if check is not None and check.error is not None:
             health.update(
                 light="error",
                 words="Manifest unreachable:",
                 code=check.error,
                 attention=True,
-                detail=f"Checked {hm(check.at)}",
+                detail=Markup("Checked {}").format(hm(check.at)),
+                state="manifest_unreachable",
             )
         elif until is not None:
-            health.update(light="cool", words=f"Cooling down until {when(until)}")
+            health.update(
+                light="cool",
+                words=Markup("Cooling down until {}").format(when(until)),
+                state="cooling_down",
+            )
         elif (
             found is not None
             and found.failures_since_success >= FAILING_IN_A_ROW
@@ -1723,23 +1932,30 @@ class Dashboard:
                 words="Error:",
                 code=found.last_failure,
                 attention=True,
-                detail=f"{found.failures_since_success:,} failures in a row, the last at"
-                f" {when(found.last_failure_at or time.time())}",
+                detail=Markup("{:,} failures in a row, the last at {}").format(
+                    found.failures_since_success, when(found.last_failure_at or time.time())
+                ),
+                state="failing",
             )
         elif check is not None:
-            health.update(light="ok", words="OK")
+            health.update(light="ok", words="OK", state="ok")
         if found is not None and not health["detail"]:
-            parts = []
+            parts: list[Markup] = []
             if found.last_success_at is not None:  # its audio's first byte, not a link
-                parts.append(f"Last audio delivered {when(found.last_success_at)}")
+                parts.append(Markup("Last audio delivered {}").format(when(found.last_success_at)))
             if found.successes or found.failures:
                 parts.append(
-                    f"{found.successes:,} found, {found.failures:,} failed since"
-                    f" {hm(self.started_at)}"
+                    Markup("{:,} found, {:,} failed since {}").format(
+                        found.successes, found.failures, hm(self.started_at)
+                    )
                 )
             if found.last_failure and found.last_failure_at:
-                parts.append(f"last failure {when(found.last_failure_at)}: {found.last_failure}")
-            health["detail"] = "; ".join(parts)
+                parts.append(
+                    Markup("last failure {}: {}").format(
+                        when(found.last_failure_at), found.last_failure
+                    )
+                )
+            health["detail"] = Markup("; ").join(parts)
         return health
 
     async def _pace(self, url: str, base_url: str) -> AddonPace | None:
@@ -1897,10 +2113,27 @@ class Dashboard:
         check = self.checks.known(addon)
         return bool(check is not None and check.manifest and not check.manifest.streams)
 
-    def _audio_ids(self, addons: list[StoredSource]) -> list[int]:
+    def _audio(self, addons: list[StoredSource]) -> list[StoredSource]:
         """The add-ons in the order audio is asked for: all but those that are a catalog
-        only, in the list's order."""
-        return [addon.id for addon in addons if not self._catalog_only(addon)]
+        only, by their steps, then in the list's order - as plays ask them
+        (``SourceRegistry.streaming``): one outside the plan whose manifest is not known
+        comes after the plan's steps, never between the add-ons of one."""
+        audio = [addon for addon in addons if not self._catalog_only(addon)]
+        return sorted(audio, key=lambda addon: (addon.step, addon.position, addon.id))
+
+    def _step_numbers(self, addons: list[StoredSource]) -> dict[int, int]:
+        """Each audio add-on's step of the plan, counted from 1 (``_audio``'s order)."""
+        steps: dict[int, int] = {}
+        before: StoredSource | None = None
+        for addon in self._audio(addons):
+            begins = before is None or addon.step != before.step
+            steps[addon.id] = max(steps.values(), default=0) + (1 if begins else 0)
+            before = addon
+        return steps
+
+    def _audio_ids(self, addons: list[StoredSource]) -> list[int]:
+        """The IDs of ``_audio``."""
+        return [addon.id for addon in self._audio(addons)]
 
     def _limit_row(
         self,
@@ -2043,13 +2276,7 @@ class Dashboard:
         flash = self._flash_for(session, "addons")
         items: list[dict[str, Any]] = []
         audio = self._audio_ids(addons)
-        steps: dict[int, int] = {}  # each audio add-on's step of the plan, counted from 1
-        before: StoredSource | None = None
-        for addon in addons:
-            if addon.id in audio:
-                begins = before is None or addon.step != before.step
-                steps[addon.id] = max(steps.values(), default=0) + (1 if begins else 0)
-                before = addon
+        steps = self._step_numbers(addons)
         for addon in addons:
             check = self.checks.known(addon)
             mine = form_for == addon.id
@@ -2092,7 +2319,8 @@ class Dashboard:
                     "form_version": self._addon_version(addon),
                 }
             )
-        errors = sum(1 for item in items if item["health"]["light"] == "error")
+        signing_in = sum(1 for item in items if item["health"]["words"] == NEEDS_SIGN_IN_WORDS)
+        errors = sum(1 for item in items if item["health"]["light"] == "error") - signing_in
         cooling = sum(1 for item in items if item["health"]["light"] == "cool")
         owner = await self.saved.addons_owner()
         in_file = self.host.configured.addons
@@ -2131,6 +2359,7 @@ class Dashboard:
             enabled=sum(1 for a in addons if a.enabled),
             errors=errors,
             cooling=cooling,
+            signing_in=signing_in,
             notice_title=title,
             notices=notices,
             flash=flash,
@@ -2227,6 +2456,22 @@ class Dashboard:
             )
         return self._see(f"/addons#addon-{addon.id}")
 
+    async def addon_check_again(self, request: Request, session: Session) -> Response:
+        """The add-on's operator signed in again: it is no longer shown as needing sign-in,
+        nor passed over for it, and its manifest is read again - nothing about the list
+        changes (also one the environment sets)."""
+        assert self.services is not None
+        addon = await self._addon(int(request.path_params["addon"]))
+        self.services.sources.answered(addon.id)
+        self.checks.again(addon.id)
+        log.info(
+            "dashboard: %s said the add-on %s is signed in again",
+            printable(session.username),
+            printable(addon.name),
+        )
+        self._remember(session, Flash("addons", words=f"{addon.name} is asked again."))
+        return self._see(f"/addons#addon-{addon.id}")
+
     async def addons_plan(self, request: Request, session: Session) -> Response:
         """The plan addon_plan.js saves after a change: its steps (each with its add-ons and
         its time), whether add-ons are asked which have the song ready, and when one that
@@ -2242,7 +2487,7 @@ class Dashboard:
                 ([int(i) for i in step["addons"]], float(step["seconds"])) for step in sent["steps"]
             ]
             checks, handover = bool(sent["checks"]), float(sent["handover"])
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, RecursionError):  # (deeply nested JSON)
             steps, checks, handover = [], False, 0.0
         ids = self._audio_ids(await self._stored())
         listed = [source_id for addons, _ in steps for source_id in addons]
@@ -2270,6 +2515,11 @@ class Dashboard:
         try:
             await self.services.sources.arrange(steps, also=functools.partial(self._owned, session))
         except ValueError:  # an add-on removed meanwhile
+            if form:  # (the two settings are saved and applied: say so)
+                refused = (
+                    "Plan's steps not saved: the add-ons changed meanwhile. Its ready checks "
+                    "were saved. Here it is as it is now."
+                )
             self._remember(session, Flash("addons", words=refused, tone="error"))
             return JSONResponse({"saved": False}, 409, headers=HEADERS)
         log.info("dashboard: %s changed the add-ons' plan", printable(session.username))
@@ -2278,7 +2528,7 @@ class Dashboard:
     def _plan(self, addons: list[StoredSource], session: Session) -> dict[str, Any] | None:
         """The plan for addon_plan.js: the add-ons asked for audio in their steps, each with
         its light and its recent starts."""
-        audio = [addon for addon in addons if not self._catalog_only(addon)]
+        audio = self._audio(addons)
         if not audio:
             return None
         running = self.running or self.host.configured
@@ -2327,7 +2577,12 @@ class Dashboard:
         return {
             "id": addon.id,
             "name": addon.name,
-            "light": self._health(addon)["light"],
+            "light": (health := self._health(addon))["light"],
+            # What it needs from its operator (it said so), shown instead of its speed; and
+            # whether plays pass it over for it now (the plan's run leaves it out then).
+            "attention": health["words"] if health["words"] == NEEDS_SIGN_IN_WORDS else None,
+            "passed": self.services is not None
+            and self.services.sources.passed_over_for_sign_in(addon.id),
             "off": not addon.enabled,
             "usual": None if usual is None else round(usual, 1),
             "played": len(times),
@@ -2637,6 +2892,8 @@ class Dashboard:
                 taken = True
             else:
                 taken = False
+                # (Its settings saved: perhaps its operator signed in - asked again.)
+                self.services.sources.answered(addon.id)
                 if renamed:  # (applied before another save of them may write)
                     await self._renamed(addon, new_name, naming)
         if taken:
@@ -2689,7 +2946,7 @@ class Dashboard:
                 words=words,
                 keys=tuple(key for key in before if before[key] != after[key]),
                 addon=addon.id,
-                status=f"Saved at {hm(time.time())}",
+                status=Markup("Saved at {}").format(hm(time.time())),
                 tone="info",
             ),
         )
@@ -2731,7 +2988,10 @@ class Dashboard:
         fills = services.fills if services is not None else None
         passing = services.library_pass if services is not None else None
         saved = await self.saved.all()
-        flash = self._flash_for(session, "library")
+        # The lists alone (the page's script: a search as it is typed, an action's
+        # progress) show no notice, so none is used up by them.
+        lists_only = request.query_params.get("part") == "lists"
+        flash = None if lists_only else self._flash_for(session, "library")
         groups = sections.rows(
             "fill",
             self.host.configured,
@@ -2753,7 +3013,27 @@ class Dashboard:
         picks_page = int(text) if text.isdigit() and len(text) < 7 else 1
         text = request.query_params.get("no_match", "1")
         no_match_page = int(text) if text.isdigit() and len(text) < 7 else 1
+        search = _library_search(request.query_params.get("q", ""))
+        # The filled albums are listed when asked for (few look for a wrong edition).
+        text = request.query_params.get("filled", "")
+        filled_shown = bool(text)
+        filled_page = int(text) if text.isdigit() and len(text) < 7 else 1
+
+        def page_url(name: str, number: int) -> str:
+            """The page with one list at another of its pages (the search kept, and the
+            filled albums if they are shown)."""
+            found = {"q": search} if search else {}
+            if filled_shown and name != "filled":
+                found["filled"] = str(filled_page)
+            return "?" + urlencode({**found, name: str(number)})
+
         context: dict[str, Any] = {
+            "q": search,
+            "filled_shown": filled_shown,
+            "filled_page": filled_page,
+            "page_url": page_url,
+            "batch": self.jobs.shown_batch(),
+            "bulk": library.BULK,
             "fills_on": fills is not None,
             "songs": songs,
             "share": share,
@@ -2766,18 +3046,34 @@ class Dashboard:
             ],
             "problem": self.problems.get("fill"),
             "form_for": (form or {}).get("form", ""),
-            "jobs": self.jobs.recent(session.token_hash),
+            "jobs": [] if lists_only else self.jobs.recent(session.token_hash),
             "page": page_number,
             "picks_page": picks_page,
             "no_match_page": no_match_page,
         }
         if fills is not None:
             scope = fills.scope
-            rows, total, page_number = await library.review(self.store, scope, page_number)
-            picked, picks_total, picks_page = await library.picks(self.store, scope, picks_page)
-            unmatched, no_match_total, no_match_page = await library.no_matches(
-                self.store, scope, no_match_page
+            # One read of the database for the rows this page shows and for what its
+            # forms stand for: each list as shown is kept for the actions on several
+            # albums, and its form carries the token, never the albums themselves.
+            lists = await library.read(
+                self.store, scope, search, filled_page if filled_shown else None
             )
+            rows, total, page_number = lists.review(page_number)
+            picked, picks_total, picks_page = lists.picks(picks_page)
+            unmatched, no_match_total, no_match_page = lists.no_matches(no_match_page)
+            if filled_shown:
+                filled, filled_total, filled_page = lists.filled()
+            else:  # (counted only: the filled albums are listed when asked for)
+                filled, filled_total = [], lists.filled_total
+            selections = {}
+            for name in library.BULK:
+                listed = lists.shown(name)
+                token = self.jobs.selections.issue(session.token_hash, name, listed)
+                selections[name] = {"token": token, "albums": listed}
+            context["selections"] = selections
+            # Albums whose old release is out and whose chosen one is not in yet.
+            context["replacing"] = await self._replacing(fills)
             albums: set[str] | None = None
             # The pass's own cached catalog, when there is one (not the listeners' cache);
             # nothing is asked while the catalog rests after errors.
@@ -2786,20 +3082,34 @@ class Dashboard:
 
             async def count() -> None:
                 nonlocal albums
-                albums = await self._library_albums()
+                # The lists alone (a search as it is typed, an action's progress every
+                # two seconds) do not show the counts above them: not read.
+                if not lists_only:
+                    albums = await self._library_albums()
 
             async def describe() -> None:
+                # What is not described within the wait is described in the background:
+                # the next view has it. The lists alone wait a moment only, so a search
+                # as it is typed is not held up by the catalog.
                 if not fills.resting:
                     refs = [r for row in rows for r in row.refs]
                     refs += [r for pick in picked for r in pick.refs]
-                    await self.describer.describe(describing, refs)
+                    refs += [r for row in filled for r in row.refs]
+                    await self.describer.describe(
+                        describing,
+                        refs,
+                        wait=library.LISTS_DESCRIBE_SECONDS if lists_only else None,
+                        spawn=self.host.try_spawn,
+                    )
 
             async with anyio.create_task_group() as group:
                 group.start_soon(count)
                 group.start_soon(describe)
             context.update(
                 page=page_number,
-                counts=await library.counts(self.store, scope, albums, fills.policy),
+                counts=None
+                if lists_only
+                else await library.counts(self.store, scope, albums, fills.policy),
                 albums=len(albums) if albums is not None else None,
                 review=[
                     {
@@ -2828,6 +3138,23 @@ class Dashboard:
                     }
                     for row in picked
                 ],
+                filled=[
+                    {
+                        "row": row,
+                        "label": self.describer.label(row.refs[0]) if row.refs else None,
+                        "options": [
+                            (ref, self.describer.label(ref) or f"Release {ref.partition(':')[2]}")
+                            for ref in row.refs
+                        ],
+                        "job": self.jobs.running(row.album_id),
+                    }
+                    for row in filled
+                ],
+                filled_total=filled_total,
+                filled_page=filled_page,
+                filled_pages=max(1, -(-filled_total // library.PAGE)),
+                filled_first=(filled_page - 1) * library.PAGE + 1,
+                filled_last=min(filled_total, filled_page * library.PAGE),
                 picks_total=picks_total,
                 picks_page=picks_page,
                 picks_pages=max(1, -(-picks_total // library.PAGE)),
@@ -2845,9 +3172,20 @@ class Dashboard:
                 resting=_wall(fills.resting_until, fills.clock) if fills.resting else None,
                 pass_mode=passing.mode if passing is not None else "",
                 interval=(passing.interval_seconds / 3600) if passing is not None else 0,
+                track_lists=await library.track_lists(self.store)
+                if not lists_only
+                and passing is not None
+                and passing.mode != "off"
+                and passing.track_lists is not None
+                and passing.track_lists.enabled
+                else None,
             )
         return await self._render(
-            "library.html", session=session, current="library", status_code=status_code, **context
+            "_library_lists.html" if lists_only else "library.html",
+            session=session,
+            current="library",
+            status_code=status_code,
+            **context,
         )
 
     async def _library_albums(self) -> set[str] | None:
@@ -2937,9 +3275,9 @@ class Dashboard:
         form: dict[str, str] = request.state.form
         album_id = request.path_params["album"]
         if form.get("list") == "picked":
-            back = f"/library?picks={quote(form.get('page', '1'))}#picked"
+            back = _library_back(form, "picks", "picked")
         else:
-            back = f"/library?page={quote(form.get('page', '1'))}#review"
+            back = _library_back(form, "page", "review")
         if fills is None:
             raise Refused(PlainTextResponse("Filling albums is off.\n", 409, headers=HEADERS))
 
@@ -2947,63 +3285,300 @@ class Dashboard:
             self._remember(session, Flash("library", words=words, tone=tone))
             return self._see(back)
 
+        settled = await self.settle_review(
+            fills,
+            album_id,
+            form.get("action", ""),
+            form.get("release", ""),
+            printable(session.username),
+        )
+        return note(settled.words, settled.tone)
+
+    async def settle_review(
+        self,
+        fills: Any,
+        album_id: str,
+        action: str,
+        ref: str,
+        who: str,
+        *,
+        authorize: Callable[[], Awaitable[None]] | None = None,
+    ) -> library.Settled:
+        """One album of the review list filled from a named release, kept as it is, or
+        matched again: the Library page's action, and an administrator's agent's. A fill
+        and a match run in the background (``Settled.job``); a keep is done at once.
+        The action for several albums runs the same ``_fill``, ``_keep`` and ``_match``.
+        ``who``: for the log. ``authorize`` (an agent's): asked again before the
+        background work starts, where files are written, and after every wait immediately
+        before a decision is deleted or recorded (``Fills.guard_decisions``); it refuses
+        with a ``MaterializeError`` whose reason says why, and the action then ends with
+        it, leaving that decision as it was."""
+        services = self.services
         found = await self._review_row(fills, album_id)
         if found is None:
-            return note("That album is no longer in the review list.")
+            return library.Settled("That album is no longer in the review list.", state="gone")
         name = f"{found['artist'] or 'Unknown artist'} \u2013 {found['title'] or 'Unknown album'}"
-        action = form.get("action", "")
         if action not in ("fill", "keep", "rematch"):
-            return note("Choose Fill, Keep as is or Match again.", "error")
+            return library.Settled("Choose Fill, Keep as is or Match again.", "error")
         if action == "rematch" and fills.resting:
             until = when(_wall(fills.resting_until, fills.clock))
-            return note(
-                f"{name} is not matched again now: the catalog is resting after errors."
-                f" Try again after {until}.",
+            return library.Settled(
+                Markup(
+                    "{} is not matched again now: the catalog is resting after errors."
+                    " Try again after {}."
+                ).format(name, until),
                 "error",
+                "resting",
             )
         refs = [found["release_ref"]] if found["release_ref"] else []
         refs += [r for r in (found["candidates"] or "").split(",") if r and r not in refs]
-        ref = form.get("release", "")
         if action == "fill":
             if library.is_part(found["reason"] or ""):
-                return note(
+                return library.Settled(
                     f"{name} is part of another album's release: it is not filled on its own.",
                     "error",
+                    "refused",
                 )
             if ref not in refs:
-                return note(f"{name}: choose one of the listed releases.", "error")
+                return library.Settled(
+                    f"{name}: choose one of the listed releases.", "error", "refused"
+                )
         # Claimed before anything is awaited: one action at a time for an album.
         job = self.jobs.claim(album_id, name, action)
         if job is None:
-            return note(f"{name} is busy with the last action; wait for its result.")
-        who = printable(session.username)
+            return library.Settled(
+                f"{name} is busy with the last action; wait for its result.", state="busy"
+            )
+
+        @contextlib.contextmanager
+        def guarded() -> Iterator[None]:
+            """An agent's action, carried out only while it may still act: asked again
+            where files are written (the engine) and immediately before a decision is
+            deleted or recorded (the fills), after every wait."""
+            if authorize is None or services is None:
+                yield
+                return
+            with services.engine.guard_writes(authorize), fills.guard_decisions(authorize):
+                yield
+
         if action == "keep":
             try:
-                await fills.keep(album_id)
-            except ChoiceRefused as exc:
-                self.jobs.drop(job)
-                return note(f"{name} could not be kept as it is: {exc.reason}.", "error")
-            except NavidromeError as exc:
-                self.jobs.drop(job)
-                return note(f"{name} could not be kept as it is: {exc}.", "error")
-            self.jobs.drop(job)
+                with guarded():
+                    await self._keep(fills, job)
+            finally:
+                self.jobs.drop(job)  # answered here: nothing to show later
+            if not job.ok:
+                return library.Settled(job.message, "error", "refused")
             log.info("dashboard: %s kept %s as it is", who, printable(name))
-            return note(f"{name} is kept as it is: it is not matched again in this catalog.", "ok")
+            return library.Settled(
+                f"{name} is kept as it is: it is not matched again in this catalog.", "ok", "kept"
+            )
+
+        async def work() -> None:
+            """The action in the background; an agent's is asked about before it starts too."""
+            if authorize is not None:
+                try:
+                    await authorize()
+                except MaterializeError as exc:
+                    self.jobs.finish(job, ok=False, message=f"{name}: {exc.reason}; nothing done.")
+                    return
+            with guarded():
+                if action == "fill":
+                    await self._fill(fills, job, ref, label)
+                else:
+                    await self._match(fills, job)
+
+        label = self.describer.label(ref) or ref
         if action == "fill":
-            label = self.describer.label(ref) or ref
             log.info("dashboard: %s chose %s for %s", who, ref, printable(name))
-            started = self.host.try_spawn(lambda: self._fill(fills, job, ref, label))
             words = (
                 f"Filling {name} from {label}. This can take a minute; reload to see how it went."
             )
         else:
             log.info("dashboard: %s asked to match %s again", who, printable(name))
-            started = self.host.try_spawn(lambda: self._match(fills, job))
             words = f"Matching {name} again. Reload to see the result."
-        if not started:
+        if not self.host.try_spawn(work):
             self.jobs.finish(job, ok=False, message=f"{name}: Shijhon is stopping; nothing done.")
-            return note(f"{name}: Shijhon is stopping; nothing done.", "error")
-        return note(words)
+            return library.Settled(
+                f"{name}: Shijhon is stopping; nothing done.", "error", "stopping"
+            )
+        return library.Settled(words, state="started", job=job)
+
+    async def review_albums(self, fills: Any, page: int) -> dict[str, Any]:
+        """One page of the review list as the Library page shows it, in plain values for an
+        administrator's agent: each album, why it needs a decision, and the releases
+        offered (the chosen one first), described as the page describes them."""
+        assert self.store is not None
+        services = self.services
+        # The page's own read of its lists (without a search): one state of the database.
+        rows, total, page = (await library.read(self.store, fills.scope)).review(page)
+        if not fills.resting:  # (nothing is asked while the catalog rests after errors)
+            passing = services.library_pass if services is not None else None
+            own = getattr(getattr(passing, "matcher", None), "catalog", None)
+            describing = getattr(own, "inner", None) or (services.catalog if services else None)
+            await self.describer.describe(describing, [ref for row in rows for ref in row.refs])
+        albums = []
+        for row in rows:
+            job = self.jobs.running(row.album_id)
+            albums.append(
+                {
+                    "album_id": row.album_id,
+                    "title": row.title,
+                    "artist": row.artist,
+                    "owned_songs": row.owned,
+                    "release_tracks": row.tracks,
+                    "why": row.headline,
+                    "detail": row.sentence,
+                    "part_of_another_album": row.part,
+                    "from_a_dry_run": row.planned,
+                    "releases": [
+                        {"release": ref, "description": self.describer.label(ref) or ""}
+                        for ref in row.refs
+                    ],
+                    **({"action_running": job.action} if job is not None else {}),
+                }
+            )
+        return {
+            "albums": albums,
+            "total": total,
+            "page": page,
+            "pages": max(1, -(-total // library.PAGE)),
+        }
+
+    async def server_status(self) -> dict[str, Any]:
+        """What Diagnostics says that helps tell a person what needs them, in plain values
+        for an administrator's agent. Read-only. No address (but an add-on's sign-in page,
+        when that is a plain page address), no token, no setting's value, nothing of any
+        account. The checks are Diagnostics' own, at their pace; what does not answer
+        within a few seconds is reported as not known."""
+        assert self.store is not None and self.saved is not None
+        services, store = self.services, self.store
+        if services is None:
+            raise Refused(PlainTextResponse("Shijhon is starting.\n", 503, headers=HEADERS))
+        addons = await services.sources.stored()
+        found: dict[str, Any] = {}
+
+        async def navidrome() -> None:
+            found["navidrome"] = await status.navidrome_status(services.navidrome)
+
+        async def manifests() -> None:
+            await self.checks.check(addons)
+
+        async def catalog() -> None:
+            assert self.saved is not None
+            found["catalog"] = await self._catalog_status(await self.saved.all())
+
+        with anyio.move_on_after(STATUS_SECONDS):
+            async with anyio.create_task_group() as group:
+                for work in (navidrome, manifests, catalog):
+                    group.start_soon(work)
+
+        def at(moment: float | None) -> str | None:
+            return instant(moment) if moment else None
+
+        nd: status.NavidromeStatus | None = found.get("navidrome")
+        attention: list[str] = []
+        if nd is None:
+            navidrome_part: dict[str, Any] = {"state": "not_known"}
+        elif not nd.answering:
+            navidrome_part = {"state": "not_answering"}
+            attention.append("Navidrome does not answer.")
+        else:
+            navidrome_part = {
+                "state": "answering",
+                "songs": nd.songs,
+                "albums": nd.albums,
+                "last_scan": at(nd.last_scan),
+            }
+        info = found.get("catalog")
+        if info is None:
+            catalog_part: dict[str, Any] = {"state": "not_known"}
+        elif not info["running"] and info["kind"] == "none":
+            catalog_part = {"state": "not_chosen"}
+        elif not info["running"]:
+            catalog_part = {"state": "not_running"}
+            attention.append(
+                "The catalog is not running: the Catalog page says what it is missing."
+                if info["problem"] is not None
+                else "The catalog is not running until Shijhon restarts."
+            )
+        else:
+            check = info["check"]
+            resting = info["resting"]
+            catalog_part = {
+                "state": "resting" if resting else "ok" if check is None or check.ok else "failing",
+                "checked_at": at(check.at) if check is not None else None,
+                "resting_until": at(resting),
+            }
+            if check is not None and not check.ok:
+                # The kind of failure only: a reason is the adapter's own text.
+                catalog_part["error"] = (check.error or "").split(":", 1)[0][:40]
+                attention.append("The catalog's last check failed.")
+            elif resting:
+                attention.append("The catalog is resting after errors.")
+        listed = []
+        for addon in addons:
+            health = self._health(addon)
+            item: dict[str, Any] = {"name": addon.name, "state": health["state"]}
+            if health["state"] == "needs_sign_in":
+                page = _plain_page(health["link"])
+                if page is not None:
+                    item["sign_in_page"] = page
+                attention.append(f"The add-on {addon.name} needs its operator to sign in.")
+            elif health["state"] in ("failing", "manifest_unreachable"):
+                attention.append(f"The add-on {addon.name} is not working.")
+            listed.append(item)
+        fills = services.fills
+        review = await library.review_count(store, fills.scope) if fills is not None else 0
+        if review:
+            attention.append(
+                f"{review:,} album{'s' if review != 1 else ''} wait in the review list."
+            )
+        cleanup = services.cleanup
+        running = self.running or self.host.configured
+        swept = cleanup.last if cleanup is not None else None
+        failed = cleanup.failed if cleanup is not None else None
+        cleanup_part: dict[str, Any] = {
+            "mode": cleanup.mode if cleanup is not None else running.cleanup.mode,
+            "last_check": at(swept.listed.at)
+            if swept is not None and swept.listed is not None
+            else None,
+            "next_check": at(cleanup.next_at) if cleanup is not None else None,
+        }
+        if swept is not None:
+            cleanup_part.update(
+                releases_taken_out=len(swept.removed),
+                failed=swept.failed,
+                stopped=bool(swept.stopped or swept.refused),
+            )
+        checked = swept.listed.at if swept is not None and swept.listed is not None else 0.0
+        if failed and failed[0] > checked:  # (a check since then went through)
+            cleanup_part["last_failure"] = at(failed[0])
+            attention.append("The cleanup's last check failed: the Cleanup page says more.")
+        pending = await self._pending()
+        if pending:
+            attention.append("Saved settings wait for a restart of Shijhon.")
+        return {
+            "versions": {
+                "shijhon": __version__,
+                "navidrome": nd.version if nd is not None else None,
+                "navidrome_tested": status.PINNED_NAVIDROME,
+                "database_schema": await status.schema(store),
+                "database_schema_expected": status.bundled_schema(),
+            },
+            "started": at(self.started_at),
+            "navidrome": navidrome_part,
+            "catalog": catalog_part,
+            "addons": listed,
+            "review_list": {"albums": review},
+            "cleanup": cleanup_part,
+            "restart": {
+                "pending": bool(pending),
+                # The settings' names as their pages show them: never their values.
+                "settings": [str(item["label"]) for item in pending][:50],
+            },
+            "needs_attention": attention,
+        }
 
     async def library_recheck(self, request: Request, session: Session) -> Response:
         """Match one current negative result again, without adding files."""
@@ -3011,7 +3586,7 @@ class Dashboard:
         fills = services.fills if services is not None else None
         form: dict[str, str] = request.state.form
         album_id = request.path_params["album"]
-        back = f"/library?no_match={quote(form.get('page', '1'))}#no-match"
+        back = _library_back(form, "no_match", "no-match")
         if fills is None:
             raise Refused(PlainTextResponse("Filling albums is off.\n", 409, headers=HEADERS))
 
@@ -3029,8 +3604,10 @@ class Dashboard:
         if fills.resting:
             until = when(_wall(fills.resting_until, fills.clock))
             return note(
-                f"{name} is not matched again now: the catalog is resting after errors."
-                f" Try again after {until}.",
+                Markup(
+                    "{} is not matched again now: the catalog is resting after errors."
+                    " Try again after {}."
+                ).format(name, until),
                 "error",
             )
         job = self.jobs.claim(album_id, name, "recheck")
@@ -3043,6 +3620,302 @@ class Dashboard:
             return note(words, "error")
         return note(f"Matching {name} again. No files are added. Reload to see the result.")
 
+    async def library_change(self, request: Request, session: Session) -> Response:
+        """Fill a filled album from another of the releases its match listed (the wrong
+        edition was filled): in the background."""
+        assert self.store is not None
+        services = self.services
+        fills = services.fills if services is not None else None
+        cleanup = services.cleanup if services is not None else None
+        form: dict[str, str] = request.state.form
+        album_id = request.path_params["album"]
+        if form.get("list") == "picked":
+            back = _library_back(form, "picks", "picked")
+        else:
+            back = _library_back(form, "filled", "filled")
+        if fills is None or cleanup is None:
+            raise Refused(PlainTextResponse("Filling albums is off.\n", 409, headers=HEADERS))
+
+        def note(words: str, tone: str = "info") -> Response:
+            self._remember(session, Flash("library", words=words, tone=tone))
+            return self._see(back)
+
+        found = await self._filled_row(fills, album_id)
+        if found is None:
+            return note("That album is no longer filled.")
+        name = f"{found['artist'] or 'Unknown artist'} \u2013 {found['title'] or 'Unknown album'}"
+        refs = [found["release_ref"], *(found["candidates"] or "").split(",")]
+        ref = form.get("release", "")
+        if not ref or ref not in refs or ref == found["filled_ref"]:
+            return note(f"{name}: choose one of the other listed releases.", "error")
+        job = self.jobs.claim(album_id, name, "change")
+        if job is None:
+            return note(f"{name} is busy with the last action; wait for its result.")
+        label = self.describer.label(ref) or ref
+        log.info(
+            "dashboard: %s chose %s for %s in place of %s",
+            printable(session.username),
+            ref,
+            printable(name),
+            found["filled_ref"],
+        )
+        if not self.host.try_spawn(lambda: self._change(fills, cleanup, job, ref, label)):
+            self.jobs.finish(job, ok=False, message=f"{name}: Shijhon is stopping; nothing done.")
+            return note(f"{name}: Shijhon is stopping; nothing done.", "error")
+        return note(
+            f"Filling {name} from {label} instead. This can take a few minutes; reload to see"
+            " how it went."
+        )
+
+    async def _replacing(self, fills: Any) -> list[dict[str, Any]]:
+        """The release changes left unfinished (a fill that failed, a stop), for the page:
+        the album, why, and whether Shijhon tries again by itself."""
+        assert self.store is not None
+        found = []
+        for left in await fills.replacements.all_unfinished():
+            if self.jobs.running(left.album_id) is not None:
+                continue  # (under way now: its own notice follows)
+            row = await self.store.fetchone(
+                "SELECT title, artist FROM album_matches WHERE album_id = ? AND scope = ?",
+                [left.album_id, fills.scope],
+            )
+            artist = (row["artist"] if row else "") or "Unknown artist"
+            title = (row["title"] if row else "") or "Unknown album"
+            found.append(
+                {
+                    "name": f"{artist} \u2013 {title}",
+                    "release": self.describer.label(left.new_ref) or left.new_ref,
+                    "reason": left.reason,
+                    "again": left.retry_at is not None,
+                }
+            )
+        return found
+
+    async def _filled_row(self, fills: Any, album_id: str) -> Any:
+        """The album's match and the release it is filled from, while it is filled."""
+        assert self.store is not None
+        return await self.store.fetchone(
+            "SELECT m.title, m.artist, m.candidates, m.release_ref, r.ref AS filled_ref"
+            " FROM album_matches m"
+            " JOIN releases r ON r.owned_album_id = m.album_id"
+            " WHERE m.album_id = ? AND m.scope = ? AND m.outcome IN ('filled', 'deferred')",
+            [album_id, fills.scope],
+        )
+
+    async def _change(
+        self, fills: Any, cleanup: Any, job: library.Job, ref: str, label: str
+    ) -> None:
+        """One library write at a time, as a fill (the second must see the first's result)."""
+
+        def songs(count: int) -> str:
+            return f"{count} song{'s' if count != 1 else ''}"
+
+        try:
+            async with self.jobs.one_fill:
+                if await self._filled_row(fills, job.album_id) is None:
+                    self.jobs.finish(job, ok=False, message=f"{job.title} is no longer filled.")
+                    return
+                decision = await fills.change(job.album_id, ref, cleanup.take_out_now)
+        except InUse as exc:
+            self.jobs.finish(
+                job,
+                ok=False,
+                message=f"{job.title} stays as it is: songs its fill added are in use"
+                f" ({', '.join(exc.uses)}). Nothing was changed.",
+            )
+            return
+        except ChoiceRefused as exc:
+            self.jobs.finish(job, ok=False, message=f"{job.title} was not changed: {exc.reason}.")
+            return
+        except FillPending as exc:
+            self.jobs.finish(
+                job,
+                ok=False,
+                message=f"{job.title}: the {songs(exc.removed)} its old release added"
+                f" {'was' if exc.removed == 1 else 'were'} taken out, but it was not filled"
+                f" from {label} now ({exc.reason}). It is shown complete with {label}, and"
+                " Shijhon tries the fill again by itself, also after a restart. If that keeps"
+                " failing, the album is filled when one of its songs is next used.",
+            )
+            return
+        except (CatalogError, NavidromeError, MaterializeError, NotFresh) as exc:
+            reason = getattr(exc, "reason", None) or str(exc)
+            self.jobs.finish(job, ok=False, message=f"{job.title} was not changed: {reason}.")
+            return
+        except BaseException as exc:
+            message = f"{job.title} was not changed ({type(exc).__name__})."
+            self.jobs.finish(job, ok=False, message=message)
+            if not isinstance(exc, Exception):
+                raise  # canceled (Shijhon stopping): the job is finished all the same
+            log.exception("dashboard: changing the release of %s failed", printable(job.title))
+            return
+        went = f"the {songs(decision.removed)} its old release added"
+        went += " was taken out" if decision.removed == 1 else " were taken out"
+        if decision.outcome == "filled":
+            self.jobs.finish(
+                job,
+                ok=True,
+                message=f"{job.title} is filled from {label} now: {went}, {decision.added} added.",
+            )
+        elif decision.outcome == "complete":
+            self.jobs.finish(
+                job,
+                ok=True,
+                message=f"{job.title}: {went}. {label} adds nothing; the album is complete.",
+            )
+        else:
+            why = (
+                f"{label} was added to the library as an album of its own meanwhile"
+                if decision.reason == IN_LIBRARY
+                else f"the songs of {label} did not join the album"
+            )
+            self.jobs.finish(
+                job,
+                ok=False,
+                message=f"{job.title}: {went}, but {why}; it is in the review list.",
+            )
+
+    async def library_bulk(self, request: Request, session: Session) -> Response:
+        """One action for the albums selected in a list - those ticked, or all the list
+        holds under the search: started in the background, one album after another."""
+        assert self.store is not None
+        services = self.services
+        fills = services.fills if services is not None else None
+        form: dict[str, str] = request.state.form
+        name = form.get("list", "")
+        if fills is None:
+            raise Refused(PlainTextResponse("Filling albums is off.\n", 409, headers=HEADERS))
+        if name not in library.BULK:
+            raise Refused(PlainTextResponse("No such list.\n", 400, headers=HEADERS))
+        pages, anchor = {"review": "page", "picked": "picks", "none": "no_match"}[name], name
+        back = _library_back(form, pages, "no-match" if anchor == "none" else anchor)
+
+        def note(words: str, tone: str = "info") -> Response:
+            self._remember(session, Flash("library", words=words, tone=tone))
+            return self._see(back)
+
+        action = form.get("action", "")
+        if action not in library.BULK[name]:
+            return note("Choose one of the actions for the selected albums.", "error")
+        # What the page showed, by the token its form carries: never the list as it is now.
+        selection = self.jobs.selections.find(session.token_hash, name, form.get("selection", ""))
+        if selection == library.USED:
+            return note(
+                "That selection was used already: its action was started before, and nothing"
+                " was started again. Select the albums anew.",
+            )
+        if isinstance(selection, str):
+            return note(
+                "The page was loaded too long ago to act on its lists. It is loaded anew:"
+                " select the albums again.",
+                "error",
+            )
+        listed = list(selection.albums)
+        if form.get("all") != "1":  # those ticked, in the list's order
+            ticked = {key[len("album:") :] for key in form if key.startswith("album:")}
+            listed = [album_id for album_id in listed if album_id in ticked]
+        if not listed:
+            return note("Select the albums first.", "error")
+        if action in ("rematch", "recheck") and fills.resting:
+            until = when(_wall(fills.resting_until, fills.clock))
+            return note(
+                "Nothing is matched again now: the catalog is resting after errors. Try again"
+                f" after {until}.",
+                "error",
+            )
+        batch = self.jobs.begin(action, selection, listed)
+        if batch is None:
+            return note("Another action for several albums is running; wait for it or stop it.")
+        who = printable(session.username)
+        log.info("dashboard: %s started %s for %d album(s)", who, action, len(listed))
+        if not self.host.try_spawn(lambda: self._bulk(fills, batch)):
+            batch.stopped, batch.finished = "Shijhon is stopping", self.jobs.clock()
+            return note("Shijhon is stopping; nothing done.", "error")
+        return self._see(back)
+
+    async def library_bulk_stop(self, request: Request, session: Session) -> Response:
+        """Stop the action for several albums after the album under way."""
+        form: dict[str, str] = request.state.form
+        batch = self.jobs.batch
+        if batch is not None and batch.finished is None:
+            batch.stopping = True
+            log.info("dashboard: %s stopped the action for several albums",
+                     printable(session.username))  # fmt: skip
+        return self._see(_library_back(form, "page", "albums"))
+
+    async def _bulk(self, fills: Any, batch: library.Batch) -> None:
+        """The batch's albums, one after another - each through the action it would get
+        alone, with its own checks under its own locks, and only while its match is still
+        as the page showed it."""
+        try:
+            for album_id in batch.albums:
+                if batch.stopping:
+                    batch.stopped = "you stopped it"
+                    break
+                if batch.action in ("rematch", "recheck") and fills.resting:
+                    batch.stopped = "the catalog is resting after errors"
+                    break
+                await self._bulk_one(fills, batch, album_id)
+        except Exception as exc:
+            batch.stopped = f"an unexpected error ({type(exc).__name__})"
+            log.exception("dashboard: the action for several albums failed")
+        except BaseException:  # canceled (Shijhon stopping): it ends here all the same
+            batch.stopped = "Shijhon is stopping"
+            raise
+        finally:
+            batch.current = ""
+            batch.finished = self.jobs.clock()
+            log.info("dashboard: %s", batch.summary())
+
+    async def _bulk_one(self, fills: Any, batch: library.Batch, album_id: str) -> None:
+        assert self.store is not None
+        name, action, shown = batch.name, batch.action, batch.shown[album_id]
+
+        async def listed() -> Any:
+            if name == "none":
+                return await self._negative_row(fills, album_id)
+            return await self._review_row(fills, album_id)
+
+        found = await self.store.fetchone(
+            "SELECT title, artist FROM album_matches WHERE album_id = ? AND scope = ?",
+            [album_id, fills.scope],
+        )
+        if found is None:  # (no match at all any more)
+            batch.note("changed")
+            return
+        title = found["title"] or (f"Unknown album ({album_id})" if name == "none" else "")
+        title = f"{found['artist'] or 'Unknown artist'} \u2013 {title or 'Unknown album'}"
+        ref = shown.release  # the release the page offered, never one the match took since
+        if action == "fill" and not ref:
+            batch.note("unchosen")
+            return
+        batch.current = title
+        job = self.jobs.claim(album_id, title, action)
+        if job is None:
+            batch.note("failed", f"{title} is busy with another action.")
+            return
+        # Each action checks, under its own locks, that the match is still as shown.
+        try:
+            if action == "fill":
+                label = self.describer.label(ref) or ref
+                await self._fill(fills, job, ref, label, expected=shown.state)
+            elif action == "keep":
+                await self._keep(fills, job, expected=shown.state)
+            elif action == "rematch":
+                await self._match(fills, job, expected=shown.state)
+            else:
+                await self._recheck(fills, job, expected=shown.state)
+        finally:
+            self.jobs.drop(job)  # the batch says how it went: no notice of its own
+        if job.changed:
+            batch.note("changed")
+        elif job.ok:
+            batch.note("ok")
+        elif action in ("rematch", "recheck") and await listed() is not None:
+            batch.note("same")  # matched again with the result it had
+        else:
+            batch.note("failed", job.message or f"{title}: nothing done.")
+
     async def _negative_row(self, fills: Any, album_id: str) -> Any:
         """The current scope's negative result; other outcomes never use this action."""
         assert self.store is not None
@@ -3052,14 +3925,20 @@ class Dashboard:
             [album_id, fills.scope],
         )
 
-    async def _recheck(self, fills: Any, job: library.Job) -> None:
-        """Check eligibility again in the job; Fills guards the rematch atomically."""
+    async def _recheck(self, fills: Any, job: library.Job, *, expected: str | None = None) -> None:
+        """Check eligibility again in the job; Fills guards the rematch atomically.
+        ``expected``: the match's state as the page showed it (an action for several
+        albums) - checked under the action's locks, and a match changed since is left."""
         changed = f"{job.title}: the match has changed. Reload to see its current result."
         try:
             if await self._negative_row(fills, job.album_id) is None:
+                job.changed = expected is not None
                 self.jobs.finish(job, ok=False, message=changed)
                 return
-            decision = await fills.recheck(job.album_id)
+            if expected is None:
+                decision = await fills.recheck(job.album_id)
+            else:
+                decision = await fills.recheck(job.album_id, expected=expected)
             if decision is None:
                 reason = (
                     "the catalog is resting" if fills.resting else "it could not be checked now"
@@ -3071,7 +3950,8 @@ class Dashboard:
                 )
                 return
             await self._match_result(fills, job)
-        except ChoiceRefused:
+        except ChoiceRefused as exc:
+            job.changed = isinstance(exc, Changed)
             self.jobs.finish(job, ok=False, message=changed)
         except BaseException as exc:
             self.jobs.finish(
@@ -3093,17 +3973,40 @@ class Dashboard:
             [album_id, fills.scope],
         )
 
-    async def _fill(self, fills: Any, job: library.Job, ref: str, label: str) -> None:
+    async def _keep(self, fills: Any, job: library.Job, *, expected: str | None = None) -> None:
+        """Keep the album as it is; the job says how it went (``ok``, or its ``message``:
+        why not). ``expected``: the match's state as the page showed it (an action for
+        several albums); a match changed since is left (``changed``)."""
+        try:
+            await fills.keep(job.album_id, expected=expected)
+        except Changed:
+            job.changed = True
+            job.message = f"{job.title} was not kept as it is: its match has changed."
+        except (ChoiceRefused, NavidromeError) as exc:
+            reason = getattr(exc, "reason", None) or str(exc)
+            job.message = f"{job.title} could not be kept as it is: {reason}."
+        else:
+            job.ok = True
+
+    async def _fill(
+        self, fills: Any, job: library.Job, ref: str, label: str, *, expected: str | None = None
+    ) -> None:
         """One fill at a time (two albums may list the same release: the second must see
-        the first's result)."""
+        the first's result). ``expected``: the match's state as the page showed it (an
+        action for several albums); a match changed since is not filled."""
         try:
             async with self.jobs.one_fill:
                 if await self._review_row(fills, job.album_id) is None:
+                    job.changed = expected is not None
                     self.jobs.finish(
                         job, ok=False, message=f"{job.title} is no longer in the review list."
                     )
                     return
-                decision = await fills.choose(job.album_id, ref)
+                decision = await fills.choose(job.album_id, ref, expected=expected)
+        except Changed as exc:
+            job.changed = True
+            self.jobs.finish(job, ok=False, message=f"{job.title} was not filled: {exc.reason}.")
+            return
         except ChoiceRefused as exc:
             self.jobs.finish(job, ok=False, message=f"{job.title} was not filled: {exc.reason}.")
             return
@@ -3137,16 +4040,27 @@ class Dashboard:
                 " review list.",
             )
 
-    async def _match(self, fills: Any, job: library.Job) -> None:
+    async def _match(self, fills: Any, job: library.Job, *, expected: str | None = None) -> None:
         """Forget the album's match and match it again at the pass's pace, without filling;
         the result is read from the album's own row (the match of a release shared by
-        several owned albums may record the result on another one)."""
+        several owned albums may record the result on another one). ``expected``: the
+        match's state as the page showed it (an action for several albums); a match
+        changed since is kept."""
         services = self.services
         paced = services.library_pass.matcher if services and services.library_pass else None
         try:
-            await fills.rematch(job.album_id)
+            try:
+                await fills.rematch(job.album_id, expected=expected)
+            except Changed as exc:
+                job.changed = True
+                message = f"{job.title} was not matched again: {exc.reason}."
+                self.jobs.finish(job, ok=False, message=message)
+                return
             await fills.fill(job.album_id, hold=True, matcher=paced)
             await self._match_result(fills, job)
+        except ChoiceRefused as exc:  # (an agent's action it may no longer have carried out)
+            message = f"{job.title} was not matched again: {exc.reason}."
+            self.jobs.finish(job, ok=False, message=message)
         except BaseException as exc:
             self.jobs.finish(
                 job, ok=False, message=f"{job.title} could not be matched ({type(exc).__name__})."
@@ -3465,7 +4379,9 @@ class Dashboard:
             return note("A check is under way: its result shows here when it is done.")
         wait = cleaning.next_dry_run(cleanup)
         if wait is not None:
-            return note(f"A dry run ran a moment ago: another can start at {hm(wait)}.")
+            return note(
+                Markup("A dry run ran a moment ago: another can start at {}.").format(hm(wait))
+            )
 
         async def run() -> None:
             try:
@@ -3556,6 +4472,12 @@ class Dashboard:
             bundled=status.bundled_schema(),
             started=self.started_at,
             storage=self._storage,
+            # The music folder's files are to get their artist lists, but Shijhon cannot write.
+            library_read_only=bool(
+                services is not None
+                and services.artist_lists is not None
+                and await anyio.to_thread.run_sync(services.artist_lists.read_only)
+            ),
             database_private=status.private_mode(self.host.configured.database_path),
             errors=self.errors.recent(),
             starts=[
@@ -3634,6 +4556,24 @@ class Dashboard:
         )
 
 
+def _plain_page(url: Any) -> str | None:
+    """An add-on's sign-in page as an agent may be told it: an http(s) page address without
+    a query string, a fragment or a user part - what such parts carry is not for an agent.
+    Any other is left out (the Add-ons page links it)."""
+    if not isinstance(url, str) or len(url) > 2048:
+        return None
+    try:
+        parts = urlsplit(url)
+        named = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not named:
+        return None
+    if parts.query or parts.fragment or "?" in url or "#" in url or "@" in parts.netloc:
+        return None
+    return url
+
+
 def _wall(until: float, clock: Callable[[], float]) -> float:
     """A time on another clock (a monotonic one) as wall-clock time."""
     return time.time() + (until - clock())
@@ -3676,12 +4616,14 @@ def _catalog_addon(catalog: Any) -> str:
     return inner.name if isinstance(inner, AddonCatalog) else ""
 
 
-def _saved(written: sections.Written) -> str:
+def _saved(written: sections.Written) -> str | Markup:
     gone = [key for key, _ in written.displaced if key not in written.changed]
     count = len(written.changed) + len(written.removed) + len(gone)
     if not count:
         return "Nothing to save: no setting changed"
-    return f"Saved {count} change{'s' if count != 1 else ''} at {hm(time.time())}"
+    return Markup("Saved {} change{} at {}").format(
+        count, "s" if count != 1 else "", hm(time.time())
+    )
 
 
 def _widens(candidate: Any, applying: Any) -> bool:

@@ -452,6 +452,37 @@ class CatalogSettings(BaseModel):
     # Clean and explicit versions of one album or song: show the explicit one, the
     # clean one, or both. A catalog without such flags: one of them.
     twins: Literal["explicit", "clean", "both"] = "explicit"
+    # The daily cap on adding: how many catalog releases one account that is not a
+    # Navidrome administrator may add to the library within 24 hours, whatever the way
+    # (an app, a playlist, an import, an agent). 0: no limit.
+    user_releases_per_day: int = Field(default=0, ge=0, le=100_000)
+    # Library artists Navidrome has no picture for get the catalog artist's, uploaded to
+    # Navidrome as a person would set one (``artist_pictures``). Off: those Shijhon set are
+    # removed again.
+    artist_pictures: bool = True
+    # Files whose one artist text names several artists ("A, B") get the multi-valued
+    # artists tag from a catalog's list of them, when their text is exactly those names
+    # (``artist_lists``). Off: Shijhon's changes to files still as it left them go again.
+    artist_lists: bool = True
+    # ... also files in the music folder (not only imports' and placeholders): the folder
+    # must then be writable for Shijhon. Off: those it changed, still as it left them, are
+    # given back (``artist_lists_library``, the owner's opt-in).
+    artist_lists_library: bool = False
+    # More catalogs asked for those lists, after the configured one: installed catalog
+    # adapters by kind, e.g. ["musicbrainz"] (``artist_lists_catalogs``). Each is built with
+    # its adapter's own settings at their defaults and asked at the library pass's pace; one
+    # that is not installed or cannot be built is logged at startup and passed over.
+    artist_lists_catalogs: list[str] = Field(default_factory=list)
+    # New releases of the artists an account follows (``new_releases.py``; each person
+    # turns it on for themselves on the dashboard): a release counts as new for this many
+    # days. 0: nobody can turn it on, and nothing is checked or shown.
+    new_releases_days: int = Field(default=30, ge=0, le=365)
+    # ... besides an account's favorites, this many of its most played artists are
+    # followed (0: its favorites alone).
+    new_releases_most_played: int = Field(default=25, ge=0, le=500)
+    # ... and one account's daily check asks the catalog about this many artists at most,
+    # those not looked at for the longest first.
+    new_releases_artists_per_day: int = Field(default=150, ge=1, le=5000)
 
     @field_validator("kind")
     @classmethod
@@ -459,6 +490,14 @@ class CatalogSettings(BaseModel):
         if value != plugin.NONE:
             plugin.adapter(value)  # ValueError: not installed (it says what is)
         return value
+
+    @field_validator("artist_lists_catalogs")
+    @classmethod
+    def _kinds(cls, value: list[str]) -> list[str]:
+        """Each kind once, in the given order, as adapters are named (lower case). Kinds
+        that are not installed are kept: they are passed over at startup, not refused."""
+        kinds = (kind.strip().lower() for kind in value)
+        return list(dict.fromkeys(kind for kind in kinds if kind))
 
     @field_validator("cover_sizes")
     @classmethod
@@ -509,6 +548,11 @@ class SearchSettings(BaseModel):
     # answer may wait a second more for its entries' artist items (views/additions.py).
     budget_seconds: float = Field(default=8.0, gt=0, le=120)
     artist_pages: bool = True  # add the catalog releases missing from a library artist
+    # Radio from catalog items: the similar songs of a catalog song, album or artist that
+    # is not in the library, and a catalog artist's similar artists, as Last.fm lists them,
+    # for a caller who connected a Last.fm key for discovery mixes (views/radio.py). Off:
+    # Navidrome's empty answer, as for a caller without a key.
+    radio: bool = True
     # Artist discographies are saved: a saved list answers at once and is refreshed
     # in the background when older than this.
     discography_max_age_days: float = Field(default=7.0, gt=0)
@@ -576,6 +620,12 @@ class FillSettings(BaseModel):
     # 1: fill every album.
     auto_min_songs: int = Field(default=3, ge=1)
     auto_min_share: float = Field(default=0.25, ge=0, le=1)
+    # After its albums, a run of the pass reads the track lists of releases already in the
+    # library again - each about once a month, once a week while new - and adds the tracks
+    # the catalog added since and corrects the lengths of songs that have no audio yet;
+    # nothing else of a song changes. A dry run only counts what it would do. Off: lists
+    # stay as they were when their releases were added.
+    refresh_track_lists: bool = True
     pass_requests_per_second: float = Field(default=1.0, gt=0)  # catalog requests
     pass_start_seconds: float = Field(default=60.0, ge=0)  # after startup
     pass_interval_hours: float = Field(default=6.0, gt=0)  # then it looks for new albums
@@ -706,6 +756,50 @@ class PlaylistSettings(BaseModel):
     import_max_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
 
 
+class NotificationSettings(BaseModel):
+    """Notifications of states that need a person (``notifications.py``), sent through
+    Apprise to the addresses an administrator gives. Off while ``urls`` is empty."""
+
+    # One or more Apprise URLs (ntfy://, discord://, tgram://, mailto://, json://...),
+    # separated by spaces, commas or new lines. They carry tokens: a secret.
+    urls: SecretStr | None = None
+    # What is reported, each when it begins (once while it lasts).
+    addon_sign_in: bool = True
+    cleanup_blocked: bool = True
+    usage_export: bool = True
+    import_review: bool = True
+    playlist_refresh: bool = True
+    snapshot_skipped: bool = True
+
+    @field_validator("urls")
+    @classmethod
+    def _apprise(cls, value: SecretStr | None) -> SecretStr | None:
+        """Each address must be one Apprise can send to; the message names its place in
+        the list, never the address (it holds a token)."""
+        if value is None:
+            return None
+        addresses = notification_urls(value)
+        if not addresses:
+            return None
+        from shijhon.notifications import unusable
+
+        if found := unusable(addresses):
+            raise ValueError(found)
+        return SecretStr("\n".join(addresses))
+
+    def addresses(self) -> list[str]:
+        return notification_urls(self.urls)
+
+
+def notification_urls(value: SecretStr | None) -> list[str]:
+    """The Apprise URLs of the setting, in order, each once."""
+    if value is None:
+        return []
+    from shijhon.notifications import split_urls
+
+    return split_urls(value.get_secret_value())
+
+
 class Settings(BaseSettings):
     # Validation errors never repeat the input: it holds passwords, tokens and add-on URLs.
     model_config = SettingsConfigDict(
@@ -725,6 +819,11 @@ class Settings(BaseSettings):
         return self._from_environment
 
     state_dir: Path = Path("var")
+    # Before a start upgrades the database's schema: a checked copy of it in
+    # state_dir/snapshots (store/backup.py). When it cannot be written, the upgrade runs
+    # without one and the dashboard and the notifications say so (store/skipped.py); off,
+    # the upgrade runs without one and nothing is said.
+    upgrade_snapshots: bool = True
     log_level: Literal[
         "CRITICAL", "FATAL", "ERROR", "WARN", "WARNING", "INFO", "DEBUG", "NOTSET"
     ] = "INFO"
@@ -743,6 +842,7 @@ class Settings(BaseSettings):
     fill: FillSettings = Field(default_factory=FillSettings)
     cleanup: CleanupSettings = Field(default_factory=CleanupSettings)
     audiomuse: AudioMuseSettings = Field(default_factory=AudioMuseSettings)
+    notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     # Audio add-ons in the order they are tried. When given (even empty), the configuration
     # owns the list: at startup add-ons are added, updated and ordered to match it, and
     # stored ones it no longer names are disabled. Not given: the stored list is kept.

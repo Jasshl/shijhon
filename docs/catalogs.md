@@ -111,6 +111,10 @@ not in your library wait until the catalog answers or fails. After a search or a
 artist page found the catalog unavailable or busy, searches are answered only from the
 library for half a minute.
 
+A [radio from a catalog item](how-it-works.md#radio-from-catalog-items) waits the same
+time and then starts with the songs found by then. The rest are looked up in the
+background, and the same radio asked for again has them all.
+
 ## The MusicBrainz adapter
 
 An example adapter: [`shijhon-catalog-musicbrainz`](https://github.com/Jasshl/shijhon-catalog-musicbrainz),

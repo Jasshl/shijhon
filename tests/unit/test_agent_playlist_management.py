@@ -13,14 +13,15 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from shijhon.playlists.model import Definition, Track, fingerprint
-from shijhon.playlists.requests import PlaylistRequest
+from shijhon.playlists.model import Definition, PlaylistError, Track, fingerprint
+from shijhon.playlists.requests import PlaylistRequest, RequestError
 from shijhon.playlists.service import Playlists
 from tests.unit.test_agents import app_at, begin, call, finish
 from tests.unit.test_playlist_explicit_tracks import ARTIST, SONGS, install
 from tests.unit.test_playlist_requests import connected
 
 BY_ID = {s.id: s for s in SONGS.values()}
+LINES = f"{ARTIST} - Night Bloom\nOrrin Vale - Lantern Hall"  # pasted import lines
 
 
 def described(service: Playlists, native: dict[str, Any]) -> None:
@@ -660,6 +661,181 @@ def test_a_replacement_stops_when_its_agent_is_revoked_before_it_runs(tmp_path: 
             status = await app.service.requests.status("owner", ident)
             assert status["state"] == "failed" and "revoked" in status["error"]
             assert native["entry"] == [{"id": "n1"}]
+
+    anyio.run(run)
+
+
+async def revoked_guard(service: Playlists, ident: str) -> None:
+    """The worker's check before the latest run's work or publication refuses it, as for a
+    revoked agent."""
+    mix = await service.repo.mix(ident, "owner")
+    with pytest.raises(RequestError) as refused:
+        await service.requests.guard(mix, (await service.repo.runs(ident))[0]["data"])
+    assert refused.value.status == 401
+
+
+def test_revoking_an_agent_stops_its_discovery_mix_and_its_refreshes(tmp_path: Path) -> None:
+    """A discovery mix keeps the agent that made it, as a described playlist does: revoked,
+    its queued run and its scheduled refreshes stop. What the owner asks for on the dashboard
+    goes on, and dashboard mixes and those made before the creator was kept are unaffected."""
+
+    async def run() -> None:
+        async with app_at(tmp_path / "db") as (app, http):
+            service = app.service
+            await service.repo.connect(
+                connected(history_user="listener", history_key=SecretStr("invented-key"))
+            )
+            token = await connect(http, "create status history")
+            grant = (await app.oauth.verify_token(token)).claims["grant_id"]
+            made = await call(
+                http,
+                token,
+                "create_discovery_mix",
+                {
+                    "idempotency_key": "revoked-discovery",
+                    "mix": {"count": 4, "cadence": "weekly", "enable_refreshes": True},
+                },
+            )
+            assert made["ok"], made
+            ident = made["request"]["id"]
+            row = await service.repo.store.fetchone(
+                "SELECT creator FROM playlist_discovery_requests WHERE id=?", [ident]
+            )
+            assert row["creator"] == grant
+            mix = await service.repo.mix(ident, "owner")
+            first = (await service.repo.runs(ident))[0]
+            await service.requests.guard(mix, first["data"])  # while the agent is connected
+            # Another one's key is not this agent's (the dashboard shares the keys).
+            with pytest.raises(PlaylistError):
+                await service.repo.create_discovery("owner", "revoked-discovery", Definition())
+
+            await service.requests.revoke("owner", grant)
+            await revoked_guard(service, ident)
+            await latest(service, ident)
+            assert (await service.repo.run(first["id"]))["state"] == "failed"
+            assert "revoked" in (await service.repo.run(first["id"]))["error"]
+
+            # A scheduled refresh stops too.
+            await service.repo.store.execute(
+                "UPDATE playlist_mixes SET enabled=1,playlist_id='p',published='x' WHERE id=?",
+                [ident],
+            )
+            refresh = await service.repo.enqueue(ident, automatic=True)
+            await revoked_guard(service, ident)
+            await latest(service, ident)
+            assert (await service.repo.run(refresh))["state"] == "failed"
+
+            # The owner's own run, asked for on the dashboard, is the owner's work.
+            await service.repo.enqueue(ident, actor="")
+            await service.requests.guard(mix, (await service.repo.runs(ident))[0]["data"])
+
+            # A dashboard mix, and one made before the creator was kept, are the account's.
+            spec = Definition(name="Dashboard discoveries", mode="discovery", count=4)
+            mine = await service.repo.create_discovery("owner", "dashboard-discovery", spec)
+            assert (
+                await service.repo.store.fetchone(
+                    "SELECT creator FROM playlist_discovery_requests WHERE id=?", [mine]
+                )
+            )["creator"] == ""
+            own = await service.repo.mix(mine, "owner")
+            await service.requests.guard(own, (await service.repo.runs(mine))[0]["data"])
+            await service.repo.store.execute(
+                "UPDATE playlist_discovery_requests SET creator=NULL WHERE id=?", [ident]
+            )
+            await service.repo.store.execute(
+                "UPDATE playlist_runs SET state='discarded' WHERE mix=?", [ident]
+            )
+            await service.repo.enqueue(ident, automatic=True)
+            await service.requests.guard(mix, (await service.repo.runs(ident))[0]["data"])
+
+    anyio.run(run)
+
+
+def test_revoking_an_agent_stops_its_import_while_matching_and_after_it_approved(
+    tmp_path: Path,
+) -> None:
+    """An import keeps the agent that started it; a run keeps who acted on it since.
+    Revoked, the agent's matching stops, and so does a publication it approved. The owner's
+    action on the dashboard is the owner's work, and dashboard imports are unaffected."""
+
+    async def run() -> None:
+        async with app_at(tmp_path / "db") as (app, http):
+            service = app.service
+            native = install(service)
+            described(service, native)
+
+            async def resolve(connection: Any, wanted: dict[str, Any], **kw: Any) -> Track | None:
+                return SONGS.get(wanted["title"])
+
+            service.resolver.resolve = resolve  # type: ignore[method-assign]
+            token = await connect(http, "create status library")
+            grant = (await app.oauth.verify_token(token)).claims["grant_id"]
+
+            async def imported(key: str) -> str:
+                started = await call(
+                    http,
+                    token,
+                    "import_playlist",
+                    {"name": "Imported lanterns", "idempotency_key": key, "lines": LINES},
+                )
+                assert started["ok"], started
+                return str(started["request"]["id"])
+
+            matching = await imported("revoked-import-1")
+            row = await service.repo.store.fetchone(
+                "SELECT creator FROM playlist_imports WHERE id=?", [matching]
+            )
+            assert row["creator"] == grant
+            approved = await imported("revoked-import-2")
+            await latest(service, approved)
+            review = await call(http, token, "get_playlist_import", {"request_id": approved})
+            assert review["state"] == "preview", review
+            published = await call(
+                http,
+                token,
+                "review_playlist_import",
+                {
+                    "request_id": approved,
+                    "run_id": review["run"],
+                    "review_key": review["review_key"],
+                    "action": "publish",
+                    "missing_count": 0,
+                },
+            )
+            assert published["ok"] and published["request"]["state"] == "publishing", published
+            assert (await service.repo.runs(approved))[0]["data"]["actor"] == grant
+
+            await service.requests.revoke("owner", grant)
+            for ident in (matching, approved):
+                await revoked_guard(service, ident)
+                with pytest.raises(RequestError):
+                    await service.imports.guard(await service.repo.mix(ident, "owner"))
+                await latest(service, ident)
+                stopped = (await service.repo.runs(ident))[0]
+                assert stopped["state"] == "failed" and "revoked" in stopped["error"]
+            assert "id" not in native  # nothing was published
+
+            # The owner continues the approved publication on the dashboard, as their own.
+            failed = (await service.repo.runs(approved))[0]
+            await service.imports.action("owner", approved, failed["id"], "retry", "", actor="")
+            again = (await service.repo.runs(approved))[0]
+            assert again["state"] == "publishing" and again["data"]["actor"] == ""
+            await service.requests.guard(await service.repo.mix(approved, "owner"), again["data"])
+            for _ in range(10):  # (a publication goes in steps)
+                await latest(service, approved)
+                if (await service.repo.run(again["id"]))["state"] != "publishing":
+                    break
+            assert (await service.repo.run(again["id"]))["state"] == "published"
+            assert native["entry"] == [{"id": "n1"}, {"id": "n2"}]
+
+            # A dashboard import, and one started before the creator was kept, are the
+            # account's.
+            mine = await service.imports.create("owner", "dashboard-import", "Mine", LINES)
+            await service.imports.guard(await service.repo.mix(mine, "owner"))
+            await service.repo.store.execute(
+                "UPDATE playlist_imports SET creator=NULL WHERE id=?", [matching]
+            )
+            await service.imports.guard(await service.repo.mix(matching, "owner"))
 
     anyio.run(run)
 

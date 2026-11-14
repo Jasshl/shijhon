@@ -37,6 +37,10 @@ COLUMNS = {
     "location": ("location", "path", "filepath", "filename", "file", "uri", "trackuri", "url"),
     "native_id": ("nativeid", "navidromeid", "songid"),
 }
+# Optional recording hints: an unreadable one is ignored for its entry, which is matched
+# without it (owner's decision 2026-11-12), and several columns detected for one are
+# not read unless one is mapped.
+HINTS = frozenset({"isrc", "duration", "duration_ms"})
 
 
 def _duration(value: Any, *, milliseconds: bool = False, unknown: bool = False) -> int:
@@ -70,13 +74,29 @@ def _duration(value: Any, *, milliseconds: bool = False, unknown: bool = False) 
     return int(seconds * 1000)
 
 
+def _length(value: Any, *, milliseconds: bool = False, unknown: bool = False) -> int:
+    """A duration hint (``_duration``); an unreadable one is ignored (0: unknown)."""
+    try:
+        return _duration(value, milliseconds=milliseconds, unknown=unknown)
+    except ValueError:
+        return 0
+
+
+def _isrc(value: Any) -> str:
+    """An ISRC hint, normalized; an unreadable one ("n/a", two codes) is ignored."""
+    try:
+        return Entry.normalize_isrc(str(value or ""))
+    except ValueError:
+        return ""
+
+
 def _identifier(row: dict[str, Any], text: str) -> None:
     """Read known recording identifiers as data, without following their URIs."""
     lower = text.casefold()
     if lower.startswith(("navidrome:", "subsonic:")):
         row["native_id"] = text.split(":", 1)[1]
     elif lower.startswith(("isrc:", "urn:isrc:")):
-        code = Entry.normalize_isrc(text.rsplit(":", 1)[1])
+        code = _isrc(text.rsplit(":", 1)[1])  # (an empty one is dropped with the others)
         if row.get("isrc") and row["isrc"] != code:
             if code not in row.setdefault("isrcs", []):
                 row["isrcs"].append(code)
@@ -208,6 +228,8 @@ def _csv(source: str, mapping: dict[str, str]) -> Iterable[dict[str, Any]]:
         )
         if explicit and not matches:
             raise PlaylistError(f"The mapped {field} column is absent. Check its exact header.")
+        if len(matches) > 1 and field in HINTS and not explicit:
+            continue  # (an optional hint: none of them is read)
         if len(matches) > 1:
             raise PlaylistError(f"Several columns can supply {field}. Map that column explicitly.")
         if matches:
@@ -220,13 +242,15 @@ def _csv(source: str, mapping: dict[str, str]) -> Iterable[dict[str, Any]]:
         if len(values) != len(headers):
             raise ValueError("incomplete CSV row")
         row: dict[str, Any] = {k: values[i] for k, i in chosen.items() if k != "location"}
+        if "isrc" in row:
+            row["isrc"] = _isrc(row["isrc"])
         if "duration" in row:
-            row["duration"] = _duration(row["duration"])
+            row["duration"] = _length(row["duration"])
         if "duration_ms" in row:
-            row["duration_ms"] = _duration(row["duration_ms"], milliseconds=True)
+            row["duration_ms"] = _length(row["duration_ms"], milliseconds=True)
         seconds = row.pop("duration", 0)
         if seconds and row.get("duration_ms") and seconds != row["duration_ms"]:
-            raise ValueError("conflicting duration columns")
+            seconds = row["duration_ms"] = 0  # (columns that disagree: neither is read)
         row["duration_ms"] = row.get("duration_ms") or seconds
         if "location" in chosen and (location := values[chosen["location"]].strip()):
             row["locations"] = [location]
@@ -261,7 +285,7 @@ def _m3u(source: str) -> Iterable[dict[str, Any]]:
             length = line.split(",", 1)[0].split(":", 1)[1].split()
             names = {
                 **_names(line.split(",", 1)[1]),
-                "duration_ms": _duration(length[0] if length else "", unknown=True),
+                "duration_ms": _length(length[0] if length else "", unknown=True),
             }
         elif not line.startswith("#"):
             yield {**names, "locations": [line]}
@@ -284,7 +308,7 @@ def _pls(source: str) -> Iterable[dict[str, Any]]:
         yield {
             **_names(section.get(f"title{i}", "")),
             "locations": [section[f"file{i}"]],
-            "duration_ms": _duration(section.get(f"length{i}", ""), unknown=True),
+            "duration_ms": _length(section.get(f"length{i}", ""), unknown=True),
         }
 
 
@@ -430,7 +454,7 @@ def _xml(source: str, format: str, max_rows: int) -> Iterable[dict[str, Any]]:
                 elif tag == "identifier":
                     _identifier(row, text)
                 elif tag == "duration":
-                    row["duration_ms"] = _duration(text, milliseconds=True)
+                    row["duration_ms"] = _length(text, milliseconds=True)
             yield row
     elif format == "asx":
         for child in root.iter():
@@ -466,7 +490,7 @@ def _jspf(source: str) -> Iterable[dict[str, Any]]:
             "title": track.get("title", ""),
             "album": track.get("album", ""),
             "locations": locations,
-            "duration_ms": _duration(track.get("duration"), milliseconds=True),
+            "duration_ms": _length(track.get("duration"), milliseconds=True),
         }
         identifiers = track.get("identifier", [])
         if isinstance(identifiers, str):
@@ -531,7 +555,8 @@ def parse(
     max_bytes: int = MAX_BYTES,
     max_rows: int = MAX_ROWS,
 ) -> list[Entry]:
-    """Malformed entries reject the entire document; never silently lose music rows."""
+    """Malformed entries reject the entire document; never silently lose music rows. An
+    unreadable optional hint (an ISRC or a duration) is ignored for its entry."""
     if len(source.encode("utf-8")) > max_bytes:
         raise PlaylistError(f"This import exceeds the administrator's {max_bytes:,}-byte budget.")
     table_source = source.lstrip("\ufeff")

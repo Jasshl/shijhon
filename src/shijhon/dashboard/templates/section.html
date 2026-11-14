@@ -9,7 +9,7 @@
 {{ error_notice(notices) }}
 {% endif %}
 {% if words %}
-<div class="notice notice-info" role="status"><p>{{ words }}</p></div>
+<div class="notice notice-{{ tone }}" role="{{ 'alert' if tone == 'error' else 'status' }}"><p>{{ words }}</p></div>
 {% endif %}
 {% if problem %}
 <div class="notice notice-warn" role="status">
@@ -133,6 +133,29 @@
     </div>
 {% if extra.plain %}
     <p class="row field-help">This address uses plain HTTP: sign-in passwords and agent tokens travel unencrypted on your network.</p>
+{% endif %}
+  </div>
+</section>
+{% endif %}
+{% if page == "notifications" %}
+<section class="group" aria-labelledby="status-title">
+  <div class="group-head"><h2 id="status-title">Status</h2></div>
+  <div class="rows">
+    <div class="row status-row">
+{% if not extra.running %}
+      <p class="status"><span class="led" aria-hidden="true"></span><span>Shijhon is starting</span></p>
+{% elif not extra.addresses %}
+      <p class="status"><span class="led led-off" aria-hidden="true"></span><span>Off: no address is set</span></p>
+{% else %}
+      <p class="status"><span class="led led-ok" aria-hidden="true"></span><span>On: notifications go to {{ extra.addresses }} {{ "address" if extra.addresses == 1 else "addresses" }}{% if extra.sent %}; the last went out {{ extra.sent|when }}{% endif %}</span></p>
+{% endif %}
+      <form method="post" action="{{ prefix }}/notifications/test">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn-small"{% if not extra.addresses %} disabled{% endif %}>Send a test notification</button>
+      </form>
+    </div>
+{% if extra.failed %}
+    <p class="row field-help">The last notification could not be sent ({{ extra.failed[0]|when }}): {{ extra.failed[1] }}.</p>
 {% endif %}
   </div>
 </section>

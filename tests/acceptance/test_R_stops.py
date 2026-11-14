@@ -19,10 +19,13 @@ hold the songs' locks, so a download meanwhile is never overwritten with silence
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import os
+import re
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -36,21 +39,53 @@ import anyio
 import anyio.lowlevel
 import pytest
 
-from shijhon.catalog.model import CatalogRelease
+from shijhon.catalog.model import CatalogRelease, release_from_data
 from shijhon.delivery import intercept
+from shijhon.fill.fills import ChoiceRefused, FillPending, Fills, InUse
 from shijhon.navidrome.checks import TESTED_VERSION, PlaceholderWrites, StartupChecks
 from shijhon.navidrome.client import NavidromeError
 from shijhon.navidrome.scans import ScanCoordinator
+from shijhon.navidrome.usage import NotFresh, UsageSource
 from shijhon.placeholders import durable
 from shijhon.placeholders import engine as engine_module
 from shijhon.placeholders import tags as tagging
+from shijhon.placeholders.daily_cap import DailyCap, adding_for, reached
 from shijhon.placeholders.engine import MaterializeError, PlaceholderEngine, ReplaceError
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.silence import SilenceMaker
 from shijhon.store import Store
+from tests.acceptance.test_I_auto_pick import (
+    EDITIONS as CRIMSON,
+)
+from tests.acceptance.test_I_auto_pick import (
+    IRON,
+    NEVER,
+    SALT,
+    STONES,
+    WOLVES,
+    replay_for_picks,
+    view,
+    wait_for,
+)
+from tests.acceptance.test_I_auto_pick import (
+    album_id as picked_album_id,
+)
 from tests.conftest import NavidromeFactory
+from tests.harness.collection import prepare_collection
 from tests.harness.delivery import DeliveryWorld, delivery_world
-from tests.harness.engine import EngineParts, catalog_release, engine_for
+from tests.harness.engine import (
+    EDITIONS_ARTIST,
+    EngineParts,
+    applied_later,
+    catalog_release,
+    cleanup_for,
+    edition_with,
+    engine_for,
+    fills_for,
+    listed_later,
+    track_lists_for,
+)
+from tests.harness.exporter import exporting
 from tests.harness.fake_addon import FakeTrack
 from tests.harness.fragmented import fragmented_mp4, is_fragmented
 from tests.harness.library import Album, Track, frequency_for, tone, write_album
@@ -201,6 +236,60 @@ async def test_a_commit_canceled_or_failed_at_any_step_leaves_nothing_unrecorded
         recorded = await assert_in_step(parts, folder_of(parts, release))
         assert len(recorded) == (2 if step == "recorded" else 0)
         await written_again(parts, release)
+
+
+@pytest.mark.parametrize("step", MATERIALIZE_STEPS)
+@pytest.mark.parametrize("how", ["canceled", "failed"])
+async def test_a_counted_commit_stopped_at_any_step_counts_only_once_it_is_recorded(
+    navidrome: NavidromeInstance, state: Path, step: str, how: str
+) -> None:
+    """A release written for an account under a daily cap on adding: stopped at any step,
+    it is counted exactly when its record was written (the same transaction), and the
+    place its write took is free again - the account's next release is not refused for a
+    write that never happened, nor let past the cap for one that did."""
+    key = f"r-capped-{how}-" + step.replace(" ", "-")
+    release = release_of(key)
+    async with engine_for(navidrome, state) as parts:
+        cap = parts.engine.daily_cap = DailyCap(parts.store, limit=1)
+        await parts.store.execute("DELETE FROM release_additions")
+
+        async def counted() -> list[str]:
+            rows = await parts.store.fetchall("SELECT user_id, release_ref FROM release_additions")
+            assert all(r["user_id"] == "an-account" for r in rows)
+            return [str(r["release_ref"]) for r in rows]
+
+        with adding_for("an-account", admin=False):
+            with anyio.CancelScope() as scope:
+
+                async def stop(name: str) -> None:
+                    if name != step:
+                        return
+                    if how == "failed":
+                        raise RuntimeError("a failure")
+                    scope.cancel()
+                    await anyio.lowlevel.checkpoint()
+
+                parts.engine.step = stop
+                try:
+                    await parts.engine.materialize(release)
+                except (MaterializeError, RuntimeError):
+                    assert how == "failed"
+                finally:
+                    parts.engine.step = None
+            recorded = await assert_in_step(parts, folder_of(parts, release))
+            done = step == "recorded"
+            assert len(recorded) == (2 if done else 0)
+            assert await counted() == ([str(release.ref)] if done else [])
+            assert not cap._held and not parts.engine._places
+            # The one place is the release's own: written (again), it is counted once ...
+            await written_again(parts, release)
+            assert await counted() == [str(release.ref)]
+            # ... and the cap holds for the next one.
+            with pytest.raises(MaterializeError) as refused:
+                await parts.engine.materialize(release_of(key + "-next"))
+            assert reached(refused.value)
+            await assert_in_step(parts, folder_of(parts, release_of(key + "-next")))
+            assert not cap._held and not parts.engine._places
 
 
 async def test_placeholders_a_stop_left_go_before_their_release_is_written_again(
@@ -500,6 +589,1019 @@ async def test_a_fill_killed_after_its_scan_shows_no_track_twice(
         assert len(result.created) == 1 and result.album_id == album_id
         present = [s for s in await parts.navidrome.songs_of_album(album_id) if not s["missing"]]
         assert sorted(s["trackNumber"] for s in present) == [1, 2, 3]
+
+
+# --- a filled album filled from another release ------------------------------------------
+#
+# Through the removal a release change really goes through (``Cleanup.take_out_now``, which
+# reads Navidrome's own records of use), with editions that differ: the old one has
+# songs 1 to 3; the new one has song 2 as it was, lacks song 3, has song 4 at the number
+# song 3 had, and song 5.
+
+CHANGE_STEPS = ["taken out", "removed", *MATERIALIZE_STEPS]
+OLD_SONGS = {1: 1, 2: 2, 3: 3}
+NEW_SONGS = {1: 1, 2: 2, 4: 3, 5: 4}
+
+
+@dataclasses.dataclass
+class Changing:
+    album_id: str
+    old: CatalogRelease
+    new: CatalogRelease
+    songs: dict[int, str]  # the old release's added songs: song n -> its Navidrome ID
+
+    def fills(self, parts: EngineParts) -> Fills:
+        return fills_for(parts.engine, parts.store, parts.navidrome, self.old, self.new)
+
+
+def owned_id(nd: NavidromeInstance, title: str) -> str:
+    albums = nd.client().ok("getAlbumList2", {"type": "alphabeticalByName", "size": 500})
+    return next(str(a["id"]) for a in albums["albumList2"]["album"] if a["name"] == title)
+
+
+async def filled_from_an_edition(nd: NavidromeInstance, parts: EngineParts, name: str) -> Changing:
+    """An owned album with the first song of "R Editions <name>", filled from its old
+    edition."""
+    title = f"R Editions {name}"
+    write_album(nd.music, Album(EDITIONS_ARTIST, title, (Track(f"{title} Song 1", 1, seconds=3),)))
+    nd.scan(full=True)
+    album_id = owned_id(nd, title)
+    key = "r-ed-" + name.replace(" ", "-")
+    old = edition_with(f"{key}-a", title, OLD_SONGS)
+    new = edition_with(f"{key}-b", title, NEW_SONGS)
+    fills = fills_for(parts.engine, parts.store, parts.navidrome, old, new)
+    decision = await fills.choose(album_id, str(old.ref))
+    assert decision.outcome == "filled" and await album_numbers(parts, album_id) == [1, 2, 3]
+    rows = await parts.store.fetchall(
+        "SELECT song_id, track_ref FROM placeholders WHERE release_ref = ?", [str(old.ref)]
+    )
+    songs = {int(str(r["track_ref"]).rsplit("-", 1)[1]): str(r["song_id"]) for r in rows}
+    return Changing(album_id, old, new, songs)
+
+
+async def album_numbers(parts: EngineParts, album_id: str) -> list[int]:
+    """The track numbers of the album's songs that are there, as Navidrome lists them."""
+    songs = await parts.navidrome.songs_of_album(album_id)
+    return sorted(int(s["trackNumber"]) for s in songs if not s.get("missing"))
+
+
+async def album_match(parts: EngineParts, album_id: str) -> Any:
+    return await parts.store.fetchone(
+        "SELECT outcome, release_ref, plan, candidates, cleaned_at FROM album_matches"
+        " WHERE album_id = ?",
+        [album_id],
+    )
+
+
+async def replaced_songs(parts: EngineParts, album_id: str) -> set[str]:
+    rows = await parts.store.fetchall(
+        "SELECT song_id FROM replaced_songs WHERE album_id = ?", [album_id]
+    )
+    return {str(r["song_id"]) for r in rows}
+
+
+async def assert_as_before(parts: EngineParts, c: Changing) -> None:
+    """The album is filled from its old release, as if nothing had been asked."""
+    found = await album_match(parts, c.album_id)
+    assert (found["outcome"], found["release_ref"]) == ("filled", str(c.old.ref))
+    recorded = await assert_in_step(parts, folder_of(parts, c.old))
+    assert {str(r["song_id"]) for r in recorded.values()} == set(c.songs.values())
+    assert await assert_in_step(parts, folder_of(parts, c.new)) == {}
+    assert await album_numbers(parts, c.album_id) == [1, 2, 3]
+    assert await c.fills(parts).replacements.unfinished(c.album_id) is None
+    assert await replaced_songs(parts, c.album_id) == set()
+
+
+async def assert_changed(parts: EngineParts, c: Changing) -> None:
+    """The album is filled from the chosen release, and everything agrees: its folders,
+    its rows, Navidrome, its match and the replacement's record."""
+    found = await album_match(parts, c.album_id)
+    assert (found["outcome"], found["release_ref"]) == ("filled", str(c.new.ref))
+    assert found["cleaned_at"] is None
+    assert sorted(str(found["candidates"]).split(",")) == sorted([str(c.old.ref), str(c.new.ref)])
+    assert await assert_in_step(parts, folder_of(parts, c.old)) == {}
+    recorded = await assert_in_step(parts, folder_of(parts, c.new))
+    by_track = {str(r["track_ref"]).rsplit("-", 1)[1]: str(r["song_id"]) for r in recorded.values()}
+    assert sorted(by_track) == ["2", "4", "5"]
+    assert await album_numbers(parts, c.album_id) == [1, 2, 3, 4]
+    filling = await parts.store.fetchall(
+        "SELECT ref FROM releases WHERE owned_album_id = ?", [c.album_id]
+    )
+    assert [str(r["ref"]) for r in filling] == [str(c.new.ref)]
+    # Navidrome's own rule gave the song both editions have under one number and title
+    # its old ID; the song at the old third song's number is another song with another.
+    assert by_track["2"] == c.songs[2] and c.songs[3] not in by_track.values()
+    # Nothing is left to finish; only the ID that is no song any more stays recorded.
+    assert await c.fills(parts).replacements.unfinished(c.album_id) is None
+    assert await replaced_songs(parts, c.album_id) == {c.songs[3]}
+    # No record of the old release as the cleanup keeps one: its old IDs never bring it back.
+    assert await parts.engine.removed_record(str(c.old.ref)) is None
+
+
+async def assert_stopped_then_finished(
+    parts: EngineParts, c: Changing, step: str, fills: Fills | None = None
+) -> None:
+    """After a stop at ``step`` and the next start's repairs. Stopped before the old
+    release's rows went: the album is as before, and the change works when asked again.
+    Stopped after: the old release is out, the chosen one is the album's plan - not one
+    the fill policy fills -, the replacement is recorded as unfinished with the old songs'
+    IDs; and Shijhon finishes it by itself, as its background task does after a start."""
+    fills = fills or c.fills(parts)
+    replacements = fills.replacements
+    await replacements.load()
+    if step == "taken out":
+        await assert_as_before(parts, c)
+        cleanup = cleanup_for(parts.engine, _ND[0], _STATE[0], fills)
+        decision = await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+        assert (decision.outcome, decision.removed, decision.added) == ("filled", 2, 3)
+    else:
+        found = await album_match(parts, c.album_id)
+        assert (found["outcome"], found["release_ref"]) == ("deferred", str(c.new.ref))
+        assert json.loads(found["plan"])["release"]["ref"]["id"] == c.new.ref.id
+        assert found["cleaned_at"] is not None and not await fills.due(c.album_id)
+        left = await replacements.unfinished(c.album_id)
+        assert left is not None and (left.old_ref, left.new_ref) == (
+            str(c.old.ref), str(c.new.ref))  # fmt: skip
+        assert await replaced_songs(parts, c.album_id) == set(c.songs.values())
+        assert await assert_in_step(parts, folder_of(parts, c.old)) == {}
+        recorded = step == "recorded"  # (the new placeholders' rows were written)
+        assert len(await assert_in_step(parts, folder_of(parts, c.new))) == (3 if recorded else 0)
+        assert await album_numbers(parts, c.album_id) == ([1, 2, 3, 4] if recorded else [1])
+        await replacements.settle(c.album_id)  # what ``Replacements.run`` does at a start
+    await assert_changed(parts, c)
+
+
+_ND: list[NavidromeInstance] = []  # (the module's Navidrome and state, for the helpers)
+_STATE: list[Path] = []
+
+
+@pytest.fixture(autouse=True)
+def _module_parts(request: pytest.FixtureRequest) -> None:
+    if "navidrome" in request.fixturenames and "state" in request.fixturenames:
+        _ND[:] = [request.getfixturevalue("navidrome")]
+        _STATE[:] = [request.getfixturevalue("state")]
+
+
+@pytest.mark.parametrize("step", CHANGE_STEPS)
+@pytest.mark.parametrize("how", ["canceled", "failed"])
+async def test_another_release_for_a_filled_album_stopped_at_any_step_stays_in_step(
+    navidrome: NavidromeInstance, state: Path, step: str, how: str
+) -> None:
+    """The old release's removal stopped before its rows went: it is put back and the
+    album is filled from it as before. Stopped later - its transaction also made the
+    chosen release the album's plan and recorded the replacement - Shijhon finishes it. A
+    failure right after that transaction (the removal's last steps) does not stop the
+    replacement at all."""
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        c = await filled_from_an_edition(navidrome, parts, f"{how} {step}")
+        fills = c.fills(parts)
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+        goes_on = (how, step) == ("failed", "removed")
+        with anyio.CancelScope() as scope:
+
+            async def stop(name: str) -> None:
+                if name != step:
+                    return
+                if how == "failed":
+                    raise RuntimeError("a failure")
+                scope.cancel()
+                await anyio.lowlevel.checkpoint()
+
+            engine.step = stop
+            try:
+                await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+                assert goes_on
+            except (MaterializeError, FillPending):
+                assert how == "failed" and not goes_on
+            finally:
+                engine.step = None
+        assert scope.cancelled_caught == (how == "canceled")
+        # (What a compensation's scan did not confirm in its seconds, the start's repairs do.)
+        await engine.repair_removals()
+        await engine.repair_pending()
+        if goes_on:
+            await assert_changed(parts, c)
+        else:
+            if how == "failed" and step != "taken out":  # counted, and tried again soon
+                left = await fills.replacements.unfinished(c.album_id)
+                assert left is not None and left.attempts == 1 and left.retry_at is not None
+            await assert_stopped_then_finished(parts, c, step, fills)
+
+
+@pytest.mark.parametrize("step", CHANGE_STEPS)
+async def test_another_release_for_a_filled_album_killed_at_any_step_is_put_right(
+    navidrome: NavidromeInstance, state: Path, step: str
+) -> None:
+    async with engine_for(navidrome, state) as parts:
+        c = await filled_from_an_edition(navidrome, parts, f"killed {step}")
+    await kill_at(
+        navidrome,
+        state,
+        step,
+        action="change",
+        album=c.album_id,
+        title=c.old.title,
+        navidrome_db=str(navidrome.data / "navidrome.db"),
+        **{"from": [c.old.ref.id, OLD_SONGS], "to": [c.new.ref.id, NEW_SONGS]},
+    )
+    async with restarted(navidrome, state) as parts:
+        await assert_stopped_then_finished(parts, c, step)
+
+
+async def test_the_background_task_finishes_a_replacement_a_stop_left(
+    navidrome: NavidromeInstance, state: Path
+) -> None:
+    """``Replacements.run``, as the application starts it: a moment after the start it
+    fills the album a stopped replacement left as a plan - no use, no page needed."""
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        c = await filled_from_an_edition(navidrome, parts, "resumed")
+        fills = c.fills(parts)
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+        with anyio.CancelScope() as scope:
+
+            async def stop(name: str) -> None:
+                if name == "staged":
+                    scope.cancel()
+                    await anyio.lowlevel.checkpoint()
+
+            engine.step = stop
+            try:
+                await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+            finally:
+                engine.step = None
+        assert scope.cancelled_caught and await album_numbers(parts, c.album_id) == [1]
+    async with restarted(navidrome, state) as parts:  # the next start: nothing in memory
+        fills = c.fills(parts)
+        replacements = fills.replacements
+        replacements.start_seconds, replacements.poll_seconds = 0.0, 0.05
+        with anyio.fail_after(120):
+            async with anyio.create_task_group() as group:
+                group.start_soon(replacements.run)
+                # (A row of the database is waited for: nothing to await but time.)
+                while await replacements.unfinished(c.album_id) is not None:  # noqa: ASYNC110
+                    await anyio.sleep(0.05)
+                group.cancel_scope.cancel()
+        await assert_changed(parts, c)
+
+
+@pytest.mark.parametrize("what", ["the fill", "the album's group", "recording it"])
+async def test_a_replacement_that_keeps_failing_stays_a_plan_for_the_albums_next_use(
+    navidrome: NavidromeInstance, state: Path, monkeypatch: pytest.MonkeyPatch, what: str
+) -> None:
+    """Shijhon tries an unfinished replacement again by itself three times, then leaves the
+    album as a plan that its next use fills - never the fill policy. Whatever fails in an
+    attempt counts: the fill, but also getting the album's group before it or recording
+    the album's match after it - each with its reason and the time of the next."""
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        c = await filled_from_an_edition(navidrome, parts, f"failing {what}")
+        fills = c.fills(parts)
+        replacements = fills.replacements
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+
+        async def failing(*args: Any, **kwargs: Any) -> Any:
+            raise MaterializeError("Navidrome did not index the new songs")
+
+        async def unreachable(*args: Any, **kwargs: Any) -> Any:
+            raise NavidromeError("Navidrome does not answer")
+
+        async def unrecorded(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("the database is locked")
+
+        with monkeypatch.context() as first:  # the change's own fill fails
+            first.setattr(engine, "materialize_held", failing)
+            with pytest.raises(FillPending, match="did not index"):
+                await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+        left = await replacements.unfinished(c.album_id)
+        assert left is not None and left.attempts == 1
+        reason = {
+            "the fill": "Navidrome did not index the new songs",
+            "the album's group": "Navidrome does not answer",
+            "recording it": "unexpected RuntimeError",
+        }[what]
+        if what == "the fill":
+            monkeypatch.setattr(engine, "materialize_held", failing)
+        elif what == "the album's group":
+            monkeypatch.setattr(fills, "_group_key", unreachable)
+        else:
+            monkeypatch.setattr(fills, "_record", unrecorded)
+        now = [time.time()]
+        replacements.clock = lambda: now[0]
+        waits = []
+        for attempts in (2, 3, 4):
+            left = await replacements.unfinished(c.album_id)
+            assert left is not None and left.retry_at is not None
+            assert await replacements.retry() == 0  # not before its wait is over
+            waits.append(left.retry_at - now[0])
+            now[0] = left.retry_at + 1
+            assert await replacements.retry() == 1
+            left = await replacements.unfinished(c.album_id)
+            assert left is not None and (left.attempts, left.reason) == (attempts, reason)
+        assert [round(wait, -1) for wait in waits] == [60, 600, 3600]
+        # Given up: the plan stays, and nothing tries again by itself.
+        assert left.retry_at is None
+        now[0] += 10 * 86400
+        assert await replacements.retry() == 0
+        found = await album_match(parts, c.album_id)
+        assert (found["outcome"], found["release_ref"]) == ("deferred", str(c.new.ref))
+        assert found["cleaned_at"] is not None and not await fills.due(c.album_id)
+        monkeypatch.undo()
+        # The album's next use fills it (where its songs are not in already), and the
+        # record's next turn finds nothing left to finish.
+        await fills.fill_album(c.album_id, "a use")
+        await replacements.settle(c.album_id)
+        await assert_changed(parts, c)
+
+
+async def test_a_change_waits_for_usage_exports_and_goes_back_when_none_comes(
+    navidrome: NavidromeInstance, state: Path, tmp_path: Path
+) -> None:
+    """With the usage export, the removal acts only on an export made after it asked: at
+    its listing, and again once the files are gone - then with the release's locks held;
+    when none comes, the old release is put back and nothing is changed."""
+    out = tmp_path / "usage" / "usage.sqlite3"
+    with exporting(navidrome.data / "navidrome.db", out) as exporter:
+        async with engine_for(navidrome, state) as parts:
+            engine = parts.engine
+            c = await filled_from_an_edition(navidrome, parts, "exported")
+            fills = c.fills(parts)
+            cleanup = cleanup_for(engine, navidrome, state, fills, UsageSource(out, export=True))
+            cleanup.manual_wait = cleanup.removal_wait = 1.5
+
+            async def stop_exporting(name: str) -> None:
+                if name == "taken out":  # the files are gone: no export says so after it
+                    await anyio.to_thread.run_sync(exporter.stop)
+
+            engine.step = stop_exporting
+            try:
+                with pytest.raises(ChoiceRefused, match="no usage export made after") as refused:
+                    await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+            finally:
+                engine.step = None
+            assert "was put back" in refused.value.reason
+            await assert_as_before(parts, c)
+            # No export at all: nothing is even listed.
+            with pytest.raises(NotFresh, match="is the exporter running"):
+                await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+            await assert_as_before(parts, c)
+            await anyio.to_thread.run_sync(exporter.start)
+            decision = await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+            assert (decision.outcome, decision.removed, decision.added) == ("filled", 2, 3)
+            await assert_changed(parts, c)
+
+
+async def test_a_removal_that_fails_and_is_not_put_back_at_once_is_repaired_later(
+    navidrome: NavidromeInstance, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Navidrome confirms neither the removal nor its compensation: the old release stays
+    marked, nothing of the replacement is written, and the repairs put it back."""
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        c = await filled_from_an_edition(navidrome, parts, "unconfirmed")
+        fills = c.fills(parts)
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+        until = parts.scans.until
+
+        async def unconfirmed(*args: Any, **kwargs: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(parts.scans, "until", unconfirmed)
+        with pytest.raises(MaterializeError, match="still listed"):
+            await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+        monkeypatch.setattr(parts.scans, "until", until)
+        marked = await parts.store.fetchone(
+            "SELECT removing_at FROM releases WHERE ref = ?", [str(c.old.ref)]
+        )
+        assert marked is not None and marked["removing_at"] is not None
+        assert await fills.replacements.unfinished(c.album_id) is None
+        assert await engine.repair_removals() == 1
+        await assert_as_before(parts, c)
+        decision = await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+        assert decision.outcome == "filled"
+        await assert_changed(parts, c)
+
+
+async def test_a_change_while_an_import_holds_a_song_of_the_fill_changes_nothing(
+    navidrome: NavidromeInstance, state: Path
+) -> None:
+    """A song of the old release that an import is linked to keeps the release, as it keeps
+    it from the cleanup."""
+    async with engine_for(navidrome, state) as parts:
+        c = await filled_from_an_edition(navidrome, parts, "imported")
+        fills = c.fills(parts)
+        cleanup = cleanup_for(parts.engine, navidrome, state, fills)
+        await parts.store.execute("PRAGMA foreign_keys = OFF")
+        try:
+            await parts.store.execute(
+                "INSERT INTO music_import_links (item_id, job_id, owner_id, library_id,"
+                " track_key, song_id, kind, credited, active, created)"
+                " VALUES ('r-item', 'r-job', 'owner', 'library', 'track', ?, 'catalog_song',"
+                " 0, 1, 1)",
+                [c.songs[2]],
+            )
+            with pytest.raises(InUse) as kept:
+                await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+            assert kept.value.uses == ["an imported song"]
+            await assert_as_before(parts, c)
+        finally:
+            await parts.store.execute("DELETE FROM music_import_links WHERE item_id = 'r-item'")
+            await parts.store.execute("PRAGMA foreign_keys = ON")
+
+
+async def test_a_retag_read_before_a_change_never_rewrites_the_song_that_took_its_id(
+    navidrome: NavidromeInstance, state: Path
+) -> None:
+    """The credits repair reads a release's tracks, asks the catalog, then rewrites each
+    placeholder under its song's lock. One that meets a release change waits for the
+    removal; afterwards its song ID is the new release's song (Navidrome gave it the same
+    one), which it must not rewrite with the old release's track."""
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        c = await filled_from_an_edition(navidrome, parts, "retagged")
+        fills = c.fills(parts)
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+        old_track = dataclasses.replace(c.old.tracks[1], title="R Retagged Before The Change")
+        results: list[str] = []
+
+        async def retag() -> None:
+            try:
+                await engine.retag(c.songs[2], old_track, c.old)
+                results.append("rewritten")
+            except ReplaceError as exc:
+                results.append(str(exc))
+
+        async with anyio.create_task_group() as group:
+
+            async def at(name: str) -> None:
+                if name == "taken out":  # (its song's lock is the removal's now: it waits)
+                    group.start_soon(retag)
+                    await anyio.sleep(0.2)
+                    assert results == []
+
+            engine.step = at
+            try:
+                await fills.change(c.album_id, str(c.new.ref), cleanup.take_out_now)
+            finally:
+                engine.step = None
+        # It ran once the removal let go of the song: there was no such placeholder then,
+        # or the new release's song already had the ID - rewritten in neither case.
+        other = "the song is another release's track now"
+        assert results in (["not a placeholder"], [other])
+        await retag()  # (and once the ID is the new release's song, for certain)
+        assert results[1] == other
+        await assert_changed(parts, c)
+        row = await row_of(parts, c.songs[2])
+        assert (row["track_ref"], row["title"]) == (str(c.new.tracks[1].ref), c.new.tracks[1].title)
+
+
+async def test_a_change_while_the_artist_list_repair_rewrites_the_owned_song_is_finished(
+    navidrome: NavidromeInstance, state: Path
+) -> None:
+    """The artist-list repair writes each artist of a joined credit into the owned file -
+    here between the new placeholders' files and their check. Whatever that does to the
+    fill under way, the replacement ends filled, each track once, the owned song's ID as
+    it was and its list written."""
+    from shijhon.artist_lists.files import LibraryFiles
+    from shijhon.artist_lists.names import listed
+    from shijhon.artist_lists.repair import ArtistLists
+    from shijhon.artist_lists.sources import Resolution, Subject
+
+    title, credit = "R Editions listed", "R Listed One & R Listed Two"
+    write_album(navidrome.music, Album(credit, title, (Track(f"{title} Song 1", 1, seconds=3),)))
+    navidrome.scan(full=True)
+    album_id = owned_id(navidrome, title)
+
+    class Listing:
+        async def resolve(
+            self, subject: Subject, *, link: bool = True, skips: Any = None
+        ) -> Resolution:
+            spelled = listed(subject.artist, ["R Listed One", "R Listed Two"])
+            return (
+                Resolution("resolved", tuple(spelled), "link")
+                if spelled and subject.artist == credit
+                else Resolution("unresolved")
+            )
+
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        old = edition_with("r-ed-listed-a", title, OLD_SONGS)
+        new = edition_with("r-ed-listed-b", title, NEW_SONGS)
+        fills = fills_for(engine, parts.store, parts.navidrome, old, new)
+        await fills.choose(album_id, str(old.ref))
+        rows = await parts.store.fetchall(
+            "SELECT song_id, track_ref FROM placeholders WHERE release_ref = ?", [str(old.ref)]
+        )
+        songs = {int(str(r["track_ref"]).rsplit("-", 1)[1]): str(r["song_id"]) for r in rows}
+        c = Changing(album_id, old, new, songs)
+        [owned] = (await engine.owned_album(album_id)).songs
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+        files = LibraryFiles(navidrome.music, parts.store, parts.navidrome, parts.scans)
+        worker = ArtistLists(
+            parts.navidrome, parts.store, Listing(), files,  # type: ignore[arg-type]
+            placeholder_folder=parts.layout.folder, report=False, library=True, pause=0,
+        )  # fmt: skip
+        wrote: list[Any] = []
+
+        async def repair(name: str) -> None:
+            if name == "in place" and not wrote:
+                wrote.append(await worker.once())
+
+        engine.step = repair
+        try:
+            # (If the fill sees the album change under it, it is finished below.)
+            with contextlib.suppress(FillPending):
+                await fills.change(album_id, str(new.ref), cleanup.take_out_now)
+        finally:
+            engine.step = None
+        await engine.repair_pending()
+        await fills.replacements.settle(album_id)
+        assert wrote
+        await assert_changed(parts, c)
+        [after] = (await engine.owned_album(album_id)).songs
+        assert after["id"] == owned["id"]
+        tags = tagging.read_vorbis(navidrome.music / str(after["path"]))
+        assert tags.get("artists") == ["R Listed One", "R Listed Two"]
+
+
+async def test_a_change_decides_the_albums_parts_and_their_recordings_anew(
+    navidrome: NavidromeInstance, state: Path
+) -> None:
+    """One release, one album: another owned album whose songs are all on the chosen
+    release becomes its part - its songs play for those tracks in the filled album -, also
+    when it is being matched at that moment; and one that was a part and is not on the
+    next release chosen is a part no longer."""
+    title = "R Editions parts"
+    whole_album = Album(EDITIONS_ARTIST, title, (Track(f"{title} Song 1", 1, seconds=3),))
+    write_album(navidrome.music, whole_album)
+    write_album(
+        navidrome.music,
+        Album(
+            EDITIONS_ARTIST,
+            f"{title} (Remastered)",
+            (Track(f"{title} Song 2", 2, seconds=3), Track(f"{title} Song 3", 3, seconds=3)),
+        ),
+    )
+    navidrome.scan(full=True)
+    album_id, part_id = owned_id(navidrome, title), owned_id(navidrome, f"{title} (Remastered)")
+    first = edition_with("r-ed-parts-a", title, {1: 1, 5: 2})  # without the other album's songs
+    whole = edition_with("r-ed-parts-b", title, {1: 1, 2: 2, 3: 3, 4: 4})  # with both of them
+    other = edition_with("r-ed-parts-c", title, {1: 1, 2: 2, 6: 3})  # with one of them only
+    async with engine_for(navidrome, state) as parts:
+        engine = parts.engine
+        fills = fills_for(engine, parts.store, parts.navidrome, first, whole, other)
+        cleanup = cleanup_for(engine, navidrome, state, fills)
+        await fills.choose(album_id, str(first.ref))
+        owned_part = {
+            int(s["trackNumber"]): str(s["id"]) for s in (await engine.owned_album(part_id)).songs
+        }
+
+        async def part_row() -> Any:
+            return await parts.store.fetchone(
+                "SELECT outcome, reason, release_ref FROM album_matches WHERE album_id = ?",
+                [part_id],
+            )
+
+        async def backing(release: CatalogRelease) -> dict[str, str | None]:
+            rows = await parts.store.fetchall(
+                "SELECT track_ref, backing_song_id FROM placeholders WHERE release_ref = ?",
+                [str(release.ref)],
+            )
+            return {str(r["track_ref"]).rsplit("-", 1)[1]: r["backing_song_id"] for r in rows}
+
+        assert await part_row() is None
+        async with anyio.create_task_group() as group:
+
+            async def match_the_part(name: str) -> None:
+                if name == "taken out":  # (it waits for the group's lock, the change's now)
+                    group.start_soon(lambda: fills.fill(part_id, hold=True))
+                    await anyio.sleep(0.2)
+
+            engine.step = match_the_part
+            try:
+                decision = await fills.change(album_id, str(whole.ref), cleanup.take_out_now)
+            finally:
+                engine.step = None
+        assert (decision.outcome, decision.added) == ("filled", 3)
+        found = await part_row()
+        assert (found["outcome"], found["release_ref"]) == ("review", str(whole.ref))
+        assert found["reason"].startswith(f"part of {EDITIONS_ARTIST} - {title} (album {album_id})")
+        # Its songs play for their tracks in the filled album; the fourth is the add-ons'.
+        assert await backing(whole) == {"2": owned_part[2], "3": owned_part[3], "4": None}
+        assert await album_numbers(parts, album_id) == [1, 2, 3, 4]
+        assert await album_numbers(parts, part_id) == [2, 3]
+        # Another release, with only one of its songs: it is no part of that one.
+        decision = await fills.change(album_id, str(other.ref), cleanup.take_out_now)
+        assert (decision.outcome, decision.removed, decision.added) == ("filled", 3, 2)
+        assert await part_row() is None  # (matched again as an album of its own)
+        assert await backing(other) == {"2": None, "6": None}
+        assert await album_numbers(parts, album_id) == [1, 2, 3]
+        assert await album_numbers(parts, part_id) == [2, 3]
+
+
+# --- a release change and the uses of its old songs ---------------------------------------
+#
+# Through the real proxy, with the demo catalog's records replayed (the automatic picks'
+# albums, each with a second edition): the second edition has its third to sixth songs
+# under other titles, so no song of it gets the IDs the first edition's had for those,
+# while its other songs - the same numbers and titles - get the old ones' IDs from
+# Navidrome.
+
+COPIES = {
+    IRON.title: ("demo:900000296", "demo:900009296"),
+    STONES.title: ("demo:900000133", "demo:900009133"),
+    SALT.title: ("demo:900000203", "demo:900009203"),
+    WOLVES.title: ("demo:900000182", "demo:900009182"),
+    CRIMSON.title: ("demo:900000117", "demo:900009117"),
+}
+DURING = {"taken out": IRON, "removed": STONES}
+_CHANGED: dict[str, tuple[str, dict[int, str]]] = {}  # (an album changed once, for several tests)
+
+
+@pytest.fixture(scope="module")
+def changes(
+    navidrome_factory: NavidromeFactory, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[DeliveryWorld]:
+    nd = navidrome_factory({"ND_ENABLESHARING": "true"})
+    albums = [IRON, STONES, SALT, WOLVES, CRIMSON]
+    for album in albums:
+        write_album(nd.music, album)
+    nd.scan(full=True)
+    replay = replay_for_picks()
+    for _, copy in COPIES.values():
+        for track in replay.by_path[f"albums/{copy.partition(':')[2]}"]["body"]["tracks"][2:6]:
+            track["title"] += " (Alternate Take)"
+    fill = {"enabled": True, "open_budget_seconds": 15, "background_pause_seconds": 0,
+            "library_pass": "off", "pass_requests_per_second": 50, **NEVER}  # fmt: skip
+    with delivery_world(
+        nd,
+        tmp_path_factory.mktemp("r-changes"),
+        catalog=replay.catalog(),
+        fill=fill,
+        navidrome_database=nd.data / "navidrome.db",
+    ) as w:
+        prepare_collection(nd, w.server)
+        for album in albums:
+            view(w, picked_album_id(w, album.title), f"viewer-{album.title}")
+        for album in albums:
+            wait_for(w, picked_album_id(w, album.title), "deferred")
+        yield w
+    _CHANGED.clear()
+
+
+def filled_to_change(world: DeliveryWorld, album: Album) -> tuple[str, dict[int, str]]:
+    """The album, filled from its first edition without a use: its ID, and the songs
+    added by their track numbers."""
+    ident = picked_album_id(world, album.title)
+    fills = world.services.fills
+    assert fills is not None
+    decision = call(world, lambda: fills.fill_album(ident, "a test"))
+    assert decision is not None and decision.outcome == "filled", decision
+
+    async def added() -> dict[int, str]:
+        rows = await world.services.store.fetchall(
+            "SELECT p.track, p.song_id FROM placeholders p JOIN releases r"
+            " ON p.release_ref = r.ref WHERE r.owned_album_id = ?",
+            [ident],
+        )
+        return {int(r["track"]): str(r["song_id"]) for r in rows}
+
+    return ident, call(world, added)
+
+
+def change_release(world: DeliveryWorld, ident: str, release: str) -> Any:
+    fills, cleanup = world.services.fills, world.services.cleanup
+    assert fills is not None and cleanup is not None
+    return call(world, lambda: fills.change(ident, release, cleanup.take_out_now))
+
+
+def changed_album(world: DeliveryWorld) -> tuple[str, dict[int, str]]:
+    """An album filled from its second edition, the same for the tests that only need one
+    (each uses songs of its own): its ID, and the first edition's songs by track number -
+    of which the third to sixth are no songs now, and the others are."""
+    if WOLVES.title not in _CHANGED:
+        ident, songs = filled_to_change(world, WOLVES)
+        assert change_release(world, ident, COPIES[WOLVES.title][1]).outcome == "filled"
+        _CHANGED[WOLVES.title] = (ident, songs)
+    return _CHANGED[WOLVES.title]
+
+
+def answered(answer: Any) -> tuple[str, int | None]:
+    """A Subsonic answer's status and error code, in JSON, JSONP or XML."""
+    kind = answer.headers.get("content-type", "")
+    if kind.startswith(("application/json", "application/javascript")):
+        text = answer.text
+        body = json.loads(text[text.index("{") : text.rindex("}") + 1])["subsonic-response"]
+        return str(body["status"]), (body.get("error") or {}).get("code")
+    found = re.search(r'<subsonic-response[^>]*status="(\w+)"', answer.text)
+    assert found, (answer.status_code, answer.text[:200])
+    code = re.search(r'<error[^>]*code="(\d+)"', answer.text)
+    return found.group(1), int(code.group(1)) if code else None
+
+
+def as_navidrome_answers(answer: Any) -> tuple[Any, ...]:
+    """What an app sees of an answer that Navidrome gives by itself: its status, its kind,
+    and its error or text."""
+    kind = answer.headers.get("content-type", "").split(";")[0]
+    if answer.status_code == 200 and ("json" in kind or "xml" in kind):
+        return (200, kind, *answered(answer))
+    return (answer.status_code, kind, answer.text[:120])
+
+
+def uses_in_navidrome(world: DeliveryWorld, song: str) -> list[str]:
+    """What Navidrome's own records say anyone did with the song, and whether it is there."""
+    db = sqlite3.connect(f"file:{world.nd.data / 'navidrome.db'}?mode=ro", uri=True)
+    try:
+        found = []
+        [missing] = db.execute("SELECT missing FROM media_file WHERE id = ?", [song]).fetchone()
+        if missing:
+            found.append("missing")
+        row = db.execute(
+            "SELECT starred, rating, play_count FROM annotation WHERE item_id = ?", [song]
+        ).fetchone()
+        if row is not None:
+            found += [w for w, v in zip(("starred", "rated", "played"), row, strict=True) if v]
+        for what, sql in (
+            ("in a playlist", "SELECT media_file_id FROM playlist_tracks"),
+            ("bookmarked", "SELECT item_id FROM bookmark"),
+            ("in a play queue", "SELECT items FROM playqueue"),
+            ("shared", "SELECT resource_ids FROM share"),
+        ):
+            if any(song in str(value) for (value,) in db.execute(sql)):
+                found.append(what)
+        return found
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("step", list(DURING))
+def test_a_use_of_an_old_song_during_a_change_waits_and_lands_on_no_missing_song(
+    changes: DeliveryWorld, step: str
+) -> None:
+    """A favorite sent while the old release's files are gone and its rows not yet (before
+    the removal's last look at who uses it), or right after its transaction (after that
+    look): each waits for the replacement. Then the song the new release took over is
+    favorited, as that song; the one it did not is answered "not found", and Navidrome
+    has no favorite of a missing song."""
+    world = changes
+    ident, songs = filled_to_change(world, DURING[step])
+    stays, goes = songs[2], songs[3]
+    client = world.client(client="during")
+    sent: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+
+        async def at(name: str) -> None:
+            if name != step or sent:
+                return
+            sent["stays"] = pool.submit(client.request, "star", {"id": stays})
+            sent["goes"] = pool.submit(client.request, "star", {"id": goes}, fmt="xml")
+            await anyio.sleep(0.5)
+            assert not sent["stays"].done() and not sent["goes"].done()  # they wait
+
+        world.services.engine.step = at
+        try:
+            decision = change_release(world, ident, COPIES[DURING[step].title][1])
+        finally:
+            world.services.engine.step = None
+        answers = {what: future.result(timeout=120) for what, future in sent.items()}
+    assert decision.outcome == "filled" and sorted(answers) == ["goes", "stays"]
+    assert answered(answers["stays"]) == ("ok", None)
+    assert answered(answers["goes"]) == ("failed", 70)
+    assert uses_in_navidrome(world, stays) == ["starred"]
+    assert uses_in_navidrome(world, goes) == ["missing"]
+
+
+def test_a_use_waits_a_set_time_only_and_not_at_all_for_a_song_that_is_one_again(
+    changes: DeliveryWorld,
+) -> None:
+    """A request waits for a replacement as long as one for audio may wait
+    (``[delivery] max_wait_seconds``, read at each wait), then is told to try again -
+    recorded nowhere - while the replacement goes on. An ID that is a song again does not
+    wait for the rest of it."""
+    world = changes
+    ident, songs = filled_to_change(world, SALT)
+    stays, goes = songs[2], songs[3]
+    client = world.client(client="bounded")
+    deliverer, fills = world.services.deliverer, world.services.fills
+    assert fills is not None
+    usual = deliverer.settings.max_wait_seconds
+    early: dict[str, Any] = {}
+    late: dict[str, Any] = {}
+
+    async def done(futures: dict[str, Any], seconds: float) -> bool:
+        with anyio.move_on_after(seconds):
+            while not all(f.done() for f in futures.values()):  # noqa: ASYNC110
+                await anyio.sleep(0.05)
+        return all(f.done() for f in futures.values())
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+
+        async def at(name: str) -> None:
+            if name == "in place" and not early:  # the new songs are files, not yet rows
+                deliverer.settings.max_wait_seconds = 0.4
+                early["stays"] = pool.submit(client.request, "star", {"id": stays})
+                early["goes"] = pool.submit(client.request, "setRating", {"id": goes, "rating": 5})
+                assert await done(early, 10), "the requests waited on"
+                deliverer.settings.max_wait_seconds = usual
+            if name == "recorded" and not late:  # ... now rows: that ID is a song again
+                late["stays"] = pool.submit(client.request, "star", {"id": stays})
+                assert await done(late, 10), "a song again waited for its album's replacement"
+
+        world.services.engine.step = at
+        try:
+            decision = change_release(world, ident, COPIES[SALT.title][1])
+        finally:
+            world.services.engine.step = None
+            deliverer.settings.max_wait_seconds = usual
+        assert decision.outcome == "filled"
+        for future in early.values():
+            answer = future.result()
+            assert answered(answer) == ("failed", 0) and "try again later" in answer.text
+        assert answered(late["stays"].result()) == ("ok", None)
+    # The first favorite was recorded nowhere: the one made once the ID was a song is.
+    assert uses_in_navidrome(world, stays) == ["starred"]
+    assert uses_in_navidrome(world, goes) == ["missing"]
+    assert answered(client.request("setRating", {"id": goes, "rating": 5})) == ("failed", 70)
+    assert call(world, lambda: fills.replacements.unfinished(ident)) is None
+
+
+def test_a_request_that_records_a_use_on_a_song_taken_out_is_not_found_and_not_forwarded(
+    changes: DeliveryWorld,
+) -> None:
+    world = changes
+    _, songs = changed_album(world)
+    stays, goes = songs[2], songs[3]
+    client = world.client(client="after")
+    native = world.nd.client()
+    playlist = native.ok("createPlaylist", {"name": "r-uses"})["playlist"]["id"]
+    many = [("id", stays)] * 150 + [("id", goes)] + [("id", stays)] * 150
+    uses: list[tuple[str, list[tuple[str, str]]]] = [
+        ("star", [("id", goes)]),
+        ("star", [("id", stays), ("id", goes)]),
+        ("setRating", [("id", goes), ("rating", "4")]),
+        ("scrobble", [("id", goes)]),
+        ("scrobble", [("id", goes), ("submission", "false")]),
+        (
+            "reportPlayback",
+            [("mediaId", goes), ("mediaType", "song"), ("positionMs", "0"), ("state", "playing")],
+        ),
+        ("createPlaylist", [("name", "r-new"), ("songId", goes)]),
+        ("updatePlaylist", [("playlistId", playlist), ("songIdToAdd", goes)]),
+        ("updatePlaylist", [("playlistId", playlist)] + [("songIdToAdd", v) for _, v in many]),
+        ("savePlayQueue", [("id", stays), ("id", goes), ("current", stays)]),
+        ("savePlayQueue", [*many, ("current", stays)]),
+        ("savePlayQueueByIndex", [("id", stays), ("id", goes), ("currentIndex", "0")]),
+        ("createBookmark", [("id", goes), ("position", "1000")]),
+        ("createShare", [("id", goes)]),
+    ]
+    for how in ("json", "xml", "form", "jsonp"):
+        for method, params in uses:
+            if how == "jsonp":
+                sent = [*params, ("f", "jsonp"), ("callback", "seen")]
+                answer = client.request(method, sent, fmt="xml")
+                assert answer.text.startswith("seen("), (method, answer.text[:80])
+            elif how == "form":
+                answer = client.request(method, params, http_method="POST")
+            else:
+                answer = client.request(method, params, fmt=how)  # type: ignore[arg-type]
+            assert answer.status_code == 200, (method, how)
+            assert answered(answer) == ("failed", 70), (method, how, answer.text[:200])
+    # Navidrome was asked for none of them: it has no record of a use of either song.
+    assert uses_in_navidrome(world, goes) == ["missing"]
+    assert uses_in_navidrome(world, stays) == []
+    assert "r-new" not in [p["name"] for p in native.ok("getPlaylists")["playlists"]["playlist"]]
+    assert native.ok("getPlaylist", {"id": playlist})["playlist"].get("entry", []) == []
+    # The song the new release took over is used as any song, also among hundreds.
+    client.ok("star", {"id": stays})
+    client.ok("savePlayQueue", [*[("id", stays)] * 300, ("current", stays)])
+    assert uses_in_navidrome(world, stays) == ["starred", "in a play queue"]
+    # The ID that is a song again is no longer in the record; the other stays.
+    kept = call(world, lambda: world.services.store.fetchall("SELECT song_id FROM replaced_songs"))
+    assert goes in {str(r["song_id"]) for r in kept}
+    assert stays not in {str(r["song_id"]) for r in kept}
+
+
+def test_what_records_no_use_on_a_missing_song_is_navidromes_to_answer(
+    changes: DeliveryWorld,
+) -> None:
+    """Audio requests, the jukebox, a view and a use taken back for an ID that no song has
+    get Navidrome's own answer - the same status, kind and error as asked of it directly,
+    whatever those are - and Navidrome records nothing for the song (measured here, on the
+    tested Navidrome)."""
+    world = changes
+    _, songs = changed_album(world)
+    goes = songs[4]
+    client, native = world.client(client="forwarded"), world.nd.client()
+    forwarded: list[tuple[str, list[tuple[str, str]], str]] = [
+        ("stream", [("id", goes)], "GET"),
+        ("download", [("id", goes)], "GET"),
+        ("getTranscodeStream", [("mediaId", goes), ("mediaType", "song")], "GET"),
+        ("getTranscodeDecision", [("mediaId", goes), ("mediaType", "song")], "GET"),
+        ("getTranscodeDecision", [("mediaId", goes), ("mediaType", "song")], "POST"),
+        ("jukeboxControl", [("action", "add"), ("id", goes)], "GET"),
+        ("getSong", [("id", goes)], "GET"),
+        ("unstar", [("id", goes)], "GET"),
+        ("setRating", [("id", goes), ("rating", "0")], "GET"),
+        ("reportPlayback", [("mediaId", goes), ("mediaType", "podcast")], "GET"),
+    ]
+    for method, params, verb in forwarded:
+        through = client.request(method, params, http_method=verb)
+        direct = native.request(method, params, http_method=verb)
+        assert as_navidrome_answers(through) == as_navidrome_answers(direct), (method, verb)
+        assert uses_in_navidrome(world, goes) == ["missing"], method
+    # None of them is Shijhon's "not found" for a replaced song where Navidrome says
+    # otherwise: the transcode stream is a plain HTTP error there, the stream another code.
+    assert client.request("getTranscodeStream", forwarded[2][1]).status_code != 200
+    assert answered(client.request("stream", [("id", goes)])) != ("failed", 70)
+
+
+def test_a_use_made_at_navidrome_itself_on_a_missing_song_can_be_taken_back(
+    changes: DeliveryWorld,
+) -> None:
+    """A favorite and a rating that Navidrome was given directly for a song that is gone
+    (which Shijhon does not see) are cleared through Shijhon as through Navidrome."""
+    world = changes
+    _, songs = changed_album(world)
+    goes = songs[5]
+    client, native = world.client(client="taking-back"), world.nd.client()
+    native.ok("star", {"id": goes})
+    native.ok("setRating", {"id": goes, "rating": 3})
+    assert uses_in_navidrome(world, goes) == ["missing", "starred", "rated"]
+    assert answered(client.request("star", {"id": goes})) == ("failed", 70)
+    assert answered(client.request("setRating", {"id": goes, "rating": 5})) == ("failed", 70)
+    for fmt in ("json", "xml"):
+        answer = client.request("unstar", {"id": goes}, fmt=fmt)  # type: ignore[arg-type]
+        assert answered(answer) == ("ok", None)
+    assert uses_in_navidrome(world, goes) == ["missing", "rated"]
+    # A rating of 0 in every spelling Navidrome reads as 0 takes the rating back.
+    for zero in ("0", "00", "+0", "-0"):
+        native.ok("setRating", {"id": goes, "rating": 3})
+        assert uses_in_navidrome(world, goes) == ["missing", "rated"]
+        client.ok("setRating", {"id": goes, "rating": zero})
+        assert uses_in_navidrome(world, goes) == ["missing"]
+
+
+def test_a_use_is_not_forwarded_when_navidrome_cannot_say_whether_the_id_is_a_song(
+    changes: DeliveryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = changes
+    _, songs = changed_album(world)
+    stays, goes = songs[7], songs[6]
+    fills = world.services.fills
+    assert fills is not None
+    client = world.client(client="unknown")
+
+    async def unreachable(song_id: str) -> Any:
+        raise NavidromeError("Navidrome does not answer")
+
+    monkeypatch.setattr(fills.replacements.navidrome, "song", unreachable)
+    for fmt in ("json", "xml"):
+        answer = client.request("star", {"id": goes}, fmt=fmt)  # type: ignore[arg-type]
+        assert answered(answer) == ("failed", 0), answer.text[:200]
+        assert "could not be asked about the song: try again later" in answer.text
+    assert uses_in_navidrome(world, goes) == ["missing"]
+    # A song Shijhon itself knows to be one - the new release's - needs no asking.
+    assert answered(client.request("star", {"id": stays})) == ("ok", None)
+    assert uses_in_navidrome(world, stays) == ["starred"]
+    # Asked again once Navidrome answers: not found, for good.
+    monkeypatch.undo()
+    assert answered(client.request("star", {"id": goes})) == ("failed", 70)
+    assert uses_in_navidrome(world, goes) == ["missing"]
+
+
+def test_a_use_of_an_old_song_of_an_unfinished_change_finishes_it_or_is_told_to_wait(
+    changes: DeliveryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A change whose fill failed is unfinished: a use of one of its old songs is the
+    album's next use - it starts the fill -, and while that fails it is told to try again,
+    never forwarded; once the album is filled it goes on, or is "not found"."""
+    world = changes
+    engine, fills = world.services.engine, world.services.fills
+    assert fills is not None
+    ident, songs = filled_to_change(world, CRIMSON)
+    goes, stays = songs[3], songs[7]
+    materialize = engine.materialize_held
+
+    async def failing(*args: Any, **kwargs: Any) -> Any:
+        raise MaterializeError("Navidrome did not index the new songs")
+
+    monkeypatch.setattr(engine, "materialize_held", failing)
+    with pytest.raises(FillPending):
+        change_release(world, ident, COPIES[CRIMSON.title][1])
+    client = world.client(client="unfinished")
+    for fmt in ("json", "xml"):
+        answer = client.request("star", {"id": stays}, fmt=fmt)  # type: ignore[arg-type]
+        assert answered(answer) == ("failed", 0) and "try again later" in answer.text
+    assert uses_in_navidrome(world, stays) == ["missing"]
+    left = call(world, lambda: fills.replacements.unfinished(ident))
+    assert left is not None and left.attempts == 3  # the change's own try, and the two uses'
+    monkeypatch.setattr(engine, "materialize_held", materialize)
+    assert answered(client.request("star", {"id": stays})) == ("ok", None)
+    assert call(world, lambda: fills.replacements.unfinished(ident)) is None
+    assert uses_in_navidrome(world, stays) == ["starred"]
+    assert answered(client.request("star", {"id": goes})) == ("failed", 70)
+    assert uses_in_navidrome(world, goes) == ["missing"]
 
 
 # --- interception while a placeholder is written ----------------------------------------
@@ -3209,3 +4311,804 @@ async def test_materialization_killed_after_exclusive_publication_is_recovered(
         made = await p.engine.materialize(release)
         assert len(made.created) == 2
         await assert_in_step(p, folder)
+
+
+# --- artist lists of library files: killed at any step ------------------------------------
+
+ARTIST_LIST_STEPS = ["intended", "staged", "linked", "swapped", "verified", "committed"]
+
+
+@pytest.mark.parametrize("step", ARTIST_LIST_STEPS)
+async def test_an_artist_list_write_killed_at_any_step_is_put_right_at_the_next_start(
+    navidrome: NavidromeInstance, state: Path, step: str
+) -> None:
+    """The file is the old one again (no copy and no second link left in its folder) and
+    the row says it was not written - or, killed after the commit, the new file and its
+    row; Navidrome shows the file that is there."""
+    from shijhon.artist_lists.files import LibraryFiles, file_digest
+
+    folder = f"artist-lists/{step}"
+    joined = "Mira Lune, Tov Hale"
+    path = write_album(
+        navidrome.music,
+        Album(joined, f"Lists {step}", (Track("Listed", 1),), write_album_artist=False,
+              folder=folder),
+    )[0]  # fmt: skip
+    navidrome.scan(targets=[folder])
+    digest = file_digest(path)
+    await kill_at(
+        navidrome, state, f"write {step}", action="artist_list",
+        lists={joined: ["Mira Lune", "Tov Hale"]},
+    )  # fmt: skip
+    async with engine_for(navidrome, state) as parts:
+        files = LibraryFiles(navidrome.music, parts.store, parts.navidrome, parts.scans)
+        await files.recover()
+        row = await parts.store.fetchone(
+            "SELECT * FROM artist_lists WHERE path = ?", [f"{folder}/{path.name}"]
+        )
+        assert row is not None and row["phase"] == ""
+        assert not [p for p in path.parent.iterdir() if p.name.startswith(".shijhon-")]
+        done = step == "committed"
+        assert (row["state"] == "written") == done
+        if done:
+            assert (row["size_after"], row["sha_after"]) == file_digest(path)
+        else:
+            assert file_digest(path) == digest
+        navidrome.scan(targets=[folder])
+        song = next(s for s in await parts.navidrome.songs_under(folder) if not s.get("missing"))
+        assert song["size"] == path.stat().st_size
+        names = [p["name"] for p in song["participants"]["artist"]]
+        assert names == (["Mira Lune", "Tov Hale"] if done else [joined])
+
+
+# --- artist lists of music imports' files: killed at any step -----------------------------
+
+
+@pytest.mark.parametrize("step", ["write swapped", "write verified", "undo unlinked"])
+async def test_an_import_file_s_list_killed_at_any_step_is_put_right_at_the_next_start(
+    navidrome_factory: NavidromeFactory, tmp_path: Path, step: str
+) -> None:
+    """The next start rolls an uncommitted swap back (the upgrades' recovery, or the
+    artist lists' own for an undo): the import's records name the published file, and
+    Navidrome shows that file - the original without its list, or the copy with it."""
+    from tests.harness.import_world import open_world, published
+
+    nd = navidrome_factory()
+    joined, names = "Pell Rook & Sima Dune", ["Pell Rook", "Sima Dune"]
+
+    def login(name: str, password: str) -> str:
+        return str(nd.login(name, password)["token"])
+
+    def shows(wanted: list[str]) -> Any:
+        def settled(song: Any, size: int) -> bool:
+            people = [p["name"] for p in (song or {}).get("participants", {}).get("artist", [])]
+            return bool(song) and song.get("size") == size and people == wanted
+
+        return settled
+
+    database = tmp_path / "shijhon.sqlite3"
+    w = await open_world(
+        nd.base_url, nd.music, database, ("ana",), create=nd.create_user, login=login
+    )
+    source = write_album(
+        tmp_path / "source",
+        Album(joined, "Kept Tide", (Track("Kept", 1),), write_album_artist=False, folder="K"),
+    )
+    await published(w, w.users["ana"], source, tmp_path / "source", "killed")
+    item = dict(await w.store.fetchone("SELECT * FROM music_import_items WHERE state='complete'"))
+    request = {"values": {"artists": names}, "pin": True, "artist": joined}
+    if step.startswith("undo"):
+        await w.lists.write(item["song_id"], request, shows(names), {"artist": joined})
+    listed = dict(await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?",
+                                         [item["id"]]))  # fmt: skip
+    await w.close()
+    await kill_at(
+        nd, tmp_path, step, action="import_undo" if step.startswith("undo") else "import_write",
+        users=["ana"], song=item["song_id"], names=names, artist=joined,
+    )  # fmt: skip
+    w = await open_world(nd.base_url, nd.music, database, ("ana",), login=login)
+    try:
+        for _ in range(5):  # (a roll back that waits for Navidrome is finished on a later turn)
+            await w.lists.recover()
+            await w.imports.upgrades.recover()
+            if not await w.store.fetchone("SELECT 1 FROM music_import_items WHERE upgrade<>''"):
+                break
+        after = dict(await w.store.fetchone("SELECT * FROM music_import_items WHERE id=?",
+                                            [item["id"]]))  # fmt: skip
+        assert after["upgrade"] == ""
+        expected = listed if step.startswith("undo") else item
+        for name in ("staging_name", "digest", "expected_size", "final_name"):
+            assert after[name] == expected[name], name
+        assert w.imports.storage.holds(
+            after["final_name"], after["staging_name"], after["expected_size"], after["digest"]
+        )
+        row = await w.store.fetchone("SELECT * FROM artist_lists WHERE item_id=?", [item["id"]])
+        if step.startswith("undo"):
+            assert row is not None and (row["state"], row["phase"]) == ("written", "")
+        else:
+            assert row is None or row["state"] != "written"
+        nd.scan(targets=["_imports"])
+        song = await w.native.song(item["song_id"])
+        assert song is not None and song["size"] == after["expected_size"]
+        people = [p["name"] for p in song["participants"]["artist"]]
+        assert people == (names if step.startswith("undo") else [joined])
+    finally:
+        await w.close()
+
+
+# --- the library pass reading an added release's track list again ----------------------
+
+# In the order a reading writes: the first correction's swap, then the new track.
+TRACK_LIST_STEPS = [
+    "retag swapped", "retag verified", "retag committed",
+    "intended", "in place", "verified", "recorded",
+]  # fmt: skip
+RUN_SECONDS = 6 * 3600.0
+
+
+async def _reading(parts: EngineParts, release: CatalogRelease) -> Any:
+    return await parts.store.fetchone(
+        "SELECT * FROM release_refreshes WHERE ref = ?", [str(release.ref)]
+    )
+
+
+async def _as_listed(
+    parts: EngineParts, release: CatalogRelease, made: Any, listed: CatalogRelease
+) -> None:
+    """The release is in the library as ``listed`` says, every track once: the songs it had
+    under their IDs, and its recorded data the same."""
+    recorded = await assert_in_step(parts, made.folder)
+    assert len(recorded) == len(listed.tracks)
+    rows = {str(r["track_ref"]): r for r in recorded.values()}
+    for track in listed.tracks:
+        row = rows[str(track.ref)]
+        assert (row["title"], row["duration_ms"], row["track"]) == (
+            track.title, track.duration_ms, track.number
+        )  # fmt: skip
+        song = await parts.navidrome.song(str(row["song_id"]))
+        assert song is not None and song["title"] == track.title
+        assert song["albumId"] == made.album_id
+    for track in release.tracks:
+        assert rows[str(track.ref)]["song_id"] == made.created[track.ref]
+    album = await parts.navidrome.album(made.album_id)
+    assert album["songCount"] == len(listed.tracks)
+    stored = await parts.store.fetchone(
+        "SELECT data FROM releases WHERE ref = ?", [str(release.ref)]
+    )
+    assert stored is not None
+    assert release_from_data(json.loads(stored["data"])).tracks == listed.tracks
+
+
+@pytest.mark.parametrize("step", TRACK_LIST_STEPS)
+async def test_a_track_list_reading_killed_at_any_step_is_finished_by_the_next(
+    navidrome: NavidromeInstance, state: Path, step: str
+) -> None:
+    key = "r-lists-" + step.replace(" ", "-")
+    release = release_of(key, 3)
+    listed = listed_later(release)
+    async with engine_for(navidrome, state) as parts:
+        made = await parts.engine.materialize(release)
+    await kill_at(navidrome, state, step, action="track_lists", key=key, count=3)
+    async with restarted(navidrome, state) as parts:
+        recorded = await assert_in_step(parts, made.folder)
+        # The songs it had are there under their IDs; the new track only once recorded.
+        assert set(made.created.values()) <= {str(r["song_id"]) for r in recorded.values()}
+        assert len(recorded) == (4 if step == "recorded" else 3)
+        # The reading was not recorded: the next run reads the release again.
+        assert await _reading(parts, release) is None
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed)
+        counts = await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+        assert counts is not None and counts["read"] == 1
+        await _as_listed(parts, release, made, applied_later(release))
+        row = await _reading(parts, release)
+        # (Killed after its last write, nothing was left to add or correct.)
+        assert row["outcome"] == ("same" if step == "recorded" else "changed")
+        # Read again a month on: nothing to do.
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed, days=62)
+        assert await lists.run(dry_run=False, run_seconds=RUN_SECONDS) == {"read": 1, "same": 1}
+        await _as_listed(parts, release, made, applied_later(release))
+
+
+@pytest.mark.parametrize("step", ["retag verified", "retag committed", "in place", "recorded"])
+@pytest.mark.parametrize("how", ["canceled", "failed"])
+async def test_a_track_list_reading_canceled_or_failed_keeps_the_library_in_step(
+    navidrome: NavidromeInstance, tmp_path: Path, step: str, how: str
+) -> None:
+    release = release_of(f"r-lists-{how}-" + step.replace(" ", "-"), 3)
+    listed = listed_later(release)
+    async with engine_for(navidrome, tmp_path) as parts:
+        made = await parts.engine.materialize(release)
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed)
+        with anyio.CancelScope() as scope:
+
+            async def stop(name: str) -> None:
+                if name != step:
+                    return
+                parts.engine.step = None  # (the first time only)
+                if how == "failed":
+                    raise RuntimeError("a failure")
+                scope.cancel()
+                await anyio.lowlevel.checkpoint()
+
+            parts.engine.step = stop
+            try:
+                await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+            finally:
+                parts.engine.step = None
+        assert scope.cancelled_caught == (how == "canceled")
+        recorded = await assert_in_step(parts, made.folder)
+        assert set(made.created.values()) <= {str(r["song_id"]) for r in recorded.values()}
+        row = await _reading(parts, release)
+        if how == "canceled":
+            assert row is None  # not recorded as read: the next run reads it again
+        else:  # read again a day or a week later, not at every run
+            assert row["outcome"] in ("failed", "unwritten")
+            again = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed)
+            assert await again.run(dry_run=False, run_seconds=RUN_SECONDS) == {}
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed, days=39)
+        counts = await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+        assert counts is not None and counts["read"] == 1
+        await _as_listed(parts, release, made, applied_later(release))
+
+
+async def test_a_dry_run_of_a_track_list_reading_writes_nothing(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    release = release_of("r-lists-dry", 3)
+    listed = listed_later(release)
+    async with engine_for(navidrome, tmp_path) as parts:
+        made = await parts.engine.materialize(release)
+        folder = parts.layout.absolute(made.folder)
+        before = {p.name: (p.stat().st_mtime_ns, p.stat().st_size) for p in folder.iterdir()}
+        rows = await parts.store.fetchall("SELECT * FROM placeholders ORDER BY song_id")
+        scans = parts.scans.scans_started
+
+        async def no_write(name: str) -> None:
+            raise AssertionError(f"a dry run reached the write step {name!r}")
+
+        parts.engine.step = no_write
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed)
+        try:
+            counts = await lists.run(dry_run=True, run_seconds=RUN_SECONDS)
+        finally:
+            parts.engine.step = None
+        assert counts == {"read": 1, "pending": 1, "added": 1, "updated": 1}
+        assert {
+            p.name: (p.stat().st_mtime_ns, p.stat().st_size) for p in folder.iterdir()
+        } == before
+        assert await parts.store.fetchall("SELECT * FROM placeholders ORDER BY song_id") == rows
+        assert parts.scans.scans_started == scans  # Navidrome was not asked to scan
+        await _as_listed(parts, release, made, release)  # as it was added
+        # Switched on, the pass applies it at once.
+        applied = await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+        assert applied == {"read": 1, "changed": 1, "added": 1, "updated": 1}
+        await _as_listed(parts, release, made, applied_later(release))
+
+
+async def test_track_lists_are_not_read_while_the_library_may_not_be_written(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    """Navidrome would purge missing files: nothing is asked for what could not be written."""
+    release = release_of("r-lists-refused", 3)
+    listed = listed_later(release)
+    async with engine_for(navidrome, tmp_path) as parts:
+        made = await parts.engine.materialize(release)
+
+        async def refused(*, fresh: bool = False) -> str:
+            return "Navidrome is set to purge missing files"
+
+        parts.engine.writes_refused = refused
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed)
+        assert await lists.run(dry_run=False, run_seconds=RUN_SECONDS) == {}
+        assert lists.refresh.catalog.asked == 0  # type: ignore[attr-defined]
+        assert await _reading(parts, release) is None
+        await _as_listed(parts, release, made, release)
+        # A dry run writes nothing anyway: it still counts.
+        counts = await lists.run(dry_run=True, run_seconds=RUN_SECONDS)
+        assert counts == {"read": 1, "pending": 1, "added": 1, "updated": 1}
+        await _as_listed(parts, release, made, release)
+        # ... and once the library may be written, the next run applies it.
+        parts.engine.writes_refused = None
+        applied = await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+        assert applied == {"read": 1, "changed": 1, "added": 1, "updated": 1}
+        await _as_listed(parts, release, made, applied_later(release))
+
+
+@pytest.mark.parametrize("left", ["being taken out", "half written"])
+async def test_a_track_list_is_not_applied_to_a_release_a_stop_left_unfinished(
+    navidrome: NavidromeInstance, tmp_path: Path, left: str
+) -> None:
+    """A release marked as being taken out, or with a write of it left pending, is not the
+    pass's to change: nothing is written, and it is tried again later."""
+    release = release_of("r-lists-left-" + left.replace(" ", "-"), 3)
+    listed = listed_later(release)
+    ref = str(release.ref)
+    async with engine_for(navidrome, tmp_path) as parts:
+        made = await parts.engine.materialize(release)
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed)
+        if left == "being taken out":
+            await parts.store.execute(
+                "UPDATE releases SET removing_at = ? WHERE ref = ?", [time.time(), ref]
+            )
+            # Not among the releases to read ...
+            assert await lists.run(dry_run=False, run_seconds=RUN_SECONDS) == {}
+            assert lists.refresh.catalog.asked == 0  # type: ignore[attr-defined]
+            # ... and marked between the reading and its turn: refused, for now.
+            result = await lists.refresh.apply(made.album_id, ref, listed, narrow=True)
+            assert result.refused == "it is being taken out of the library" and result.retry
+            await parts.store.execute("UPDATE releases SET removing_at = NULL WHERE ref = ?", [ref])
+        else:
+            await parts.store.execute(
+                "INSERT INTO pending_placeholders (release_ref, folder, paths, cover,"
+                " new_folder, started_at) VALUES (?, ?, '[]', 0, 0, ?)",
+                [ref, made.folder, time.time()],
+            )
+            counts = await lists.run(dry_run=True, run_seconds=RUN_SECONDS)
+            assert counts == {"read": 1, "failed": 1}
+            row = await _reading(parts, release)
+            assert row["outcome"] == "failed"
+            assert row["reason"] == "an earlier write of it is not finished"
+            await parts.store.execute(
+                "DELETE FROM pending_placeholders WHERE release_ref = ?", [ref]
+            )
+        await _as_listed(parts, release, made, release)  # as it was added
+
+
+async def test_a_track_list_reading_looks_for_owned_recordings_only_after_a_change(
+    navidrome: NavidromeInstance, tmp_path: Path
+) -> None:
+    """A release whose list is as it was costs Navidrome no searches."""
+    release = release_of("r-lists-backing", 3)
+    listed = listed_later(release)
+    async with engine_for(navidrome, tmp_path) as parts:
+        await parts.engine.materialize(release)
+        asked: list[set[str]] = []
+
+        class Backing:
+            async def back(self, pairs: Any, *args: Any) -> dict[str, str]:
+                asked.append({str(track.ref) for track, _ in pairs})
+                return {}
+
+        parts.engine.backing = Backing()  # type: ignore[assignment]
+        same = await track_lists_for(parts.engine, parts.store, parts.navidrome, release)
+        assert await same.run(dry_run=False, run_seconds=RUN_SECONDS) == {"read": 1, "same": 1}
+        assert asked == []
+        lists = await track_lists_for(parts.engine, parts.store, parts.navidrome, listed, days=62)
+        counts = await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+        assert counts == {"read": 1, "changed": 1, "added": 1, "updated": 1}
+        # The new track and the release's other placeholders without one.
+        assert asked == [{str(track.ref) for track in listed.tracks}]
+
+
+# --- a reading of a picked album and of an album with a part, stopped --------------------
+
+
+def _stopped_reading(world: DeliveryWorld, step: str, ref: str) -> bool:
+    """The library pass's reading of ``ref``'s track list, canceled at ``step`` as a
+    shutdown cancels it (its compensations run). Whether it got there."""
+    from tests.acceptance.test_I_refresh import only_due, track_lists
+
+    only_due(world, ref)
+    lists, engine = track_lists(world), world.services.engine
+
+    async def run() -> bool:
+        with anyio.CancelScope() as scope:
+
+            async def stop(name: str) -> None:
+                if name == step:
+                    engine.step = None
+                    scope.cancel()
+                    await anyio.lowlevel.checkpoint()
+
+            engine.step = stop
+            try:
+                await lists.run(dry_run=False, run_seconds=RUN_SECONDS)
+            finally:
+                engine.step = None
+        return scope.cancelled_caught
+
+    return bool(world.server.call(run))
+
+
+def test_a_picked_albums_reading_stopped_while_its_new_track_is_written_adds_it_later(
+    navidrome_factory: NavidromeFactory, tmp_path: Path
+) -> None:
+    """The album's release numbers its tracks differently from the owned files. The new
+    track's file is in the library when the reading stops: it goes again, the album has
+    the songs it had where they were, and the next reading adds the track."""
+    from tests.acceptance.test_I_auto_pick import replay_for_picks, songs
+    from tests.acceptance.test_I_refresh import read_again, reading
+    from tests.acceptance.test_I_track_lists import (
+        PICKED_RELEASE,
+        in_step,
+        listed_for_the_pick,
+        picked_album,
+    )
+
+    replay = replay_for_picks()
+    with picked_album(navidrome_factory, tmp_path, replay) as (world, album):
+        before = {s["id"]: s for s in songs(world, album)}
+        listed_for_the_pick(replay)
+        assert _stopped_reading(world, "in place", PICKED_RELEASE)
+        assert len(in_step(world, PICKED_RELEASE)) == 12  # nothing of the new track left
+        stopped = {s["id"]: s for s in songs(world, album)}
+        assert set(stopped) == set(before)
+        for ident, song in before.items():
+            now = stopped[ident]
+            assert (now["title"], now["track"]) == (song["title"], song["track"])
+        assert reading(world, PICKED_RELEASE) is None  # not read: the next run reads it
+        counts = read_again(world, PICKED_RELEASE)
+        assert counts is not None and (counts["read"], counts["added"]) == (1, 1)
+        after = songs(world, album)
+        assert len(after) == 15 and len(in_step(world, PICKED_RELEASE)) == 13
+        titles = {s["title"]: s["track"] for s in after if s["id"] not in before}
+        assert titles == {"Fifteenth River": 15}  # none on the owned song's number
+
+
+def test_a_reading_stopped_while_it_corrects_a_part_s_placeholder_keeps_the_part_s_file(
+    navidrome_factory: NavidromeFactory, tmp_path: Path
+) -> None:
+    """The placeholder a part's own file plays for is being given its corrected length
+    when the reading stops: it is as it was, the part's file still plays for it, and the
+    next reading corrects it - the part's file still playing."""
+    from tests.acceptance.test_I_auto_pick import replay_for_picks, songs
+    from tests.acceptance.test_I_refresh import read_again, reading
+    from tests.acceptance.test_I_track_lists import (
+        PART_RELEASE,
+        album_with_a_part,
+        backed_row,
+        in_step,
+        listed_for_the_part,
+    )
+
+    replay = replay_for_picks()
+    with album_with_a_part(navidrome_factory, tmp_path, replay) as (world, whole, backed):
+        song, owned = str(backed["song_id"]), str(backed["backing_song_id"])
+        own_audio = world.nd.client().request("stream", {"id": owned}).content
+        listed_for_the_part(replay, backed)
+        assert _stopped_reading(world, "retag verified", PART_RELEASE)
+        assert backed_row(world) == backed  # its row as it was
+        assert len(in_step(world, PART_RELEASE)) == 12 and len(songs(world, whole)) == 17
+        assert world.client().request("stream", {"id": song}).content == own_audio
+        assert reading(world, PART_RELEASE) is None
+        counts = read_again(world, PART_RELEASE)
+        assert counts == {"read": 1, "changed": 1, "added": 1, "updated": 1}
+        now = backed_row(world)
+        assert (now["song_id"], now["backing_song_id"]) == (song, owned)
+        assert now["duration_ms"] == backed["duration_ms"] + 4000
+        assert world.client().request("stream", {"id": song}).content == own_audio
+        assert len(in_step(world, PART_RELEASE)) == 13
+
+
+# --- audio fetched while its song's length is corrected ---------------------------------
+
+
+@pytest.mark.parametrize(("corrected", "fits"), [(4000, True), (30000, False)])
+def test_audio_fetched_while_its_songs_length_is_corrected_must_fit_the_corrected_length(
+    world: DeliveryWorld, monkeypatch: pytest.MonkeyPatch, corrected: int, fits: bool
+) -> None:
+    """A download finds its audio for the length the catalog gave (3 s, within the
+    tolerance). Before the audio is put in place, the library pass's reading corrects the
+    song's length. Under the song's lock the audio is checked against the length the song
+    has then: within the tolerance it is put in place, otherwise it is another recording
+    by the corrected length - refused, the placeholder silent with its corrected length."""
+    engine, download_first = world.services.engine, world.services.download_first
+    song, _, audio = world.placeholder_track(f"r-length-{corrected}", [world.addons[0]])
+    monkeypatch.setattr(world.services.deliverer.settings, "length_tolerance_seconds", 2.0)
+    one_piece = download_first._one_piece
+    corrections: list[bool] = []
+
+    async def corrected_meanwhile(*args: Any, **kwargs: Any) -> Any:
+        corrections.append(await engine.correct_length(song, corrected))
+        return await one_piece(*args, **kwargs)
+
+    monkeypatch.setattr(download_first, "_one_piece", corrected_meanwhile)
+    try:
+        answer = world.client().request("download", {"id": song})
+    finally:
+        monkeypatch.undo()
+    assert corrections == [True]
+
+    async def rows() -> Any:
+        return await world.services.store.fetchone(
+            "SELECT * FROM placeholders WHERE song_id = ?", [song]
+        )
+
+    row = call(world, rows)
+    assert row["duration_ms"] == corrected
+    listed = call(world, lambda: world.services.navidrome.song(song))
+    assert not list(engine.layout.staging.glob("backup-*"))
+    assert [p.name for p in download_first.work_dir.iterdir()] == []
+    marker = tagging.marker_of(engine.layout.absolute(str(row["path"])))
+    assert marker is not None
+    if fits:  # the add-on's audio, tagged as the song
+        assert answer.status_code == 200 and len(answer.content) > audio.stat().st_size // 2
+        assert row["state"] == "delivered" and round(listed["duration"]) == 3
+        assert not marker.silence
+    else:
+        failed = answer.json()["subsonic-response"]
+        assert failed["status"] == "failed" and failed["error"]["message"] == (
+            "download unavailable: another recording (3.0s, the catalog's 30.0s)"
+        )
+        assert row["state"] == "placeholder" and round(listed["duration"]) == 30
+        assert marker.silence
+
+
+# --- an agent's addition to its account's library, stopped ------------------------------
+
+ADDING_USER = ("lena", "lena-password")
+
+
+@pytest.fixture(scope="module")
+def adding(
+    navidrome_factory: NavidromeFactory, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[tuple[DeliveryWorld, Any, str]]:
+    """A world whose agents' additions the tests work on themselves: the app's own worker
+    is parked, so a request is added only by the worker a test runs, stops and restarts.
+    The catalog is the invented one of the daily cap's suite; a cap is set, so that what
+    counts for the account can be told."""
+    from shijhon.catalog.base import CatalogError
+    from tests.acceptance.test_C_daily_cap import RELEASES, SONGS
+    from tests.harness.dashboard import Browser
+    from tests.harness.replay import Replay
+
+    nd = navidrome_factory()
+    owner = nd.create_user(*ADDING_USER)
+    catalog = Replay().catalog()
+
+    async def by_album(ident: str) -> CatalogRelease:
+        if ident not in RELEASES:
+            raise CatalogError("not_found", "no such album")
+        return RELEASES[ident]
+
+    async def by_song(ident: str) -> Any:
+        if ident not in SONGS:
+            raise CatalogError("not_found", "no such song")
+        return SONGS[ident]
+
+    catalog.album, catalog.song = by_album, by_song  # type: ignore[method-assign]
+    with delivery_world(nd, tmp_path_factory.mktemp("r-adding"), catalog=catalog, agents=True) as w:
+        adder = w.app.agents.additions
+
+        async def parked() -> float:
+            await anyio.sleep_forever()
+            return 0.0
+
+        adder.tick = parked  # type: ignore[method-assign]
+        for attempts in ("register_attempts", "authorize_attempts", "login_attempts"):
+            getattr(w.app.agents, attempts).limit = 10_000
+        assert w.services.daily_cap is not None
+        w.services.daily_cap.limit = 30
+        browser = Browser(w.server.base_url)
+        yield w, browser, owner
+        browser.close()
+
+
+def _adding_grant(adding: tuple[DeliveryWorld, Any, str], name: str) -> str:
+    """A connection of the account that may add: its grant."""
+    from tests.harness.agents import connect_agent
+
+    w, browser, _ = adding
+    connect_agent(browser.http, w.server.base_url, *ADDING_USER, "add status", client_name=name)
+    row = call(
+        w,
+        lambda: w.services.store.fetchone(
+            "SELECT id FROM playlist_agent_tokens WHERE name=?", [name]
+        ),
+    )
+    return str(row["id"])
+
+
+def _asked_to_add(w: DeliveryWorld, owner: str, grant: str, numbers: list[int]) -> str:
+    """An addition accepted for the worker, as the tool accepts it."""
+    from tests.acceptance.test_C_daily_cap import album
+
+    adder = w.app.agents.additions
+    ids = [album(n) for n in numbers]
+    items = [{"album_id": ident, "state": "pending"} for ident in ids]
+
+    async def accept() -> str:
+        async with w.services.playlists.changing():
+            ident, created = await adder.accept(
+                owner, grant, f"stopped-{numbers[0]:03d}", adder.canonical(ids, "", [], 10), items
+            )
+        assert created
+        return str(ident)
+
+    return str(call(w, accept))
+
+
+def _addition_stopped(w: DeliveryWorld, worker: Any, step: str, *, meanwhile: Any = None) -> bool:
+    """The worker's look for work, canceled at ``step`` as a shutdown cancels it; whether
+    it got there. ``meanwhile`` instead: awaited at ``step``, and the worker goes on."""
+    from shijhon.agents.library import LibraryAdditions
+
+    async def run() -> bool:
+        with anyio.CancelScope() as scope:
+
+            async def at(name: str) -> None:
+                if name != step:
+                    return
+                worker.step = None
+                if meanwhile is not None:
+                    await meanwhile()
+                    return
+                scope.cancel()
+                await anyio.lowlevel.checkpoint()
+
+            worker.step = at
+            try:
+                await LibraryAdditions.tick(worker)
+            finally:
+                worker.step = None
+        return scope.cancelled_caught
+
+    return bool(call(w, run))
+
+
+def _restarted_worker(w: DeliveryWorld) -> Any:
+    """The next start's worker: a new one over the same database and library."""
+    from shijhon.agents.library import LibraryAdditions
+
+    old = w.app.agents.additions
+    return LibraryAdditions(old.service, old.additions, old.recorder)
+
+
+def _addition(w: DeliveryWorld, ident: str) -> tuple[str, list[tuple[str, str]]]:
+    row = call(
+        w,
+        lambda: w.services.store.fetchone(
+            "SELECT state,items FROM library_additions WHERE id=?", [ident]
+        ),
+    )
+    items = json.loads(row["items"])
+    return str(row["state"]), [(i["state"], i.get("reason", "")) for i in items]
+
+
+def _added_in_step(w: DeliveryWorld, owner: str, number: int, *, there: bool) -> None:
+    """The release is in the library once - its folder, Shijhon's rows and what Navidrome
+    lists agree - or not at all."""
+    from tests.acceptance.test_C_daily_cap import RELEASES, ref
+
+    engine, store = w.services.engine, w.services.store
+    release = RELEASES[f"cap{number}"]
+    parts = EngineParts(
+        engine, w.services.navidrome, engine.scans, engine.silence, store, engine.layout
+    )
+    folder = folder_of(parts, release)
+    rows = call(w, lambda: assert_in_step(parts, folder))
+    kept = call(w, lambda: store.fetchall("SELECT ref FROM releases WHERE ref=?", [ref(number)]))
+    found = w.nd.client(*ADDING_USER).ok("search3", {"query": release.title, "songCount": 0})
+    albums = [a for a in found["searchResult3"].get("album", []) if a["name"] == release.title]
+    if there:
+        assert len(rows) == len(release.tracks) and len(kept) == 1
+        assert [a["songCount"] for a in albums] == [len(release.tracks)]
+    else:
+        assert rows == {} and kept == [] and albums == []
+
+
+def _counted_for(w: DeliveryWorld, owner: str, numbers: list[int]) -> list[str]:
+    """The releases among these that count for the account's daily cap (each once)."""
+    from tests.acceptance.test_C_daily_cap import ref
+
+    rows = call(
+        w,
+        lambda: w.services.store.fetchall(
+            "SELECT release_ref FROM release_additions WHERE user_id=? ORDER BY added_at", [owner]
+        ),
+    )
+    wanted = {ref(n) for n in numbers}
+    return [str(r["release_ref"]) for r in rows if r["release_ref"] in wanted]
+
+
+ADDITION_STEPS = ["before commit", "committed", "recorded", "saved", "ending"]
+
+
+@pytest.mark.parametrize("step", ADDITION_STEPS)
+def test_an_addition_stopped_at_any_step_is_finished_once_by_the_next_start(
+    adding: tuple[DeliveryWorld, Any, str], step: str
+) -> None:
+    """The worker adds a request's releases one after another. Stopped between any two of
+    its steps - before a release's commit, after it and before the request's record says
+    so, after the account's activity is recorded, after the record is updated, at the
+    end - the next start goes on where it stopped: every release is in the library once,
+    recorded for the account once, counted for its daily cap once, and the request says
+    each was added."""
+    from shijhon.agents.library import STEPS
+    from tests.acceptance.test_agent_library_additions import recorded, songs
+    from tests.acceptance.test_C_daily_cap import ref
+
+    assert list(STEPS) == ADDITION_STEPS
+    w, _, owner = adding
+    first = 1 + 2 * ADDITION_STEPS.index(step)
+    numbers = [first, first + 1]
+    grant = _adding_grant(adding, f"Stopped at {step}")
+    ident = _asked_to_add(w, owner, grant, numbers)
+    worker, commits = w.app.agents.additions, w.services.commits
+    assert commits is not None
+    written, said = commits.materializations, worker.added
+    assert _addition_stopped(w, worker, step)
+    # As the stop left it: nothing half done, and the request still to be worked on.
+    state, items = _addition(w, ident)
+    assert state == "running"
+    assert [s for s, _ in items] == {
+        "before commit": ["pending", "pending"],
+        "committed": ["pending", "pending"],
+        "recorded": ["pending", "pending"],
+        "saved": ["added", "pending"],
+        "ending": ["added", "added"],
+    }[step]
+    _added_in_step(w, owner, first, there=step != "before commit")
+    _added_in_step(w, owner, first + 1, there=step == "ending")
+    # The next start.
+    fresh = _restarted_worker(w)
+    call(w, fresh.tick)
+    assert _addition(w, ident) == ("finished", [("added", ""), ("added", "")])
+    for number in numbers:
+        _added_in_step(w, owner, number, there=True)
+    assert commits.materializations - written == 2  # each release written once
+    assert (worker.added - said) + fresh.added == 2  # ... and said to be added once
+    assert recorded(w, owner) >= songs(first) | songs(first + 1)
+    assert _counted_for(w, owner, numbers) == [ref(n) for n in numbers]
+    # Nothing is left to do: another look changes nothing.
+    call(w, fresh.tick)
+    assert commits.materializations - written == 2
+    assert _addition(w, ident) == ("finished", [("added", ""), ("added", "")])
+
+
+@pytest.mark.parametrize("when", ["before the recovery", "during the recovery"])
+def test_a_revocation_stops_an_addition_that_a_restart_is_recovering(
+    adding: tuple[DeliveryWorld, Any, str], when: str
+) -> None:
+    """The next start goes on with an addition only while its agent may still add. Revoked
+    before the recovery, a release the stopped worker had written stays in the server's
+    library, in step, and is said to be there and not in the account's library; revoked
+    while the recovery adds the next release, that release is not written."""
+    from shijhon.agents.library import REASONS
+    from tests.acceptance.test_agent_library_additions import recorded, songs
+    from tests.acceptance.test_C_daily_cap import ref
+
+    w, _, owner = adding
+    first = 21 if when == "before the recovery" else 23
+    numbers = [first, first + 1]
+    name = f"Recovering {when}"
+    grant = _adding_grant(adding, name)
+    ident = _asked_to_add(w, owner, grant, numbers)
+    worker, commits = w.app.agents.additions, w.services.commits
+    assert commits is not None
+    written = commits.materializations
+
+    async def revoke() -> None:
+        await w.services.store.execute(
+            "UPDATE playlist_agent_tokens SET revoked=? WHERE name=?", [time.time(), name]
+        )
+
+    fresh = _restarted_worker(w)
+    if when == "before the recovery":
+        assert _addition_stopped(w, worker, "committed")  # written, not yet the account's
+        call(w, revoke)
+        call(w, fresh.tick)
+        expected = [("not_added", "stopped_written"), ("not_added", "stopped")]
+        mine: set[str] = set()
+    else:
+        assert _addition_stopped(w, worker, "saved")  # the first release added and said so
+        # The recovery reaches the second release; the agent is revoked before its commit.
+        assert not _addition_stopped(w, fresh, "before commit", meanwhile=revoke)
+        expected = [("added", ""), ("not_added", "stopped")]
+        mine = songs(first)
+    state, items = _addition(w, ident)
+    assert state == "stopped" and items == expected
+    _added_in_step(w, owner, first, there=True)
+    _added_in_step(w, owner, first + 1, there=False)
+    assert commits.materializations - written == 1
+    assert recorded(w, owner) & (songs(first) | songs(first + 1)) == mine
+    assert _counted_for(w, owner, numbers) == [ref(first)]  # written for the account, once
+    said = call(w, lambda: fresh.status(owner, grant, ident))
+    assert said["stopped_because"]
+    if when == "before the recovery":
+        assert said["releases"][0]["detail"] == REASONS["stopped_written"]
+        assert "writing" not in said["releases"][0]
+    # Stopped for good: a later look does not take it up again.
+    call(w, fresh.tick)
+    assert commits.materializations - written == 1
+    assert _addition(w, ident) == ("stopped", expected)

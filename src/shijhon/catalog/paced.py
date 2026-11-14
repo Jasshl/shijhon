@@ -40,6 +40,10 @@ class PacedCatalog:
         with pacing.urgent(pacing.WARM):  # background work: after the listeners' requests
             return await ask()
 
+    async def in_turn[T](self, ask: Callable[[], Awaitable[T]]) -> T:
+        """Another request to the same catalog, in this pace (``PacedReleases``)."""
+        return await self._paced(ask)
+
     async def search(self, term: str, limit: int = 20) -> SearchResults:
         return await self._paced(lambda: self.inner.search(term, limit))
 
@@ -71,3 +75,18 @@ class PacedCatalog:
 
     async def aclose(self) -> None:
         return None  # the wrapped catalog is closed by its owner
+
+
+class PacedReleases:
+    """Releases as the catalog has them now - past the cache ``paced`` asks through - with
+    each request taking its turn in ``paced``'s pace: the library pass reads the track
+    lists of added releases again through this, so that it and its matches keep to one
+    pace together."""
+
+    def __init__(self, paced: PacedCatalog, catalog: Catalog) -> None:
+        self.paced = paced
+        self.catalog = catalog  # the catalog itself, uncached
+        self.key = catalog.key
+
+    async def album(self, album_id: str) -> CatalogRelease:
+        return await self.paced.in_turn(lambda: self.catalog.album(album_id))

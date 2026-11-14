@@ -56,6 +56,7 @@ SECTIONS: Final = (
     "audiomuse",
     "agents",
     "playlists",
+    "notifications",
 )
 # Of [playlists], the settings the dashboard saves (the others stay the configuration's:
 # a runner's command among them).

@@ -2,7 +2,8 @@
 
 ``getAlbum``, ``getSong``, ``getArtist``, ``getArtistInfo(2)``, ``getAlbumInfo(2)``,
 ``getMusicDirectory`` and ``getCoverArt`` answer for catalog IDs (``views/ids.py``)
-without creating anything:
+without creating anything (a catalog artist's info names its similar artists when they
+are known, ``views/radio.py``):
 clients prefetch every album they list. An item that has been materialized is Navidrome's:
 its ID is rewritten to the native one and the request forwarded. Everything else is
 forwarded untouched, and the caller's credentials are checked before any work.
@@ -23,7 +24,7 @@ import anyio
 from shijhon.catalog.artwork import ArtworkCache, ArtworkIndex, raster_type
 from shijhon.catalog.base import Catalog, CatalogError, UnrecognizedArtwork, client_artwork_template
 from shijhon.catalog.editions import dedupe_editions
-from shijhon.catalog.model import CatalogRef, Twins, artwork_url
+from shijhon.catalog.model import CatalogArtist, CatalogRef, Twins, artwork_url
 from shijhon.proxy.app import Forward, Handler, HandlerResult, RequestContext
 from shijhon.proxy.auth import CheckFailed, CredentialChecker
 from shijhon.proxy.params import RestCall
@@ -110,6 +111,11 @@ class VirtualViews:
         # Navidrome's album entry for it.
         self.owner: Callable[[str], Awaitable[str | None]] | None = None
         self.album_of: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+        # A catalog artist's similar artists (``views/radio.py``); none without it.
+        self.similar: (
+            Callable[[RestCall, RequestContext, CatalogArtist], Awaitable[list[dict[str, Any]]]]
+            | None
+        ) = None
 
     def handlers(self) -> dict[str, Any]:
         views = {
@@ -266,9 +272,24 @@ class VirtualViews:
             return catalog_error(call, exc, self.checker.server)
         info: dict[str, Any] = {"biography": "", "musicBrainzId": "", "lastFmUrl": ""}
         info.update(image_urls(await client_artwork_template(catalog, artist.artwork_template)))
-        info["similarArtist"] = []
+        info["similarArtist"] = await self._similar(call, ctx, artist)
         key = "artistInfo2" if call.name == "getArtistInfo2" else "artistInfo"
         return self._ok(call, {key: info})
+
+    async def _similar(
+        self, call: RestCall, ctx: RequestContext, artist: CatalogArtist
+    ) -> list[dict[str, Any]]:
+        """The artist's similar artists; none when they cannot be told (the info itself is
+        still answered)."""
+        if self.similar is None:
+            return []
+        try:
+            return await self.similar(call, ctx, artist)
+        except CheckFailed:
+            raise
+        except Exception as exc:
+            log.warning("similar artists failed: %s", type(exc).__name__)
+            return []
 
     # --- directories ----------------------------------------------------------------------
 

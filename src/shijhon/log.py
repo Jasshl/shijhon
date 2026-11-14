@@ -104,3 +104,15 @@ def quiet_libraries() -> None:
     aiosqlite every statement with its parameters (add-on URLs, saved tokens) at DEBUG."""
     for name in ("httpx", "httpcore", "httpx2", "httpcore2", "aiosqlite"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    quiet_apprise()
+
+
+def quiet_apprise() -> None:
+    """Apprise's log can print a notification address with its token (in forms the URL
+    redaction does not know, such as tgram://), and so can the HTTP libraries under it at
+    debug level: Apprise's is never written, the others' only from warnings up."""
+    found = logging.getLogger("apprise")
+    found.disabled = True
+    found.propagate = False
+    for name in ("urllib3", "requests", "requests_oauthlib", "oauthlib"):
+        logging.getLogger(name).setLevel(logging.WARNING)

@@ -524,6 +524,34 @@ hr {
   color: var(--accent);
 }
 
+/* What waits for an administrator on a page (albums to review, add-ons to sign in to): a
+   small count at the link's end; "Menu" on narrow screens shows a dot while it is closed. */
+.nav-count {
+  flex: none;
+  min-width: 1.25rem;
+  margin-left: auto;
+  padding: 0 0.375rem;
+  border: 1px solid transparent; /* (seen in forced colors) */
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: var(--accent-on);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.125rem;
+  text-align: center;
+}
+.nav-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: var(--accent-fill);
+}
+.menu[open] .nav-dot {
+  display: none;
+}
+
 /* Appearance and the account, at the foot of the sidebar. */
 .account {
   position: sticky;
@@ -595,6 +623,9 @@ hr {
 .banner a {
   color: inherit;
   font-weight: 600;
+}
+.banner + .banner {
+  margin-top: var(--space-3);
 }
 
 .page {
@@ -1771,6 +1802,15 @@ select.select-small {
   color: var(--muted);
   font-size: var(--text-xs);
 }
+/* Its operator says it is signed in again: asked again at once. */
+.source-again {
+  margin-top: var(--space-1);
+}
+/* An add-on's own page where its operator signs in (it said it needs that). */
+.source-link {
+  margin-left: var(--space-1);
+  white-space: nowrap;
+}
 
 /* Add-ons that need attention get a tinted row, so they are found in a long list. */
 .source-attention {
@@ -2780,6 +2820,68 @@ select.select-small {
 .review .col-album {
   width: 30%;
 }
+
+/* A filled album's other releases, folded until someone looks for them. */
+.change-release > form {
+  margin-top: var(--space-2);
+}
+
+/* The Library page's search, above its album lists. */
+.library-search {
+  margin-top: var(--space-6);
+}
+.library-search > label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+}
+.library-search .inline-form > input {
+  flex: 1 1 14rem;
+  max-width: 28rem;
+}
+.library-search + #albums {
+  margin-top: var(--space-4);
+}
+#albums > #library-batch:not(:empty) {
+  margin-bottom: var(--space-4);
+}
+#library-batch progress {
+  margin-top: var(--space-2);
+}
+
+/* A list's selection: every album, or those ticked, and the actions for them.
+   <form class="bulk"><label class="bulk-all">…</label><p class="bulk-count">…</p>
+     <div class="actions">…</div></form> */
+.bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+}
+.bulk-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+.bulk .actions {
+  gap: var(--space-1);
+  transition: opacity 120ms ease-out;
+}
+.bulk.is-idle .actions {
+  opacity: 0.55;
+}
+.cell-pick {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.cell-pick > input {
+  flex: none;
+  margin-top: 0.1875rem;
+}
 .review .col-reason {
   width: 30%;
 }
@@ -3746,6 +3848,68 @@ progress::-moz-progress-bar {
 /* Downloads: the connection on one line, each prepared playlist as a card. */
 .downloads-connect > input {
   max-width: 24rem;
+}
+/* New releases: the follow switch beside its words, the artists followed, the releases. */
+.follow-row,
+.release-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.follow-row {
+  padding: 0;
+}
+.follow-words,
+.release-words {
+  min-width: 0;
+}
+.follow-title,
+.release-title {
+  margin: 0;
+  font-weight: 600;
+}
+.follow-words .field-help,
+.release-words .field-help {
+  margin-block: 0.15rem 0;
+}
+.follow-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  columns: 16rem auto;
+  column-gap: var(--space-5);
+}
+.follow-list > li {
+  break-inside: avoid;
+  padding-block: 0.2rem;
+}
+.release-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rows.release-list > li {
+  padding: var(--space-3) var(--space-5);
+}
+.rows.release-list > li + li {
+  margin-top: 0;
+  border-top: 1px solid var(--rule);
+}
+.release-meta {
+  flex: none;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: right;
+  white-space: nowrap;
+}
+@media (max-width: 34rem) {
+  .release-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
 }
 .downloads-batch + .downloads-batch {
   margin-top: var(--space-3);

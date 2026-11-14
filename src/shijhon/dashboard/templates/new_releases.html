@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% set title = "New releases" %}
+{% set on = status is not none and status.enabled %}
+{% block main %}
+<div class="page-head">
+  <div class="page-title">
+    <h1>New releases</h1>
+    <p class="page-summary">Follow the artists you favorite and play most. Their new releases lead the newest albums in your apps.</p>
+  </div>
+  <details class="page-about"><summary>How following works</summary>
+    <p>Shijhon follows the artists you favorited in your apps and the artists of your favorite albums and songs.{% if most_played %} It also follows the {{ most_played }} artists with the most plays among the albums you played in the last {{ played_days }} days.{% endif %}</p>
+    <p>Once a day it asks the catalog for their releases. A release that came out in the last {{ days }} days and is not in your library shows first among the newest albums in your apps, and on this page. It leaves the list once it is in your library, or when it is older than that.</p>
+    <p>Nothing is added to your library until you play, favorite or add a release. Other accounts choose for themselves, and nobody else sees your artists or your list. Turning this off removes both.</p>
+  </details>
+</div>
+{% if not started %}
+<div class="notice notice-info" role="status"><p>New releases can be turned on once Shijhon has started.</p></div>
+{% elif not available %}
+<div class="notice notice-info" role="status"><p>{% if days %}New releases need a catalog. A Navidrome administrator chooses one on the Catalog page.{% else %}New releases are turned off on this server.{% endif %}</p></div>
+{% endif %}
+{% if on and status.state == "sign_in" %}
+<div class="notice notice-warn" role="status"><p>Shijhon could not read your favorites with your saved sign-in. Sign out and sign in again, and the daily check continues.</p></div>
+{% elif on and status.state == "unavailable" %}
+<div class="notice notice-info" role="status"><p>The last check did not finish because Navidrome or the catalog did not answer. It is tried again within the hour, and your list stays as it was.</p></div>
+{% endif %}
+{% if available or on %}
+<section class="group" aria-labelledby="follow-title">
+  <div class="group-head">
+    <h2 id="follow-title">Your artists</h2>
+{% if on %}
+    <p class="group-meta">{% if status.checking %}Checking your artists now.{% elif status.checked_at %}Last checked {{ status.checked_at|when }}.{% else %}The first check starts within a few minutes.{% endif %} <a href="{{ prefix }}/new-releases">Refresh</a></p>
+{% endif %}
+  </div>
+  <div class="rows music-card">
+    <div class="row follow-row">
+      <div class="follow-words">
+        <p class="follow-title">Follow my favorite and most played artists</p>
+        <p class="field-help">{% if on %}{{ artist_count }} artist{{ "" if artist_count == 1 else "s" }} followed. They are read from your favorites and plays again at every check.{% else %}Off. Your apps show the newest albums as Navidrome lists them.{% endif %}</p>
+      </div>
+      <form method="post" action="{{ prefix }}/new-releases/follow">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="switch" role="switch" aria-checked="{{ 'true' if on else 'false' }}" aria-label="Follow my favorite and most played artists" name="follow" value="{{ 'off' if on else 'on' }}">
+          <span class="switch-track" aria-hidden="true"></span><span class="switch-text" aria-hidden="true">{{ "On" if on else "Off" }}</span>
+        </button>
+      </form>
+    </div>
+{% if on and artists %}
+    <details class="form-more follow-artists"><summary>Artists you follow</summary>
+      <ul class="follow-list">
+{% for name, why in artists %}
+        <li><span>{{ name }}</span> <span class="field-help">{{ why }}</span></li>
+{% endfor %}
+      </ul>
+{% if artist_count > artists|length %}<p class="field-help">Showing the first {{ artists|length }} of {{ artist_count }} artists.</p>{% endif %}
+    </details>
+{% endif %}
+  </div>
+</section>
+{% endif %}
+{% if on %}
+<section class="group" aria-labelledby="releases-title">
+  <div class="group-head">
+    <h2 id="releases-title">New from your artists</h2>
+    <p class="group-meta">{{ releases|length }} release{{ "" if releases|length == 1 else "s" }} from the last {{ days }} days</p>
+  </div>
+{% if releases %}
+  <ol class="rows music-card release-list">
+{% for release in releases %}
+    <li class="row release-row">
+      <div class="release-words"><p class="release-title">{{ release.title }}</p><p class="field-help">{{ release.artist }}</p></div>
+      <p class="release-meta"><span class="tag">{{ release.kind }}</span>{% if release.day %} <time datetime="{{ release.date }}">{{ release.day }}</time>{% endif %}</p>
+    </li>
+{% endfor %}
+  </ol>
+{% else %}
+  <p class="empty">{% if status.checked_at %}None of your artists released anything in the last {{ days }} days that your library lacks.{% else %}Your artists are being checked for the first time. Their new releases appear here and in your apps when the check is done.{% endif %}</p>
+{% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -57,14 +57,15 @@ def staged_now(data: dict[str, Any], appended: int, removed: int) -> list[str]:
 
 
 class Publisher:
-    def __init__(self, imports: Imports) -> None:
-        self.imports, self.service = imports, imports.service
+    def __init__(self, imports: Imports, actor: str | None = None) -> None:
+        """``actor``: whose publication it is (``Imports.guard``)."""
+        self.imports, self.service, self.actor = imports, imports.service, actor
 
     async def guard(self, connection: Connection, mix: dict[str, Any], ident: str) -> None:
-        await self.imports.running(mix, ident, "publishing")
+        # (The import's own guard: ``Requests.guard`` hands an import to it.)
+        await self.imports.running(mix, ident, "publishing", actor=self.actor)
         if not connection.same_settings(await self.service.repo.connection(connection.user_id)):
             raise PlaylistError("The connection changed. Retry with the current connection.")
-        await self.service.requests.guard(mix)
 
     async def save(self, ident: str, data: dict[str, Any]) -> None:
         if not await self.imports.checkpoint(ident, "publishing", data):
@@ -434,6 +435,7 @@ class Publisher:
                 library_bound=True,
                 authorize=lambda: self.guard(connection, mix, ident),
                 addons=True,
+                partly=True,  # at the account's daily cap: what fits, then it stops
             )
             mapping = dict(zip(unique, prepared, strict=True))
             ids.extend(mapping[s.model_dump_json()] for s in batch)

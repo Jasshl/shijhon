@@ -46,6 +46,7 @@ from shijhon.navidrome.checks import PlaceholderWrites, StartupChecks
 from shijhon.navidrome.client import NavidromeError
 from shijhon.navidrome.usage import NOT_PRESENT, UsageSource, open_read_only
 from shijhon.placeholders import tags as tagging
+from shijhon.placeholders.daily_cap import MESSAGE, adding_for, reached
 from shijhon.placeholders.engine import MaterializeError, ReplaceError, _Planned, _row_track
 from shijhon.views.ids import CatalogId
 from tests.conftest import NavidromeFactory
@@ -420,6 +421,7 @@ def test_an_old_copy_of_this_librarys_database_takes_nothing_out(world: Delivery
     assert done.removed == [] and done.kept == 0 and done.outcomes == {}
     assert "still show the songs of Artist m-copy - Album m-copy as present" in done.refused
     assert "the release was put back" in done.refused
+    assert not done.export_late  # (blocked: a notification says so, not a late export)
     assert any(line.startswith("cleanup: nothing more is taken out") for line in lines)
     assert in_library(world, release) and in_library(world, other)
     assert world.placeholder_files() == files
@@ -2084,3 +2086,152 @@ def test_the_startup_repairs_wait_while_navidrome_would_purge(gated: DeliveryWor
         assert not running.done() and not any(path.exists() for path in files)  # waiting
     running.result(60)  # allowed again: the repairs ran
     assert all(path.exists() for path in files) and in_library(world, release)
+
+
+def test_old_ids_come_back_within_the_accounts_daily_cap_all_of_a_request_or_none(
+    world: DeliveryWorld,
+) -> None:
+    """A use of old IDs adds their releases back for the account that uses them, under its
+    daily cap on adding. The places for all of a request's releases are taken at once: a
+    request that does not fit adds nothing back and is answered with the cap's error -
+    never "ok" about a song that is missing - and nothing waits, so anyone else's use
+    adds them back at once. A release the account used a place for within these 24 hours
+    comes back without another; one it added longer ago needs one."""
+    cap, engine = world.services.daily_cap, world.services.engine
+    assert cap is not None
+    users = world.nd.native("GET", "user").json()
+    account = str(next(u["id"] for u in users if u["userName"] == LISTENER[0]))
+    first, first_songs, _ = made(world, "m-capped", count=1)
+    second, second_songs, _ = made(world, "m-capped-second", count=1)
+    old, old_songs, _ = made(world, "m-capped-old", count=1)
+    anew = catalog_release("m-capped-anew", "Album m-capped-anew", "Artist m-capped-anew", 1)
+    world.materialize(anew)
+
+    async def counted() -> list[str]:
+        rows = await world.services.store.fetchall(
+            "SELECT release_ref FROM release_additions WHERE user_id = ? ORDER BY release_ref",
+            [account],
+        )
+        return [str(r["release_ref"]) for r in rows]
+
+    async def earlier() -> None:
+        # One place used an hour ago; and a release this account added 40 days ago.
+        for ref, age in (("test:m-capped-earlier", 3600.0), (old, 40 * DAY)):
+            await world.services.store.execute(
+                "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+                [account, ref, time.time() - age],
+            )
+
+    async def restore() -> None:
+        with adding_for(account, admin=False):
+            await engine.restore_release(second)
+
+    async def commit_again() -> None:
+        with adding_for(account, admin=False):
+            await engine.materialize(anew)
+
+    removed = set(sweep(world).removed)
+    for key in ("m-capped", "m-capped-second", "m-capped-old", "m-capped-anew"):
+        assert f"Artist {key} - Album {key}" in removed
+    call(world, earlier)
+    cap.limit = 2  # one place left
+    try:
+        client = listener(world)
+        both = {"id": [first_songs[0], second_songs[0]]}
+        refused = client.request("star", both).json()["subsonic-response"]
+        assert refused["status"] == "failed"
+        assert refused["error"] == {"code": 0, "message": MESSAGE}
+        as_xml = client.request("star", both, fmt="xml")
+        assert as_xml.status_code == 200 and MESSAGE.encode() in as_xml.content
+        assert not in_library(world, first) and not in_library(world, second)
+        assert engine.restore_due(first) and engine.restore_due(second)  # nothing waits
+        assert not cap._held and call(world, counted) == ["test:m-capped-earlier"]
+        starred = client.ok("getStarred2")["starred2"].get("song", [])
+        assert not {first_songs[0], second_songs[0]} & {s["id"] for s in starred}  # neither
+        # One of them fits: it is back with its ID, and counted.
+        client.ok("star", {"id": first_songs[0]})
+        assert in_library(world, first) and engine.removed_release(first_songs[0]) is None
+        assert call(world, counted) == sorted(["test:m-capped-earlier", first])
+        # At the cap: every use of the other one is answered with the error.
+        for method, params in (
+            ("star", {"id": second_songs[0]}),
+            ("scrobble", {"id": second_songs[0], "submission": "false"}),
+            ("createPlaylist", {"name": "Capped", "songId": second_songs[0]}),
+        ):
+            answer = client.request(method, params).json()["subsonic-response"]
+            assert answer.get("error") == {"code": 0, "message": MESSAGE}, method
+        assert not in_library(world, second) and engine.restore_due(second)
+        assert engine.removed_release(second_songs[0]) == second
+        # ... and so is the release added 40 days ago: its place is long over.
+        answer = client.request("star", {"id": old_songs[0]}).json()["subsonic-response"]
+        assert answer.get("error") == {"code": 0, "message": MESSAGE}
+        assert not in_library(world, old) and old not in call(world, counted)  # (forgotten)
+        # The engine's own check, behind every way a release is added back.
+        with pytest.raises(MaterializeError) as stopped:
+            call(world, restore)
+        assert reached(stopped.value) and not in_library(world, second)
+        assert not engine.writing() and not cap._held and not engine._places
+        # Taken out again and used again within the 24 hours of its place: no second one.
+        assert call(world, lambda: engine.remove_release(first)).removed == 1
+        client.ok("scrobble", {"id": first_songs[0], "submission": "false"})
+        assert in_library(world, first)
+        assert call(world, counted) == sorted(["test:m-capped-earlier", first])
+        # Anyone else's use adds the other one back at once (an administrator: not counted).
+        world.client().ok("star", {"id": second_songs[0]})
+        assert in_library(world, second)
+        assert call(world, counted) == sorted(["test:m-capped-earlier", first])
+        # With room, the account adds the old one back, and it counts for it again.
+        cap.limit = 3
+        client.ok("star", {"id": old_songs[0]})
+        assert in_library(world, old)
+        assert call(world, counted) == sorted(["test:m-capped-earlier", first, old])
+        client.close()
+        # A release committed again while it is out comes back from its record and, should
+        # the record not fit, is added anew: one place for both steps, its last one here.
+        cap.limit = 4
+        call(world, commit_again)
+        assert in_library(world, str(anew.ref))
+        assert call(world, counted) == sorted(["test:m-capped-earlier", first, old, str(anew.ref)])
+        assert not cap._held and not engine._places
+    finally:
+        cap.limit = 0
+        call(world, lambda: world.services.store.execute("DELETE FROM release_additions"))
+
+
+def test_a_converted_stream_of_an_old_id_adds_nothing_back_at_the_daily_cap(
+    world: DeliveryWorld,
+) -> None:
+    """A stream whose audio needs converting is a use of an old ID too: for an account at
+    its daily cap on adding it plays all the same, from the add-ons in their format, and
+    nothing is added back; for anyone with room it adds the release back."""
+    cap, engine = world.services.daily_cap, world.services.engine
+    assert cap is not None
+    users = world.nd.native("GET", "user").json()
+    account = str(next(u["id"] for u in users if u["userName"] == LISTENER[0]))
+    addon = world.addon("Capped converting")
+    world.add_source(addon)
+
+    async def earlier() -> None:
+        await world.services.store.execute(
+            "INSERT INTO release_additions (user_id, release_ref, added_at) VALUES (?, ?, ?)",
+            [account, "test:m-convert-earlier", time.time() - 3600],
+        )
+
+    try:
+        song, _, audio = world.placeholder_track("m-convert-capped", [addon])  # FLAC
+        release = release_of(world, song)
+        assert "Artist m-convert-capped - Title m-convert-capped" in sweep(world).removed
+        call(world, earlier)
+        cap.limit = 1
+        client = listener(world)
+        played = client.request("stream", {"id": song, "format": "mp3"})
+        client.close()
+        assert played.status_code == 200 and played.content == audio.read_bytes()
+        assert not in_library(world, release) and engine.restore_due(release)
+        converted = world.client().request("stream", {"id": song, "format": "mp3"})
+        assert converted.status_code == 200 and converted.content[:3] in (b"ID3", b"\xff\xfb")
+        assert in_library(world, release)
+    finally:
+        cap.limit = 0
+        world.clear_sources()
+        call(world, lambda: world.services.store.execute("DELETE FROM release_additions"))

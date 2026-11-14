@@ -140,6 +140,7 @@ from shijhon.delivery.addon import (
     CATALOG,
     MAX_ITEM_ID,
     SERVICE_TAG,
+    SIGN_IN_SECONDS,
     Addon,
     AddonError,
     FullCatalog,
@@ -628,6 +629,21 @@ def _failure(exc: AddonError) -> CatalogError:
     return CatalogError("unavailable", exc.reason)  # no answer, no connection, not allowed
 
 
+def _signed_out(registry: SourceRegistry, source: Source, exc: AddonError) -> None:
+    """An answer that the add-on's operator must sign in again: noted for the add-on
+    (shown on the Add-ons page) - an add-on that streams is passed over by plays for a
+    while too, one with a catalog only is not (its catalog is asked as before). Not another
+    request's answer shared (a manifest read once for several: noted where it was read)."""
+    if exc.kind != "sign_in" or exc.shared:
+        return
+    # (Passed over only when it is known to stream: not one whose manifest is unknown.)
+    seconds = SIGN_IN_SECONDS if source.addon.known is not None and source.streams else 0
+    if registry.needs(source.id, "sign_in", exc.url, seconds):
+        log.warning(
+            "add-on %s needs its operator to sign in again (its catalog said so)", source.name
+        )
+
+
 def _service(manifest: Manifest) -> str:
     """The service an add-on with a catalog is: its manifest's ``id``. Refused: an add-on
     that declares no catalog, or names no ID (its items could not be told from those of
@@ -746,6 +762,8 @@ class AddonCatalog:
         assert self.registry is not None
         if source.pace is not None and source.pace.blocked > 0:
             raise CatalogError("rate_limited", pacing.BLOCKED)
+        if self.registry.passed_over_for_sign_in(source.id):
+            raise CatalogError("unavailable", "not asked: the add-on needs sign-in")
         if self.registry.cooling(source.id):
             raise CatalogError("unavailable", "not asked: the add-on is cooling down")
 
@@ -770,12 +788,22 @@ class AddonCatalog:
                 space = self._manifest_space(manifest)
                 if service is not None and service != service_tag(space.service):
                     raise CatalogError("not_found", OTHER_SERVICE)
-                return await request(source.addon), space
+                answer = await request(source.addon)
+            if not source.streams and self.registry is not None:
+                # (A catalog's add-on answered: signed in, if it needed that.)
+                self.registry.answered(source.id)
+            return answer, space
         except TimeoutError:
             reason = waits.held() or "no answer in time"
             raise CatalogError("unavailable", reason) from None
         except AddonError as exc:
+            self._signed_out(source, exc)
             raise _failure(exc) from None
+
+    def _signed_out(self, source: Source, exc: AddonError) -> None:
+        """An answer that the add-on's operator must sign in again (``_signed_out``)."""
+        if self.registry is not None:
+            _signed_out(self.registry, source, exc)
 
     def _manifest_space(self, manifest: Manifest) -> Space:
         declared = manifest.full_catalog
@@ -837,6 +865,7 @@ class AddonCatalog:
         except TimeoutError:
             raise CatalogError("unavailable", "no answer in time") from None
         except AddonError as exc:
+            self._signed_out(source, exc)
             raise _failure(exc) from None
         self._manifest_space(manifest)
 
@@ -1397,7 +1426,9 @@ class AddonCatalogs:
         return built
 
     async def catalogs(
-        self, unanswered: set[str] | None = None, unreadable: set[str] | None = None
+        self,
+        unanswered: set[str] | None = None,
+        unreadable: set[str] | None = None,
     ) -> list[tuple[str, CachedCatalog]]:
         """The catalogs to ask, with their add-ons' names, in the add-ons' order. An add-on
         in ``unanswered`` or ``unreadable`` is passed over. One whose manifest cannot be
@@ -1419,6 +1450,8 @@ class AddonCatalogs:
                 ):
                     declared = await source.addon.has_catalog()
             except (AddonError, TimeoutError) as exc:
+                if isinstance(exc, AddonError):
+                    _signed_out(self.registry, source, exc)
                 kind = _failure(exc).kind if isinstance(exc, AddonError) else "unavailable"
                 passed = unanswered if kind in ("unavailable", "rate_limited") else unreadable
                 if passed is not None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from mutagen.asf import ASF
@@ -20,8 +21,9 @@ from mutagen.oggflac import OggFLAC
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
+from shijhon.matching.grouping import first_artist
 from shijhon.music_imports import tagmap
-from shijhon.placeholders.tags import ALBUM_TAGS, mapped
+from shijhon.placeholders.tags import ALBUM_TAGS, ARTISTS_ALIASES, mapped
 from shijhon.quality import LOSSLESS_CODECS, LOSSLESS_FORMATS
 
 MAX_TEXT = 300
@@ -76,6 +78,21 @@ def year(album_tags: dict[str, list[str]]) -> int | None:
 def _first(raw: dict[str, list[str]], *keys: str) -> str:
     values = mapped(raw, keys)
     return values[0] if values else ""
+
+
+def _several(name: str, values: list[str]) -> dict[str, Any]:
+    texts = [_text(v) for v in values[:MAX_VALUES]]
+    return {name: texts} if len(texts) > 1 else {}
+
+
+def first_track_artist(facts: Mapping[str, Any]) -> str:
+    """The first of a file's track artists as Navidrome reads them, from its facts
+    (``grouping.first_artist``): its artists list's first, else its artist tag's first
+    value - split only when the tag has one value."""
+    values = facts.get("artist_values")
+    artist = values if isinstance(values, list) and values else [facts.get("artist") or ""]
+    listed = facts.get("artists")
+    return first_artist([str(v) for v in artist], listed if isinstance(listed, list) else ())
 
 
 def _plain(tags: Any) -> dict[str, Any]:
@@ -211,6 +228,11 @@ def of_mutagen(
         facts: dict[str, Any] = {
             "title": _first(raw, "title", "tit2", "©nam"),
             "artist": _first(raw, "artist", "tpe1", "©art"),
+            # (All its artist tag's values when it has several: Navidrome splits only one.)
+            **_several("artist_values", mapped(raw, ("artist", "tpe1", "©art"))),
+            # (Its multi-valued artists, when it has them: the first is its album's artist
+            # without an album artist tag, ``grouping.first_artist``.)
+            "artists": [_text(v) for v in mapped(raw, ARTISTS_ALIASES)[:MAX_VALUES]],
             "album": _first(raw, "album", "talb", "©alb"),
             "albumartist": (album_tags.get("albumartist") or [""])[0],
             "track": track,

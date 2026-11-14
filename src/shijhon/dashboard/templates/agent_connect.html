@@ -30,12 +30,18 @@
         <legend>Permissions</legend>
 {% for scope,label in scopes.items() %}
         <div class="agent-scope">
-          <label class="mix-check"><input type="checkbox" name="scope_{{ scope }}" value="true"{% if scope in selected_scopes %} checked{% endif %}{% if scope in ['settings','downloads'] %} aria-describedby="{{ scope }}-help"{% endif %}><span>{{ label }}</span></label>
+          <label class="mix-check"><input type="checkbox" name="scope_{{ scope }}" value="true"{% if scope in selected_scopes %} checked{% endif %}{% if scope in ['settings','downloads','add','admin'] %} aria-describedby="{{ scope }}-help"{% endif %}><span>{{ label }}</span></label>
 {% if scope == 'settings' %}
           <p id="settings-help" class="field-help">Lets the agent choose your playlist AI model from administrator-approved models. Your agent's own model stays the same.</p>
 {% endif %}
 {% if scope == 'downloads' %}
           <p id="downloads-help" class="field-help">Saves audio in the server library. Copies on your devices come from your music app.</p>
+{% endif %}
+{% if scope == 'add' %}
+          <p id="add-help" class="field-help">Lets the agent add whole albums from the catalog to your library when you ask it to. This changes your library and can use the server's disk. It is granted only if you select it.</p>
+{% endif %}
+{% if scope == 'admin' %}
+          <p id="admin-help" class="field-help">Offered because you are a Navidrome administrator. Lets the agent fill, keep or match again the albums in the Library's review list, for everyone who uses this installation, and read the server's status. It works only while you are an administrator, and it is granted only if you select it.</p>
 {% endif %}
         </div>
 {% endfor %}

@@ -33,7 +33,9 @@ their separate permissions. Native identity and library access are checked fresh
 personal operations remain bound to their immutable owner. Configuring the shared AI
 service and approving its models require current administrator rights, regardless of
 granted scopes; with the `settings` permission, an agent can only choose among the
-approved models for its own account. Credential/code hashes and reusable native
+approved models for its own account. An agent's `admin` permission reaches the Library's
+review list and a read-only status summary, only while its account is a Navidrome
+administrator, which is asked of Navidrome at every call. Credential/code hashes and reusable native
 authorization are held in the private state database.
 Agent model subscriptions are not delegated to Shijhon by OAuth sign-in.
 
@@ -52,22 +54,50 @@ Agent model subscriptions are not delegated to Shijhon by OAuth sign-in.
   host it was set up with: when the address moves to another host, by whatever means, the
   token is not used until it is entered again. `reach` works as for add-ons: `"loopback"` or `"private"` is broad, so use it
   only for a service you run.
+- **Notifications**, when an address is set ([configuration](configuration.md#notifications)),
+  go only to the Apprise addresses you give. The add-ons' address checks do not apply to
+  them: they are your own choice, a service on this machine or your home network among
+  them, and Apprise's services make their own connections (HTTP, email, MQTT and others).
+  Anyone who can sign in to the dashboard as an administrator can set them.
+- **Last.fm is asked for similar songs and artists** when a person who set up Last.fm on
+  the Playlists page starts a radio from a song, an album or an artist that is only in
+  the catalog, or opens such an artist's page
+  ([how it works](how-it-works.md#radio-from-catalog-items)). A request holds an artist's
+  name, or an artist's name and a song's title, and that person's Last.fm API key. It
+  holds no Last.fm username and nothing about what anyone listened to. The lists made from
+  the answers are saved without the person's name and are used for everyone who has set
+  up Last.fm. `[search] radio = false` turns these requests off.
 - **Catalog covers are served as publicly cacheable** (`Cache-Control: public`, a day).
 
 ## Logs
 
 Logs leave out query strings and credentials, and cut any address down to its host
-(add-ons appear under the names you give them). Searches are logged without their text.
+(add-ons appear under the names you give them). Searches are logged without their text,
+and requests for similar songs and artists without the names they are about.
 Playback lines name the song, the add-on and the timings, so the log shows what was played
 and when. Dashboard sign-ins and changes log the verified user's name; failed logins omit the
 submitted name because a password may have been typed there.
+
+## What notifications say
+
+A notification names the state and what it is about: the add-on by the name you gave it,
+with the link to its sign-in page when the add-on gave one and it is a plain address. A
+link with a query string, a fragment, or a user name or password could hold a credential,
+so it is left out and the notification says the link is on the Add-ons page, which shows
+it. One about someone's music import or playlist refresh names their account and nothing
+of the music: no titles, artists or playlist names. That is more than the dashboard shows an
+administrator, whose pages list only their own imports and playlists. One about an upgrade
+of the database that went on without its snapshot names the schemas and why in general
+words, such as how much space the snapshot needed, and no path. A notification never
+holds an address, a token or a credential, and the services it passes through see what it
+says. Apprise's own log, which can print an address with its token, is never written.
 
 ## What Shijhon stores
 
 | Where | What |
 |---|---|
-| Its database, in `state_dir` (readable by its owner only) | The placeholders, the catalog releases they came from and which Navidrome songs they became. Album matches and saved artist discographies. The add-ons' URLs and settings, which can hold keys. Settings saved on the dashboard, secrets included, with who saved them and when. Dashboard sessions (a hash of the cookie, immutable user ID and canonical name). Personal playlist connections, imported history, requests and preparation jobs. Shared host AI configuration, stored separately from personal profiles. Records of releases the cleanup took out. When each placeholder was last served. Sound facts read from AudioMuse-AI, if used: per song ID, its tempo, key, energy, six scores and style labels. Last.fm tags of songs (by artist and title), fetched again after 30 days. The edits learned from refreshed playlists. Connected agents' OAuth clients, grants and tokens. Music import jobs and their file lists. |
-| `state_dir`, alongside it | A cache of catalog covers (up to 1 GB by default), songs from DASH links (up to 1 GB; emptied at every start) and downloads under way. |
+| Its database, in `state_dir` (readable by its owner only) | The placeholders, the catalog releases they came from and which Navidrome songs they became. Album matches, saved artist discographies and the lists radios from catalog items are made of. The add-ons' URLs and settings, which can hold keys. Settings saved on the dashboard, secrets included, with who saved them and when. Dashboard sessions (a hash of the cookie, immutable user ID and canonical name). Personal playlist connections, imported history, requests and preparation jobs. The catalog releases agents were asked to add to their accounts' libraries, with each one's outcome. Shared host AI configuration, stored separately from personal profiles. Records of releases the cleanup took out. When each placeholder was last served. Sound facts read from AudioMuse-AI, if used: per song ID, its tempo, key, energy, six scores and style labels. Last.fm tags of songs (by artist and title), fetched again after 30 days. The edits learned from refreshed playlists. Connected agents' OAuth clients, grants and tokens. For accounts that turned new releases on: the artists they follow and the releases found for them, removed when they turn it off. Music import jobs and their file lists. The states notifications report, by add-on, import or playlist ID, with when each began and when one was last sent. When an upgrade went on without its snapshot: from which schema to which, when, and why (a kind such as not enough free space, with the sizes or the system's error number), until an administrator dismisses it on the dashboard. While a daily cap on adding is set: which account (its user ID) added which catalog release and when, for accounts the cap limits. These records are kept for 24 hours; older ones are removed when the next addition is counted and at each start. |
+| `state_dir`, alongside it | A cache of catalog covers (up to 1 GB by default), songs from DASH links (up to 1 GB; emptied at every start) and downloads under way. Snapshots of the database taken before upgrades (the newest of the schema last upgraded from and of the highest other schema), and backups made with `shijhon backup` until you remove them: they hold what the database holds, secrets included, readable by their owner only. |
 | The placeholder folder, in your library | The silent files, with a cover for catalog-only albums. Audio downloaded for a download or a conversion, for a while. For share links, copies of your own files where a placeholder stands for a recording you already have. |
 
 Shijhon writes nowhere else in your library, except the imports folder when

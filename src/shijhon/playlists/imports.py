@@ -72,15 +72,18 @@ class Imports:
         )
         return {**dict(row), "data": json.loads(row["data"])} if row else None
 
-    async def recheck(self, mix: dict[str, Any], replaces: str = "") -> None:
+    async def recheck(
+        self, mix: dict[str, Any], replaces: str = "", actor: str | None = None
+    ) -> None:
         """Start a new review from saved input and the playlist as it is now.
 
         Entries the owner kept keep their native recordings; entries the owner removed
-        stay removed; only entries never published are matched again.
+        stay removed; only entries never published are matched again. ``actor``: who asks
+        (``guard``); the new review's work is theirs.
         """
         from shijhon.playlists.import_publish import entries, metadata
 
-        connection = await self.guard(mix)
+        connection = await self.guard(mix, actor)
         previous = await self.publication(mix["id"])
         if not previous or not previous["data"].get("import_review", {}).get("excluded"):
             raise PlaylistError("This import has no missing entries to recheck.")
@@ -145,6 +148,7 @@ class Imports:
             "skipped": len(missing),
             "attempt": max((r.get("attempt", 0) for r in rows), default=0) + 1,
             "publish_after_generation": False,
+            **({} if actor is None else {"actor": actor}),
             "completion": {
                 "playlist_id": mix["playlist_id"],
                 "published": mix["published"],
@@ -208,15 +212,22 @@ class Imports:
             "Navidrome, choose Keep playlist as it is, then Recheck."
         )
 
-    async def guard(self, mix: dict[str, Any]) -> Connection:
+    async def guard(self, mix: dict[str, Any], actor: str | None = None) -> Connection:
+        """The owner's connection while the import's work may go on. It runs under the
+        authority of ``actor``, the one who last acted on its run (an agent's grant, or ""
+        for the owner on the dashboard), or else of the agent that started the import,
+        while that agent's grant lasts and reads the library."""
         connection = await self.service.connection(mix["owner"])
         # Per-recording guards need only the binding, not the entire original input.
         row = await self.store.fetchone(
-            "SELECT id FROM playlist_imports WHERE id=? AND owner=? AND library=?",
+            "SELECT creator FROM playlist_imports WHERE id=? AND owner=? AND library=?",
             [mix["id"], mix["owner"], self.service.requests.library],
         )
         if not row:
             raise PlaylistError("This import is unavailable for this account and library.")
+        agent = row["creator"] if actor is None else actor
+        if agent:  # (NULL: started before its creator was kept, and so the account's)
+            await self.service.requests.agent(mix["owner"], agent, "library")
         return connection
 
     async def create(
@@ -231,9 +242,12 @@ class Imports:
         filename: str = "",
         mapping: dict[str, str] | None = None,
         entries: list[Entry] | None = None,
+        creator: str = "",
     ) -> str:
         """Called under changes; enqueue only, with no catalog or library mutation.
-        ``entries``: entries given one by one (an agent's) instead of a document."""
+        ``entries``: entries given one by one (an agent's) instead of a document.
+        ``creator``: the agent grant that asks, "" for the owner on the dashboard; the
+        import's work runs under its authority (``guard``)."""
         await self.service.connection(owner)
         if not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", key):
             raise PlaylistError("Reload the import form before submitting.")
@@ -285,8 +299,10 @@ class Imports:
             "SELECT * FROM playlist_imports WHERE owner=? AND request_key=?", [owner, key]
         )
         if old:
-            if old["library"] != self.service.requests.library or old["input_hash"] != digest(
-                original
+            if (
+                old["library"] != self.service.requests.library
+                or old["input_hash"] != digest(original)
+                or (old["creator"] is not None and old["creator"] != creator)
             ):
                 raise PlaylistError("This import key was already used with different input.")
             return str(old["id"])
@@ -304,9 +320,18 @@ class Imports:
                 [ident, owner, definition.model_dump_json()],
             )
             await db.execute(
-                "INSERT INTO playlist_imports(id,owner,library,request_key,input_hash,input)"
-                " VALUES (?,?,?,?,?,?)",
-                [ident, owner, self.service.requests.library, key, digest(original), original],
+                "INSERT INTO playlist_imports"
+                "(id,owner,library,request_key,input_hash,input,creator)"
+                " VALUES (?,?,?,?,?,?,?)",
+                [
+                    ident,
+                    owner,
+                    self.service.requests.library,
+                    key,
+                    digest(original),
+                    original,
+                    creator,
+                ],
             )
             await db.execute(
                 "INSERT INTO playlist_runs(id,mix,created,state,data) VALUES (?,?,?,'queued',?)",
@@ -364,8 +389,10 @@ class Imports:
         ident: str,
         state: str,
         connection: Connection | None = None,
+        actor: str | None = None,
     ) -> None:
-        current_connection = await self.guard(mix)
+        """``actor``: the run's (``guard``)."""
+        current_connection = await self.guard(mix, actor)
         if connection is not None and not connection.same_settings(current_connection):
             raise PlaylistError("The connection changed. Retry with the current connection.")
         current = await self.store.fetchone("SELECT state FROM playlist_runs WHERE id=?", [ident])
@@ -395,7 +422,7 @@ class Imports:
             for i in range(len(parts)):
                 suffix = "/".join(parts[i:])
                 lookup.setdefault(suffix.casefold(), []).append((path, len(parts) - i, suffix))
-        await self.running(mix, ident, "generating", connection)
+        await self.running(mix, ident, "generating", connection, data.get("actor"))
         reader = self.library_reader
         if reader is None:
             raise PlaylistError(
@@ -408,7 +435,7 @@ class Imports:
                 or self.service.requests.library not in actor.library_ids
             ):
                 raise CollectionError("Your access to this library could not be verified.")
-            await self.running(mix, ident, "generating", connection)
+            await self.running(mix, ident, "generating", connection, data.get("actor"))
             songs = await reader.songs(
                 connection.user_id, self.service.requests.library, scan["offset"], PATH_PAGE
             )
@@ -454,7 +481,7 @@ class Imports:
         scan.update(
             offset=scan["offset"] + len(songs), last_page=page_key, complete=len(songs) < PATH_PAGE
         )
-        await self.running(mix, ident, "generating", connection)
+        await self.running(mix, ident, "generating", connection, data.get("actor"))
         if not await self.checkpoint(ident, "generating", data):
             return False
         return bool(scan["complete"])
@@ -627,7 +654,7 @@ class Imports:
                 else:
                     # Fresh authorization/Stop checks remain per recording; persisting
                     # the growing JSON here would rewrite it once per distinct input.
-                    await self.running(mix, ident, "generating", connection)
+                    await self.running(mix, ident, "generating", connection, data.get("actor"))
                     result = {**await self.recording(connection, entry, data), "attempt": attempt}
                     cache[key] = result
                 if index < len(rows):
@@ -638,10 +665,10 @@ class Imports:
         except Exception:
             # Preserve this batch's completed matches on an ordinary matching failure.
             # A concurrent Stop/disconnect must win over this partial checkpoint too.
-            await self.running(mix, ident, "generating", connection)
+            await self.running(mix, ident, "generating", connection, data.get("actor"))
             await self.checkpoint(ident, "generating", data, start=start)
             raise
-        await self.running(mix, ident, "generating", connection)
+        await self.running(mix, ident, "generating", connection, data.get("actor"))
         if not await self.checkpoint(ident, "generating", data, start=start):
             return None
         if data.get("cursor", 0) < len(inputs):
@@ -652,7 +679,7 @@ class Imports:
         pending = sorted({s.release for s in selected if s.release} - previous.keys())
         if pending:
             batch = set(pending[:20])
-            await self.running(mix, ident, "generating", connection)
+            await self.running(mix, ident, "generating", connection, data.get("actor"))
             extra = await self.service.freeze(
                 Definition.model_validate_json(mix["definition"]),
                 [s for s in selected if s.release in batch],
@@ -665,12 +692,12 @@ class Imports:
             )
             previous.update({r["ref"]: r for r in extra["releases"]})
             data["import_releases"] = list(previous.values())
-            await self.running(mix, ident, "generating", connection)
+            await self.running(mix, ident, "generating", connection, data.get("actor"))
             if not await self.checkpoint(ident, "generating", data):
                 return None
             if len(pending) > 20:
                 return None
-        await self.running(mix, ident, "generating", connection)
+        await self.running(mix, ident, "generating", connection, data.get("actor"))
         frozen = await self.service.freeze(
             Definition.model_validate_json(mix["definition"]),
             [],
@@ -694,7 +721,7 @@ class Imports:
     ) -> None:
         from shijhon.playlists.import_publish import Publisher
 
-        await Publisher(self).step(connection, mix, ident, data)
+        await Publisher(self, data.get("actor")).step(connection, mix, ident, data)
 
     async def reviewed(self, mix: dict[str, Any], data: dict[str, Any]) -> None:
         evidence = await self.evidence(mix["owner"], mix["id"])
@@ -744,14 +771,21 @@ class Imports:
         *,
         entry: str = "",
         choice: str = "",
+        actor: str | None = None,
     ) -> None:
-        """Owner/CSRF protection comes from the dashboard; callers hold changes."""
+        """Owner/CSRF protection comes from the dashboard; callers hold changes.
+        ``actor``: who acts (an agent's grant, or "" for the owner on the dashboard); the
+        run's work from here on is theirs (``guard``). None keeps the run's."""
         mix = await self.service.repo.mix(ident, owner)
-        await self.guard(mix)
         run = (await self.service.repo.runs(ident))[0]
+        if actor is None:
+            actor = run["data"].get("actor")
+        await self.guard(mix, actor)
         if run["id"] != run_id:
             raise PlaylistError("This review is no longer current. Reload the page.")
         data, state = run["data"], run["state"]
+        if actor is not None:
+            data["actor"] = actor
         if action == "recheck" and (
             state in ("published", "discarded")
             or (state in ("preview", "failed") and data.get("completion"))
@@ -760,7 +794,7 @@ class Imports:
                 raise PlaylistError(
                     "This import changed. Reload it before retrying missing entries."
                 )
-            await self.recheck(mix, run_id)
+            await self.recheck(mix, run_id, actor)
         elif (
             action == "resume"
             and state == "discarded"

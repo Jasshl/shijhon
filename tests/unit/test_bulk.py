@@ -769,7 +769,7 @@ class Engine:
     async def refused(self) -> str | None:
         return None
 
-    async def replace_with_delivered(self, song_id: str, path: Path) -> None:
+    async def replace_with_delivered(self, song_id: str, path: Path, **kwargs: Any) -> None:
         self.placed.append(song_id)
         self.rows[song_id]["state"] = "delivered"
 

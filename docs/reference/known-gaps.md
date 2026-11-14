@@ -53,6 +53,18 @@
 - Paths are checked for symbolic links when they are checked, not held against a change
   afterwards. Exploiting that needs write access to the library folder.
 - A use made in Navidrome directly of a release already taken out does not add it back.
+- A filled album filled from another release: Shijhon holds back and refuses the uses of
+  the old release's songs that reach it. A use made at Navidrome directly (its own
+  website, another proxy) is not seen, and neither is one by an account without access to
+  Shijhon's library, whose requests go to Navidrome as they come. Such a use made after
+  the last look at who uses the songs lands on a song that is gone, and that stays
+  possible for as long as Navidrome keeps the missing song: through the replacement,
+  which can last minutes and, when its fill fails or Shijhon is stopped, until Shijhon
+  has finished it, and for good after it for a song the new release does not have under
+  the same number and title.
+- After such a replacement, an album of yours that was a part of the old release and now
+  has another title or artist than the filled album keeps saying so until it is matched
+  again; albums of the same title and artist are decided anew with the replacement.
 - In `dry_run` mode the daily check still completes removals and add-backs that a stop
   left half done.
 - Every hour Shijhon puts the placeholder back where downloaded audio is gone, but not
@@ -77,6 +89,13 @@
 - Top songs are the catalog's first 10, after the ones Navidrome has. A catalog song
   shows as the library's own where the album match links it, so a wrong match shows there
   too.
+- A radio from a catalog item holds at most 50 songs, and a catalog artist has at most
+  15 similar artists. A similar song that your library has and the catalog lacks is left
+  out. An artist's and an album's radio are made of the catalog's top songs, so with a
+  catalog that has none they are empty and a song's radio is not filled up. An item of an
+  add-on's catalog that is not the catalog in use gets Navidrome's empty answer. A radio
+  started from a song, an album or an artist in your library is Navidrome's own, with
+  music from your library only.
 - `unstar` with the catalog ID of an album not filled yet changes nothing and answers
   "ok". A library artist added to search results by name carries no favorite or rating.
 - The catalog of an add-on: albums are found by their titles alone. Adding a song
@@ -84,6 +103,23 @@
   added, and adding many at once can stop part of the way. An artist opened from a song or
   an album is found by name. Under the same name, a service that keeps the manifest `id`
   of the one before is asked for the old track IDs.
+
+- New releases: "most played" counts all plays of the albums an account played in the
+  last 90 days, since Navidrome keeps a play count and the last play of an album, not
+  each play, and it reads the 500 albums played most recently. JSONP and `HEAD` requests
+  and the folder-based `getAlbumList` get Navidrome's own list, as searches get no
+  additions there. An account whose saved dashboard sign-in Navidrome no longer accepts
+  is not checked until it signs in again, and its saved list stays meanwhile.
+- Track lists read again by the library pass: only added tracks and corrected lengths
+  are applied. A changed title, artist, ISRC or explicit mark and a renumbering are
+  counted and left, and a track the catalog puts where a song of the album already is, is
+  not added. A new track with the title of a song the album has is not added when no
+  ISRC tells them apart, also when it is another recording. Albums matched but not filled
+  yet keep the track list of their match, and releases added from another catalog than
+  the one in use are not read again. A release whose tracks all got new IDs at the
+  catalog is left as it is.
+- A catalog track asked for by a new ID the catalog gave it (a star or a playlist entry
+  of it) is added to its album beside the song it already is there.
 
 ## API parity and security
 

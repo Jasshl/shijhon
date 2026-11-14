@@ -39,6 +39,7 @@
       <label>Last.fm API key source<select name="history_source">{% for key, label in [('navidrome', "Navidrome's key"),('manual','An API key')] %}<option value="{{ key }}"{% if history_source == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <p class="field-help" data-show-for="history_source" data-values="navidrome">{% if saved_history_source == 'navidrome' %}A blank password keeps the saved Navidrome key.{% else %}Reading Navidrome's Last.fm key needs the password.{% endif %}</p>
       <label data-show-for="history_source" data-values="manual">Last.fm API key<input type="password" name="history_key" autocomplete="off">{% if saved_history_source == 'manual' %}<span class="field-help">Blank keeps the saved key.</span>{% endif %}</label>
+      {% if radio %}<p class="field-help">With Last.fm set up, your apps also get similar songs and similar artists for music that is only in the catalog. For those, Last.fm is sent an artist and a title with the key, not your username.</p>{% endif %}
     </div>
     <div class="form-actions"><button{% if not connected %} class="btn-primary"{% endif %}>Save connection</button></div>
   </form>
@@ -176,9 +177,10 @@
 {% endif %}
 {% for run in runs %}
 <section class="group playlist-run" aria-labelledby="run-{{ run.id }}">
-  <div class="group-head"><h2 id="run-{{ run.id }}">{{ {'queued':'Waiting to generate','generating':'Choosing tracks','publishing':'Publishing playlist','published':'Ready in your music app','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped'}.get(run.state, run.state|capitalize) }} · {{ run.created|when }}</h2></div>
+  <div class="group-head"><h2 id="run-{{ run.id }}">{{ {'queued':'Waiting to generate','generating':'Choosing tracks','publishing':'Publishing playlist','published':'Ready in your music app','preview':'Ready to review','failed':'Needs attention','uncertain':'Check publication','discarded':'Stopped','postponed':'Put off until the next refresh'}.get(run.state, run.state|capitalize) }} · {{ run.created|when }}</h2></div>
   <div class="rows music-card">
-{% if run.error %}<div class="notice notice-error" role="alert"><p>{{ run.error }}</p></div>{% endif %}
+{% if run.error and run.state == 'postponed' %}<p role="status">{{ run.error }}</p>{% elif run.error %}<div class="notice notice-error" role="alert"><p>{{ run.error }}</p></div>{% endif %}
+{% set limited = run.data.get('daily_limit') %}{% if limited %}<p role="status">{{ limited }} song{{ ' was' if limited == 1 else 's were' }} left out of this playlist because the daily limit of added releases was reached. The rest was published.</p>{% endif %}
 {% if run.state in ['queued','generating','publishing'] %}<p role="status">Working in the background. Reload this page to check progress.</p>{% endif %}
 {% if run.data.selected is defined %}
   <p>{{ run.data.selected|length }} tracks.{% if run.state == 'published' %} Open this playlist in your music app to listen.{% elif run.state == 'preview' %} Publish when you are ready to listen in your music app.{% endif %}</p>
