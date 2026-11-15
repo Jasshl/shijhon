@@ -137,6 +137,17 @@ class Discographies:
             [{"name": name, "artist": artist_data(a) if a else None} for name, a in artists],
         )
 
+    async def forget(self, key: str) -> None:
+        """The list saved under ``key`` as never saved."""
+        await self.store.execute("DELETE FROM discographies WHERE key = ?", [key])
+
+    async def forget_ending(self, part: str, ending: str) -> None:
+        """Every list whose key holds ``part`` and ends in ``ending``, as never saved."""
+        await self.store.execute(
+            "DELETE FROM discographies WHERE instr(key, ?) > 0 AND substr(key, -length(?)) = ?",
+            [part, ending, ending],
+        )
+
     async def _write(self, key: str, items: list[dict[str, Any]] | str) -> None:
         data = json.dumps(items)
         await self.store.execute(

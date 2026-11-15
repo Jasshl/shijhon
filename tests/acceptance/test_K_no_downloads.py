@@ -123,7 +123,8 @@ def test_a_play_from_it_keeps_its_file_while_the_song_is_downloaded_elsewhere(
     world: DeliveryWorld, fresh: None
 ) -> None:
     """The download's link at the other add-on is the download's own: a seek of the play
-    meanwhile is still served from the add-on the play started at."""
+    meanwhile is still its own file - from the audio held of it, which the play read in
+    full (nothing more asked of the add-on)."""
     first, other = shy(world), world.addon("Other")
     world.add_source(first)
     world.add_source(other)
@@ -144,14 +145,14 @@ def test_a_play_from_it_keeps_its_file_while_the_song_is_downloaded_elsewhere(
         seek = world.client().request("stream", {"id": song}, headers={"range": "bytes=100-"})
         assert seek.status_code == 206 and seek.content == data[100:]
         assert not downloading.done()  # (the seek came while the download went on)
-        assert len(first.requests("audio")) == before + 1  # from the play's own add-on
+        assert len(first.requests("audio")) == before  # (the audio held of the play)
         assert len(other.requests("audio")) == 1  # the download alone
         answer = downloading.result(timeout=30)
     assert answer.status_code == 200 and row(world, song)["state"] == "delivered"
     # In the library now - the other add-on's file: the play's seeks stay on its own.
     seek = world.client().request("stream", {"id": song}, headers={"range": "bytes=100-"})
     assert seek.status_code == 206 and seek.content == data[100:]
-    assert len(first.requests("audio")) == before + 2 and len(other.requests("audio")) == 1
+    assert len(first.requests("audio")) == before and len(other.requests("audio")) == 1
     library = world.services.engine.layout.absolute(row(world, song)["path"]).read_bytes()
     assert library[100:] != data[100:]
     assert world.client().request("stream", {"id": song}).content == library  # a new play

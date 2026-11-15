@@ -96,6 +96,13 @@ folder = "_shijhon"          # inside the library
 # urls = "ntfy://my-topic"   # or SHIJHON_NOTIFICATIONS__URLS in the environment
 # usage_export = true        # each kind can be switched off
 
+# ListenBrainz (docs/configuration.md#listenbrainz): songs and artists listened together,
+# for radio from catalog items, discovery mixes and agents, next to Last.fm's. On without
+# setup; only artist and song names are sent.
+# [listenbrainz]
+# enabled = true
+# token = "…"               # optional, for everyone; or SHIJHON_LISTENBRAINZ__TOKEN
+
 # Sound analysis (docs/sound-analysis.md): facts about how songs sound, from AudioMuse-AI,
 # for described playlists. Off while url is empty.
 # [audiomuse]

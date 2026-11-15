@@ -1774,7 +1774,7 @@ def test_a_kept_stream_whose_library_write_stops_stays_a_placeholder_and_is_kept
     assert marker is not None and marker.silence
     assert not list(engine.layout.staging.glob("backup-*"))
     work = world.services.download_first.work_dir
-    assert [p.name for p in work.iterdir()] == []
+    assert [p.name for p in work.iterdir() if p not in held_files(world)] == []
     assert world.client().request("stream", {"id": song}).content == audio.read_bytes()
     deadline = time.monotonic() + 20
     while call(world, rows)["state"] != "delivered":
@@ -4818,7 +4818,7 @@ def test_audio_fetched_while_its_songs_length_is_corrected_must_fit_the_correcte
     assert row["duration_ms"] == corrected
     listed = call(world, lambda: world.services.navidrome.song(song))
     assert not list(engine.layout.staging.glob("backup-*"))
-    assert [p.name for p in download_first.work_dir.iterdir()] == []
+    assert [p.name for p in download_first.work_dir.iterdir() if p not in held_files(world)] == []
     marker = tagging.marker_of(engine.layout.absolute(str(row["path"])))
     assert marker is not None
     if fits:  # the add-on's audio, tagged as the song
@@ -5112,3 +5112,9 @@ def test_a_revocation_stops_an_addition_that_a_restart_is_recovering(
     call(w, fresh.tick)
     assert commits.materializations - written == 1
     assert _addition(w, ident) == ("stopped", expected)
+
+
+def held_files(world: Any) -> set[Path]:
+    """The files of plays' audio held in the work folder (``delivery/retain.py``)."""
+    retention = world.services.deliverer.retention
+    return {e.path for e in retention._entries.values()} if retention is not None else set()

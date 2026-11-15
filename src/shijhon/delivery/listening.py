@@ -32,6 +32,9 @@ class Listening:
         # user -> (the keys of the saved queue, its current position, when saved)
         self._queues: dict[str, tuple[list[str], int, float]] = {}
         self._playing: dict[str, tuple[str, float]] = {}  # user -> (key, when reported)
+        # What each client said it plays (a report, a saved queue's current song): (key,
+        # when). The account's reports and queues are any of its devices'.
+        self._said: dict[Listener, tuple[str, float]] = {}
         self._starts: dict[Listener, deque[tuple[float, str]]] = {}
         self._prefetching: dict[Listener, float] = {}  # listener -> until
         # Told when a user's client says which song it plays now (a report, a saved queue's
@@ -42,32 +45,49 @@ class Listening:
         """Forget everything (tests)."""
         self._queues.clear()
         self._playing.clear()
+        self._said.clear()
         self._starts.clear()
         self._prefetching.clear()
 
     # --- what clients tell ------------------------------------------------------------------
 
-    def saved_queue(self, user: str, keys: list[str], current: int | None = None) -> None:
+    def saved_queue(
+        self, user: str, keys: list[str], current: int | None = None, client: str | None = None
+    ) -> None:
         self._queues[user] = (list(keys), current or 0, self.clock())
+        if client is not None and 0 <= (current or 0) < len(keys):
+            self._say((user, client), keys[current or 0])
         if self.on_current is not None and 0 <= (current or 0) < len(keys):
             self.on_current(user, keys[current or 0])
 
-    def reported(self, user: str, key: str) -> None:
+    def reported(self, user: str, key: str, client: str | None = None) -> None:
         """The user's client reports ``key`` as playing now."""
         self._playing[user] = (key, self.clock())
+        if client is not None:
+            self._say((user, client), key)
         if self.on_current is not None:
             self.on_current(user, key)
 
-    def started(self, who: Listener, key: str) -> float:
-        """A play from the add-ons began at byte zero; returns when."""
+    def _say(self, who: Listener, key: str) -> None:
+        if len(self._said) > 1024:  # forget clients that went quiet
+            recent = self.clock() - self.memory
+            self._said = {w: said for w, said in self._said.items() if said[1] >= recent}
+        self._said[who] = (key, self.clock())
+
+    def started(self, who: Listener, key: str, ago: float = 0.0) -> float:
+        """A play began at byte zero (its request came ``ago`` seconds before); returns
+        when."""
         now = self.clock()
         if len(self._starts) > 1024:  # forget listeners that went quiet
             recent = now - self.memory
-            self._starts = {w: d for w, d in self._starts.items() if d and d[-1][0] >= recent}
+            self._starts = {  # (backdated starts come in any order: the newest of each)
+                w: d for w, d in self._starts.items() if d and max(at for at, _ in d) >= recent
+            }
             self._prefetching = {w: t for w, t in self._prefetching.items() if t > now}
         starts = self._starts.setdefault(who, deque(maxlen=MAX_STARTS))
-        starts.append((now, key))
-        return now
+        at = now - max(0.0, ago)
+        starts.append((at, key))
+        return at
 
     # --- what warm-ahead asks -----------------------------------------------------------------
 
@@ -92,6 +112,14 @@ class Listening:
             return None
         at, key = max(said)
         return key if self.clock() - at <= self.memory else None
+
+    def current_for_client(self, who: Listener) -> str | None:
+        """The song this client itself said it plays now (its latest report or saved
+        queue), recently; None when it said nothing."""
+        said = self._said.get(who)
+        if said is None or self.clock() - said[1] > self.memory:
+            return None
+        return said[0]
 
     def next_in_queue(self, user: str, key: str, depth: int) -> list[str] | None:
         """The ``depth`` songs after ``key`` in the user's saved queue (from its current

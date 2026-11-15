@@ -100,6 +100,7 @@ from shijhon.placeholders.daily_cap import ROLE_SECONDS, DailyCap, installation
 from shijhon.placeholders.engine import PlaceholderEngine
 from shijhon.placeholders.layout import Layout
 from shijhon.placeholders.silence import SilenceMaker
+from shijhon.playlists.listenbrainz import ListenBrainz
 from shijhon.playlists.model import PlaylistError, UpstreamUnavailable
 from shijhon.playlists.service import Playlists
 from shijhon.playlists.similar import Similarity
@@ -177,6 +178,7 @@ class Services:
     notices: Notices | None = None  # notifications of states that need a person
     new_releases: NewReleases | None = None  # new releases of the artists accounts follow
     radio: CatalogRadio | None = None  # similar songs and artists of catalog items
+    listenbrainz: ListenBrainz | None = None  # songs and artists listened together
     daily_cap: DailyCap | None = None  # how many releases an account may add in a day
 
 
@@ -518,6 +520,7 @@ class ShijhonApp:
             max_bytes=download_first.max_bytes,
         )
         retention.spawn = self.try_spawn
+        retention.reads_on = sources.allows_downloads
         deliverer.retention = retention
         dash.completed = retention.dash_completed
         self.spawn(retention.run)
@@ -639,6 +642,8 @@ class ShijhonApp:
             jukebox_enabled=interceptor.jukebox_enabled,
             server=lambda: self.checker.server,
             play=interceptor.catalog_play,
+            begin=interceptor.begin,
+            arriving=interceptor.arriving,
             committed=library_artists.forget,
         )
         views.sizes = CoverSizes(settings.catalog.cover_sizes)
@@ -882,7 +887,14 @@ class ShijhonApp:
         )
         self.services.playlists = playlists
         self._opened.append(playlists.aclose)
-        # ... asked with the Last.fm key each account connected for its discovery mixes.
+        # ListenBrainz's songs and artists listened together, for everyone: radio, discovery
+        # mixes and the agents' tool (``[listenbrainz]``, changed at once on its page).
+        listenbrainz = ListenBrainz(settings.listenbrainz)
+        self._opened.append(listenbrainz.aclose)
+        self.services.listenbrainz = listenbrainz
+        playlists.history.listenbrainz = listenbrainz
+        # ... and Last.fm, asked with the Last.fm key each account connected for its
+        # discovery mixes.
         radio.similarity = Similarity(playlists.history)
         radio.key_of = CallerKeys(AccessService(navidrome), playlists.repo)
         self.services.radio = radio

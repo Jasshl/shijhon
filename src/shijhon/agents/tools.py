@@ -44,10 +44,12 @@ from shijhon.downloads.model import (
     ConnectionRequired,
     PreparationError,
 )
+from shijhon.matching.normalize import core_title, featured_names
 from shijhon.new_releases import NewReleases, released
 from shijhon.playlists.edits import forget
 from shijhon.playlists.facts import Facts, tag_key
 from shijhon.playlists.import_formats import MAX_ROWS
+from shijhon.playlists.listenbrainz import ListeningUnavailable
 from shijhon.playlists.model import (
     Connection,
     Model,
@@ -64,6 +66,13 @@ from shijhon.playlists.requests import (
     TrackChange,
 )
 from shijhon.playlists.resolve import native_track
+from shijhon.playlists.similar import (
+    LASTFM,
+    LISTENBRAINZ,
+    Similarity,
+    SimilarUnavailable,
+    song_key,
+)
 from shijhon.playlists.sound import SongSound, Sound, SoundUnavailable
 from shijhon.views.entries import album_name
 from shijhon.views.ids import album_id
@@ -87,6 +96,13 @@ TAG_MARGIN = 3  # what the call keeps for the rest of its work
 TAG_LEAST = 1.0  # a shorter wait asks Last.fm for nothing
 TAG_REQUESTS = 40  # Last.fm requests in one call; tags already known cost none
 SOUND_TOOLS = ["find_similar_songs", "search_by_sound", "find_sound_path"]
+LISTENING_SEEDS = 5  # seeds of one find_listened_together call
+LISTENING_SONGS = 50  # similar songs asked of each source for one seed
+LISTENING_SECONDS = 12  # the longest one call waits for the sources
+LISTENING_SETUP = (
+    "A Navidrome administrator turns ListenBrainz on on the ListenBrainz page of Shijhon's"
+    " settings, or the user connects a Last.fm key on the Playlists page."
+)
 SOUND_SETUP = (
     "A Navidrome administrator can connect AudioMuse-AI on the Sound analysis page of Shijhon's"
     " settings."
@@ -100,6 +116,11 @@ class Choices(Model):
         "AI service. Blank uses the administrator's default. Does not change the host service "
         "or the external agent's model.",
     )
+
+
+class SeedTrack(Model):
+    artist: str = Field(min_length=1, max_length=300, description="The song's artist.")
+    title: str = Field(min_length=1, max_length=300, description="The song's title.")
 
 
 class PermissionRequired(RequestError):
@@ -269,6 +290,7 @@ class Tools:
             }
 
         sound_feature = feature(("library",), sound_missing)
+        listening_on = Similarity(self.service.history).listening is not None
         sound_feature["ready"] = sound_feature["ready"] and sound_reachable
         releases = self.releases
         releases_on = (
@@ -321,6 +343,19 @@ class Tools:
                     "analyzed_songs": sound_songs,
                     "tools": SOUND_TOOLS,
                     "setup_url": self.sound_url,
+                },
+                "listening_similarity": {
+                    **feature(
+                        ("library",),
+                        []
+                        if listening_on or connection.history_key.get_secret_value()
+                        else [LISTENING_SETUP],
+                    ),
+                    "tools": ["find_listened_together"],
+                    "sources": {
+                        "listenbrainz": listening_on,
+                        "lastfm": bool(connection.history_key.get_secret_value()),
+                    },
                 },
                 "listening_history": feature(("history",), history_missing),
                 "new_releases": {
@@ -1013,6 +1048,121 @@ class Tools:
         await self.auth("library")
         return result
 
+    async def listened_together(
+        self, seed_ids: list[str], seed_tracks: list[SeedTrack], count: int
+    ) -> dict[str, Any]:
+        """Songs people listen to together with the seeds, by ListenBrainz (for everyone,
+        unless it is off) and Last.fm (with the user's key): each source's lists, the
+        songs on several lists and high on them first. Names only: whether the library or
+        the catalog has a song is not looked up."""
+        token = await self.auth("library")
+        ids = self.song_ids(seed_ids, LISTENING_SEEDS, "seed_song_ids")
+        if not 1 <= count <= MAX_RESULTS:
+            raise RequestError(f"Ask for 1 to {MAX_RESULTS} songs.")
+        if not ids and not seed_tracks:
+            raise RequestError("Give seed_song_ids, seed_tracks, or both.")
+        if len(ids) + len(seed_tracks) > LISTENING_SEEDS:
+            raise RequestError(f"Use up to {LISTENING_SEEDS} seeds in all.")
+        connection = await self.service.connection(str(token.subject))
+        key = connection.history_key if connection.history_key.get_secret_value() else None
+        similarity = Similarity(self.service.history)
+        listening = similarity.listening is not None
+        if key is None and not listening:
+            raise SetupRequired(
+                "listening_similarity",
+                f"No source of listening similarity is set up. {LISTENING_SETUP} Meanwhile "
+                "choose songs from your own musical knowledge.",
+            )
+        readable, unreadable = await self.read_songs(connection, ids)
+        seeds = list(
+            dict.fromkeys(
+                [
+                    *(
+                        (str(s.get("artist") or ""), str(s.get("title") or ""))
+                        for s in readable.values()
+                    ),
+                    *((t.artist.strip(), t.title.strip()) for t in seed_tracks),
+                ]
+            )
+        )
+        seeds = [(artist, title) for artist, title in seeds if artist and title]
+        if not seeds:
+            raise RequestError("None of the seed songs could be read.", 404)
+        heard: dict[str, dict[int, list[tuple[str, str]]]] = {LASTFM: {}, LISTENBRAINZ: {}}
+        failed: dict[str, int] = {LASTFM: 0, LISTENBRAINZ: 0}
+
+        async def ask(source: str, at: int) -> None:
+            """One source's songs for one seed, kept as soon as they are there."""
+            artist, title = seeds[at]
+            credits = dict.fromkeys((artist, (featured_names(artist) or [artist])[0].strip()))
+            titles = dict.fromkeys((title, core_title(title) or title))
+            names = [(c, t) for c in credits for t in titles if c and t]
+            try:
+                if source == LASTFM:
+                    assert key is not None
+                    heard[source][at] = await similarity.lastfm_tracks(key, names, LISTENING_SONGS)
+                else:
+                    assert similarity.listening is not None
+                    found = await similarity.listening.similar_songs(names, LISTENING_SONGS)
+                    heard[source][at] = [(a, t) for a, t, _ in found]
+            except (SimilarUnavailable, ListeningUnavailable):
+                failed[source] += 1
+            except Exception as exc:  # one source never fails the other's answer
+                log.warning("agent listening similarity failed: %s", type(exc).__name__)
+                failed[source] += 1
+
+        asked = [s for s, on in ((LASTFM, key is not None), (LISTENBRAINZ, listening)) if on]
+        with anyio.move_on_after(LISTENING_SECONDS) as waiting:
+            async with anyio.create_task_group() as group:
+                for source in asked:
+                    for at in range(len(seeds)):
+                        group.start_soon(ask, source, at)
+        scores: dict[tuple[str, str], float] = {}
+        shown: dict[tuple[str, str], tuple[str, str]] = {}
+        sources: dict[tuple[str, str], set[str]] = {}
+        own = {song_key(seed) for seed in seeds}
+        for source in (LASTFM, LISTENBRAINZ):
+            for at in sorted(heard[source]):
+                listed = heard[source][at]
+                for rank, song in enumerate(listed):
+                    if (song_id := song_key(song)) in own:
+                        continue
+                    scores[song_id] = scores.get(song_id, 0.0) + 1 - rank / len(listed)
+                    shown.setdefault(song_id, song)
+                    sources.setdefault(song_id, set()).add(source)
+        ranked = sorted(scores, key=lambda k: -scores[k])[:count]
+
+        def state(source: str, on: bool, off: str) -> str:
+            """``ok``, ``partial`` (some seeds failed or ran out of time), ``unavailable``
+            (none answered) or ``off``/``not_configured``."""
+            if not on:
+                return off
+            answered = len(heard[source])
+            if answered == len(seeds):
+                return "ok"
+            gave_up = failed[source] > 0 or waiting.cancel_called
+            if not gave_up:
+                return "ok"
+            return "partial" if answered else "unavailable"
+
+        await self.auth("library")
+        return {
+            "seeds": [{"artist": a, "title": t} for a, t in seeds],
+            "unreadable_seed_ids": unreadable,
+            "songs": [
+                {
+                    "artist": shown[k][0],
+                    "title": shown[k][1],
+                    "sources": sorted(sources[k]),
+                }
+                for k in ranked
+            ],
+            "sources": {
+                LISTENBRAINZ: state(LISTENBRAINZ, listening, "off"),
+                LASTFM: state(LASTFM, key is not None, "not_configured"),
+            },
+        }
+
     async def create(self, request: PlaylistRequest, idempotency_key: str) -> dict[str, Any]:
         token = await self.auth(
             "create",
@@ -1281,6 +1431,27 @@ def register_tools(
         up or not reachable. Treat the path as a suggestion for your own ordering.
         """
         return await tools.guarded(lambda: tools.sound_path(start_song_id, end_song_id, steps))
+
+    @mcp.tool(annotations=read)
+    async def find_listened_together(
+        seed_song_ids: list[str] | None = None,
+        seed_tracks: list[SeedTrack] | None = None,
+        count: int = 30,
+    ) -> CallToolResult:
+        """Find songs that people listen to together with up to 5 seed songs: library songs
+        by Navidrome song ID and/or any songs by artist and title. Uses ListenBrainz's
+        listening sessions (for everyone, unless an administrator turned it off) and
+        Last.fm's similar songs (when the user connected a Last.fm key); sources says how
+        each answered. Returns up to 100 songs, those on several lists and high on them
+        first, each with artist, title and the sources that list it; the seeds are left out.
+        Names only: the songs may or may not be in the library or the catalog - find them
+        with search_library or search_catalog, or submit them as exact artist/title tracks
+        to create_playlist. Only names are sent to the sources, never the user's account or
+        history. Suggestions are hints for your own judgement.
+        """
+        return await tools.guarded(
+            lambda: tools.listened_together(seed_song_ids or [], seed_tracks or [], count)
+        )
 
     @mcp.tool(annotations=write)
     async def prepare_playlist_audio(playlist_id: str, idempotency_key: str) -> CallToolResult:

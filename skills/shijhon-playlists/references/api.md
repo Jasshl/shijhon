@@ -380,6 +380,7 @@ AudioMuse-AI connection described in [sound analysis](../../../docs/sound-analys
 | `find_similar_songs` | `seed_song_ids` (up to 20) and/or `playlist_id`, `avoid_song_ids` (up to 20), `count=30` (1 to 100) | `songs`, `seeds`, `unreadable_seed_ids`, `unreadable_song_ids`, `sound_analysis`, `tags` |
 | `search_by_sound` | `text` (up to 300 characters, English), `more` and `less` (up to 10 phrases each, up to 100 characters), `count=30` (1 to 100) | `songs`, `unreadable_song_ids`, `sound_analysis`, `tags` |
 | `find_sound_path` | `start_song_id`, `end_song_id`, `steps=12` (2 to 30) | `songs` in order, both ends included; `unreadable_song_ids`, `sound_analysis`, `tags` |
+| `find_listened_together` | `seed_song_ids` and/or `seed_tracks` (`artist`, `title`), up to 5 seeds in all; `count=30` (1 to 100) | `songs` (`artist`, `title`, `sources`), `seeds`, `unreadable_seed_ids`, `sources` (`listenbrainz`: `ok`, `partial`, `unavailable` or `off`; `lastfm`: `ok`, `partial`, `unavailable` or `not_configured`) |
 
 `get_playlist_profile` reads an owned native playlist. Its `summary` covers up to the
 first 500 songs and gives `songs` (profiled), `playlist_songs`, `year`
@@ -399,6 +400,11 @@ Playlists of another account are never readable here.
 `reachable`, `analyzed_songs`, `tools`, `setup_url`: the Sound analysis page, which a Navidrome
 administrator uses to connect AudioMuse-AI); `features.song_facts` lists the tools that
 work without it and whether Last.fm `tags` are available. Songs the account cannot read are listed as unreadable, not described.
+
+`find_listened_together` needs neither sound analysis nor server AI. It answers
+`setup_required` (`missing_configuration: ["listening_similarity"]`) only when
+ListenBrainz is turned off and the user has no Last.fm key;
+`features.listening_similarity` in `get_capabilities` says which `sources` answer.
 
 ## Server audio preparation (MCP)
 

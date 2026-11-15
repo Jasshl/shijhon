@@ -29,7 +29,13 @@ import httpx
 
 from shijhon.config import AddonSettings
 from shijhon.delivery.addon import Addon, addon_key
-from shijhon.delivery.netpolicy import Reach, Resolver, policy_client, system_resolver
+from shijhon.delivery.netpolicy import (
+    Reach,
+    Resolver,
+    policy_client,
+    refresh_tls,
+    system_resolver,
+)
 from shijhon.delivery.pacing import AddonPace, Limits, Paces, origin
 from shijhon.store import Store
 
@@ -638,6 +644,7 @@ class SourceRegistry:
                     " FROM sources WHERE enabled = 1 ORDER BY position, id"
                 )
                 rows = every
+                await refresh_tls()  # (the trust store, if it changed)
                 # Each add-on's limits: its own over the installation's.
                 self._limited = [(row["base_url"], _limits(row)) for row in rows]
                 self.paces.apply(self._limited)
@@ -676,6 +683,13 @@ class SourceRegistry:
         after the plan's - never between the add-ons of a step, nor before the plan."""
         found = [source for source in await self.enabled() if source.streams]
         return sorted(found, key=lambda s: (s.step, s.position, s.id))
+
+    def allows_downloads(self, source_id: int) -> bool:
+        """Whether the add-on's manifest, as read already, does not ask not to be used for
+        downloads; one whose manifest is not known yet: no."""
+        source = self._listed.get(source_id)
+        manifest = None if source is None else source.addon.known
+        return manifest is not None and manifest.downloads
 
     def cooling(self, source_id: int) -> bool:
         """Whether the routing passes the source over now: it cools down (errors in a row,

@@ -67,13 +67,29 @@ Agent model subscriptions are not delegated to Shijhon by OAuth sign-in.
   holds no Last.fm username and nothing about what anyone listened to. The lists made from
   the answers are saved without the person's name and are used for everyone who has set
   up Last.fm. `[search] radio = false` turns these requests off.
+- **ListenBrainz is asked for songs and artists listened together**, by default and for
+  everyone, without any setup: for a radio from a song, an album or an artist that is only
+  in the catalog, for a catalog artist's similar artists, for discovery mixes' candidates
+  and for agents' `find_listened_together`
+  ([how it works](how-it-works.md#radio-from-catalog-items)). Shijhon asks
+  labs.api.listenbrainz.org, and with a token also api.listenbrainz.org. A request holds
+  artists' names and songs' titles, or the MusicBrainz IDs ListenBrainz gave for them, and
+  nothing else: no account, no username, nothing about what anyone listened to, and no
+  token except the optional installation-wide one, which goes only to
+  api.listenbrainz.org. Discovery mixes send the artists and titles of the most played
+  songs of a person's imported history as such names, without saying whose they are.
+  Shijhon names itself and its version in each request. The answers are kept in memory for
+  a day; the radio lists made from them are saved like the others, without a person's
+  name. The ListenBrainz page, or `[listenbrainz] enabled = false`, turns these requests
+  off; `[search] radio = false` turns off those of radio.
 - **Catalog covers are served as publicly cacheable** (`Cache-Control: public`, a day).
 
 ## Logs
 
 Logs leave out query strings and credentials, and cut any address down to its host
 (add-ons appear under the names you give them). Searches are logged without their text,
-and requests for similar songs and artists without the names they are about.
+and requests for similar songs and artists, and ListenBrainz's lookups, without the names
+they are about.
 Playback lines name the song, the add-on and the timings, so the log shows what was played
 and when. Dashboard sign-ins and changes log the verified user's name; failed logins omit the
 submitted name because a password may have been typed there.

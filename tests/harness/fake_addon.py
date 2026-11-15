@@ -27,6 +27,7 @@ from invented items, and serves a cover for every address under ``/img/``. Witho
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import threading
 import time
@@ -74,6 +75,13 @@ class FakeTrack:
     first_byte_status: int | None = None
     chunk_delay: float = 0.0  # delay between 16 KiB body chunks
     truncate_after: int | None = None  # stop sending the body after this many bytes
+    # A range from an offset answered from this many bytes before it (its Content-Range
+    # says so): not the range asked for.
+    range_shift: int = 0
+    # A partial answer's Content-Length this many bytes more than its Content-Range covers.
+    range_length_extra: int = 0
+    untold_size: bool = False  # no Content-Length: the body framed by chunks alone
+    chunk_size: int = 16384  # the body's chunks (a small first one: its first bytes alone)
     rate_limit_streams: int = 0  # first N /stream calls answer 429
     rate_limit_audio: int = 0  # first N audio requests answer 429
     stream_status: int | None = None  # /stream answers this status (e.g. 503: not ready)
@@ -127,6 +135,10 @@ class FakeAddon:
         self.settings = settings or []
         self.refuse_lookups = False  # resolve-isrc answers 403 (a refusal, not a miss)
         self.manifest_delay = 0.0  # seconds before /manifest.json answers
+        # Songs prepared at once (``FakeTrack.prepare_seconds``), by the add-on's workers;
+        # the others wait for one (None: as many as are asked).
+        self.workers: int | None = None
+        self._workers: asyncio.Semaphore | None = None
         self.manifest_status: int | None = None  # /manifest.json answers this status
         self.manifest_body: dict[str, Any] | None = None  # ... with this JSON body
         self.retry_after: str | None = "1"  # the Retry-After of every 429 (None: none)
@@ -157,6 +169,14 @@ class FakeAddon:
         self.cdn = RunningServer(self._app("cdn"), lifespan="off")
 
     # --- control ---------------------------------------------------------------------
+
+    def _worker(self) -> Any:
+        """One of the add-on's workers, while ``workers`` limits them."""
+        if self.workers is None:
+            return contextlib.nullcontext()
+        if self._workers is None:  # (made in the add-on's own event loop)
+            self._workers = asyncio.Semaphore(self.workers)
+        return self._workers
 
     def add(self, track: FakeTrack) -> FakeTrack:
         self.tracks[track.isrc] = track
@@ -338,9 +358,10 @@ class FakeAddon:
             if track.resolve_delay:
                 await asyncio.sleep(track.resolve_delay)
             if track.prepare_seconds:
-                with self.lock:
-                    begun = self.preparing.setdefault(key, time.monotonic())
-                await asyncio.sleep(max(0.0, begun + track.prepare_seconds - time.monotonic()))
+                async with self._worker():
+                    with self.lock:
+                        begun = self.preparing.setdefault(key, time.monotonic())
+                    await asyncio.sleep(max(0.0, begun + track.prepare_seconds - time.monotonic()))
             host = track.url_host or (ADDON_HOST if track.redirect else CDN_HOST)
             port = self.main.port if host == ADDON_HOST else self.cdn.port
             prefix = "r" if track.redirect else "audio"
@@ -416,9 +437,15 @@ class FakeAddon:
                             status_code=416, headers={"content-range": f"bytes */{len(data)}"}
                         )
                     status = 206
+                    if start > 0 and track.range_shift:
+                        start = max(0, start - track.range_shift)
                     headers["content-range"] = f"bytes {start}-{end}/{len(data)}"
             payload = data[start : end + 1]
             headers["content-length"] = str(len(payload))
+            if status == 206 and track.range_length_extra:
+                headers["content-length"] = str(len(payload) + track.range_length_extra)
+            if track.untold_size:
+                del headers["content-length"]
             if request.method == "HEAD":
                 return Response(status_code=status, headers=headers)
             if track.first_byte_delay:
@@ -432,7 +459,9 @@ class FakeAddon:
             else:
                 payload_sent = payload
             return StreamingResponse(
-                self._chunks(isrc, payload_sent, track.chunk_delay, track.body_delay),
+                self._chunks(
+                    isrc, payload_sent, track.chunk_delay, track.body_delay, track.chunk_size
+                ),
                 status_code=status,
                 headers=headers,
             )
@@ -566,11 +595,13 @@ class FakeAddon:
         headers = {} if self.retry_after is None else {"retry-after": self.retry_after}
         return JSONResponse({"error": "RateLimited"}, status_code=429, headers=headers)
 
-    async def _chunks(self, isrc: str, payload: bytes, delay: float, first: float = 0.0):  # type: ignore[no-untyped-def]
+    async def _chunks(  # type: ignore[no-untyped-def]
+        self, isrc: str, payload: bytes, delay: float, first: float = 0.0, size: int = 16384
+    ):
         if first:
             await asyncio.sleep(first)
-        for offset in range(0, len(payload), 16384):
-            chunk = payload[offset : offset + 16384]
+        for offset in range(0, len(payload), size):
+            chunk = payload[offset : offset + size]
             with self.lock:
                 self.bytes_sent[isrc] = self.bytes_sent.get(isrc, 0) + len(chunk)
             yield chunk

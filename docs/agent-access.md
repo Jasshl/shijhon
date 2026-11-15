@@ -83,6 +83,11 @@ What an agent can do depends on the [permissions](#permissions) it was given at 
 - An agent can create a preview, then publish or discard it.
 - An agent can read facts about songs as hints: year, genres, Last.fm tags and, with
   [sound analysis](sound-analysis.md), tempo, key and energy.
+- An agent can ask which songs people listen to together with up to five songs, from the
+  library or named by artist and title. The answer comes from ListenBrainz, which needs
+  no setup unless an administrator turned it off, and from Last.fm when the account has a
+  Last.fm key. It is a list of names with the sources that list each; only names are sent
+  to them. This needs the library permission.
 - An agent can read the new releases of the artists the account follows, once the
   account turned that on ([new releases](how-it-works.md#new-releases)).
 - An agent can prepare a playlist's audio on the server
@@ -108,7 +113,7 @@ Permissions are chosen at sign-in and can be changed by connecting again.
 |---|---|
 | Make and change playlists (`create`) | Create playlists and change the account's Shijhon playlists |
 | Check playlists (`status`) | List the account's Shijhon playlists and check their progress |
-| Library (`library`) | Read the library and playlists, including the songs of Shijhon playlists the agent didn't make |
+| Library (`library`) | Read the library and playlists, including the songs of Shijhon playlists the agent didn't make, song facts, and the songs listened together with songs |
 | Listening history (`history`) | Read Last.fm listening counts, which discovery mixes also need. With the library permission, read the new releases of the artists the account follows, which come from its favorites and plays |
 | Downloads (`downloads`) | Prepare playlist audio on the server |
 | AI model (`settings`) | Choose the account's model for [server AI](playlists.md#server-ai) |

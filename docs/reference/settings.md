@@ -109,7 +109,7 @@ account quotas; configure the limits to suit the account.
 | `pin_ttl_seconds` (1800) | How long a song keeps its add-on and link, for seeks and repeats - also for a play under way when the song is put in the library |
 | `warm_ahead_depth` (2), `warm_ahead_delay_seconds` (2), `warm_ahead_budget_seconds` (60), `warm_ahead_jobs` (2) | Warm-ahead: how many of the next songs (in the app's saved queue, else the album) are opened once a song plays, how long after its first audio, how long one may take, and how many jobs run at once for all listeners. Depth 0: off |
 | `prefetch_memory_seconds` (600) | An app that fetches the next songs itself gets no warm-ahead for this long |
-| `ahead_window_seconds` (0.5) | A stream that starts this soon after another song on the same app, and is not reported as playing, is a fetch ahead. 0: every stream is treated alike |
+| `ahead_window_seconds` (0.5) | A stream that starts this soon after another song on the same app, and is not reported as playing, is a fetch ahead - except one of only two songs the app asked for together, which are both plays. 0: every stream is treated alike |
 | `bulk_downloads` (4), `addon_downloads` (2) | Songs fetched at once for all scheduled downloads and playlist preparation; songs fetched per add-on or shared group. Set on Playback under Downloads and playlist preparation. 0: unlimited |
 | `addon_preparations` (1) | New audio preparations at once per add-on or shared group, including sources whose cache readiness is unknown. 0: unlimited |
 | `user_routings` (4), `user_downloads` (4), `user_downloads_per_hour` (0), `user_download_burst` (4) | Limits per user ([the add-on protocol](add-on-protocol.md#limits)). 0: no cap or quota off; a burst of 0: the whole hour's downloads in a row. The burst only applies when the hourly quota is enabled |
@@ -161,6 +161,43 @@ Apprise as a library: the addresses are passed to it directly, with no Apprise
 configuration files, no attachments and no plugins loaded from disk, and Apprise keeps
 nothing on disk. Several states that begin together, in imports or playlist refreshes,
 arrive as one notification, and at most 256 wait to be sent at once.
+
+### `[listenbrainz]`
+
+Also on the ListenBrainz page; the settings are listed in
+[configuration.md](../configuration.md#listenbrainz). They apply at once. Shijhon sends
+ListenBrainz at most one request a second, for radio, discovery mixes and agents
+together, as ListenBrainz asks of applications. `timeout_seconds` bounds a request's wait
+for its turn and its answer together; a request that cannot get its turn in time is given
+up without counting as a failure, and one that gets its turn after ListenBrainz was turned
+off or began to rest is not sent. It looks a song up by name at ListenBrainz Labs
+(`acr-lookup`, several names in one request), then asks Labs for the recording's similar
+recordings, and for an artist's similar artists, with a session-based algorithm over about
+twenty years of listens. When the recording found has none, or none was found, a token
+adds `/1/metadata/lookup/` at api.listenbrainz.org, and then Labs' `recording-search` is
+asked once (one request; of its first ten results only one is taken: credited to the
+song's lead artist, with its title without qualifiers, preferring the one naming its
+featured artists, and never one whose title says live, karaoke, instrumental, cover,
+tribute, remix, acoustic, demo, unplugged, a cappella, orchestral, rehearsal, reprise,
+lullaby, 8-bit, re-recorded, sped up or slowed, or whose credit says karaoke, tribute,
+covers, "made famous", "in the style of" or "originally performed", unless the song's own
+names say it too). A refused token is not used again until it changes, and what was looked
+up while it was refused is not kept; a changed token forgets what depended on the old one.
+A failure, an answer that
+cannot be read or a rate limit (HTTP 429, or `X-RateLimit-Remaining: 0`) rests
+ListenBrainz: for a minute, or as long as `X-RateLimit-Reset-In` says, ten minutes at most.
+Answers, also "not known", are kept in memory for a day, up to 4096 of each kind; a restart
+forgets them. A radio list made for a person with Last.fm while ListenBrainz's answer is
+not known yet is saved under its plain key; its ListenBrainz part, added in the background
+(two lists at a time), is saved under the key ending in `:both`, which such a person is
+shown from then on; that background work asks the catalog at background urgency and is not
+started, nor goes on to the catalog, while the radio or the catalog rests after a failure
+or the client syncs or is in a burst. A list made again with Last.fm alone forgets its
+`:both` list, a `:both` list is not saved from an answer found while the token was refused,
+and a changed token (noted in the saved mark `radio:listenbrainz:token`, so also across
+restarts) forgets every radio list made with ListenBrainz. A discovery mix asks about its twelve seed songs in one lookup and then
+one request or more each, for at most 30 seconds and no more than ten seconds after
+Last.fm's last answer.
 
 ### `[audiomuse]`
 

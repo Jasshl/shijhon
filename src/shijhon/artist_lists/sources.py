@@ -8,7 +8,8 @@
 2. ``isrc``: the configured catalog's songs of the song's ISRC (``catalog_isrc``), those of
    the catalogs asked for artist lists only (``[catalog] artist_lists_catalogs``, built by
    ``catalog.setup.artist_list_catalogs``: ``<kind>_isrc``), and those of every add-on that
-   declares a catalog (``isrc``), those whose answers list their artists (a catalog's own
+   is a catalog only (``isrc``; an add-on that delivers audio is never asked), those whose
+   answers list their artists (a catalog's own
    ``artists`` list; a credit split on "feat." is not one).
 3. ``search``: only when none gave a list: the songs those catalogs find by title and
    artist (``catalog_search``, ``<kind>_search``, ``search``) that are the song by
@@ -101,7 +102,7 @@ class Skips:
 
 
 class AddonCatalogList(Protocol):
-    async def catalogs(self) -> Sequence[tuple[str, Catalog]]: ...
+    async def catalogs(self, *, catalog_only: bool = ...) -> Sequence[tuple[str, Catalog]]: ...
 
 
 @dataclass(frozen=True)
@@ -297,9 +298,10 @@ class Sources:
 
     async def _catalogs(self) -> list[Asked]:
         """The configured catalog, the others asked for artist lists, and the catalogs of
-        the add-ons that declare one, in that order."""
+        the add-ons that are a catalog only, in that order. An add-on that delivers audio is
+        never asked: its search can reach a service that acts on it (a bot, a download)."""
         main = [Asked(MAIN, self.catalog, "catalog_")] if self.catalog is not None else []
-        addons = await self.addons.catalogs() if self.addons is not None else ()
+        addons = await self.addons.catalogs(catalog_only=True) if self.addons is not None else ()
         return [*main, *self.others, *(Asked(name, built) for name, built in addons)]
 
     async def _each(

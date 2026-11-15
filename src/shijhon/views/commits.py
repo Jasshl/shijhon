@@ -104,6 +104,12 @@ REFUSED_DOWNLOAD = "downloading a whole album or artist with catalog tracks is n
 
 # (call, context, catalog song) -> the song served from the add-ons; None: commit first
 CatalogPlay = Callable[[RestCall, RequestContext, CatalogTrack], Awaitable[HandlerResult]]
+# A stream's start noted for its song's key, as soon as its caller is known (before the
+# catalog is asked): how it compares with the client's other starts.
+Begin = Callable[[RestCall, RequestContext, str], Awaitable[None]]
+# A request that may start a song came (before any lookup): the client's later starts
+# wait for it to be noted.
+Arriving = Callable[[RestCall, RequestContext], None]
 _QUEUES = ("savePlayQueue", "savePlayQueueByIndex")
 # Actions on an owned album's own ID that fill it when it is shown complete.
 _ALBUM_ACTIONS: dict[str, tuple[str, ...]] = {
@@ -159,6 +165,8 @@ class Commits:
         jukebox_enabled: Callable[[], Awaitable[bool]] | None = None,
         server: Callable[[], dict[str, object]] = dict,
         play: CatalogPlay | None = None,
+        begin: Begin | None = None,
+        arriving: Arriving | None = None,
         committed: Callable[[], None] | None = None,
     ) -> None:
         self.catalog = catalog
@@ -169,6 +177,8 @@ class Commits:
         self.jukebox_enabled = jukebox_enabled
         self.server = server  # Navidrome's envelope fields for Shijhon's own answers
         self.play = play
+        self.begin = begin
+        self.arriving = arriving
         self.committed = committed  # after a release was added (the library changed)
         # A verified caller's successful explicit request, including reuse of an
         # existing native item. Kept separate from release-wide materialization.
@@ -270,8 +280,12 @@ class Commits:
         cid = CatalogId.parse(text)
         if self.play is None or cid is None or cid.kind != "tr":
             return None
+        if self.arriving is not None:
+            self.arriving(call, ctx)
         if await self.materialized.song(cid.ref) is not None:
             return None  # in the library: the native song
+        if self.begin is not None:
+            await self.begin(call, ctx, str(cid.ref))
         track: CatalogTrack = await self._fetch(lambda c: c.song(cid.ref.id), cid)
         if track.album is not None and self.owned is not None:
             song = await self.owned.backed(str(track.album), cid.ref)

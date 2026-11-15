@@ -412,7 +412,9 @@ for the limits per user; it takes from the hour's downloads without waiting, dow
 hour's worth below zero. Shijhon takes a request for the song being played when the app
 reports that song as playing, or when it is a stream from the song's start and the same
 app started fetching no other song in the half second before (`ahead_window_seconds`; 0:
-every such stream waits its turn). So the limits per user slow down pre-loading, saving
+every such stream waits its turn) - or only one, asked for together with it, as a player
+with two audio elements loads the song it plays and the next one at the same moment: then
+both are taken as the song being played, unless that app's own report names the other. So the limits per user slow down pre-loading, saving
 many songs at once, probes (`HEAD`) and `download` requests for songs not reported as
 playing, but not saves that come one by one as streams: those look like plays.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -13,11 +14,18 @@ import httpx
 from aiolimiter import AsyncLimiter
 
 from shijhon.config import PlaylistSettings
+from shijhon.playlists.listenbrainz import ListenBrainz, ListeningUnavailable, Similar
 from shijhon.playlists.model import Connection, PlaylistError, music_key
 from shijhon.playlists.repository import AI_FIELDS
 from shijhon.store import Store
 
+log = logging.getLogger(__name__)
+
 ENDPOINT = "https://ws.audioscrobbler.com/2.0/"
+SEEDS = 12  # the history's songs whose similar songs a discovery mix is chosen from
+SIMILAR_PER_SEED = 30
+LISTENING_SECONDS = 30.0  # ListenBrainz's similar songs for discovery, at most
+LISTENING_GRACE = 10.0  # ... and once Last.fm's are all there
 
 
 def items(value: Any) -> list[dict[str, Any]]:
@@ -37,6 +45,9 @@ class History:
         self.store, self.settings = store, settings
         self.http = httpx.AsyncClient(timeout=20, trust_env=False)
         self.pace = AsyncLimiter(2, 1)
+        # ListenBrainz's songs listened together, next to Last.fm's similar songs (set by
+        # the app; None: not asked).
+        self.listenbrainz: ListenBrainz | None = None
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -213,6 +224,11 @@ class History:
     async def candidates(
         self, connection: Connection, listens: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
+        """The songs similar to the history's most played recent songs, by Last.fm and by
+        ListenBrainz (asked at the same time; a song both list scores for both), then its
+        familiar songs. ListenBrainz is optional: it is waited for at most
+        ``LISTENING_GRACE`` seconds after Last.fm's last answer, and its failure is no
+        failure of the run."""
         if not listens:
             raise PlaylistError("The imported listening history is empty.")
         now = time.time()
@@ -222,42 +238,53 @@ class History:
             key = music_key(listen["artist"], listen["title"])
             weights[key] += 1 / (1 + max(0, now - listen["at"]) / (30 * 86400))
             examples.setdefault(key, listen)
+        seeds = [(examples[key], weight) for key, weight in weights.most_common(SEEDS)]
         pool: dict[str, dict[str, Any]] = {}
-        for key, weight in weights.most_common(12):
-            seed = examples[key]
-            data = await self.ask(
-                connection,
-                "track.getSimilar",
-                artist=seed["artist"],
-                track=seed["title"],
-                limit=30,
-                autocorrect=0,
-            )
-            similar = data.get("similartracks")
-            if not isinstance(similar, dict):
-                raise PlaylistError("Last.fm returned incomplete similarity data.")
-            for song in items(similar.get("track", [])):
-                artist, title = text(song.get("artist")), text(song.get("name"))
-                if not artist or not title:
-                    continue
-                candidate = music_key(artist, title)
-                try:
-                    score = min(1, max(0, float(song.get("match", 0)))) * weight
-                except (ValueError, TypeError):
-                    continue
+        listened: dict[int, Similar] = {}
+        heard = anyio.Event()
+
+        async def ask_listenbrainz() -> None:
+            try:
+                if self.listenbrainz is not None and self.listenbrainz.on:
+                    with anyio.move_on_after(LISTENING_SECONDS):
+                        songs = [(seed["artist"], seed["title"]) for seed, _ in seeds]
+                        await self.listenbrainz.similar_to_many(songs, listened)
+            except ListeningUnavailable:
+                pass
+            except Exception as exc:  # optional: never the run's failure
+                log.warning("listenbrainz: discovery candidates failed: %s", type(exc).__name__)
+            finally:
+                heard.set()
+
+        failure: PlaylistError | None = None
+        async with anyio.create_task_group() as group:
+            group.start_soon(ask_listenbrainz)
+            try:
+                for seed, weight in seeds:
+                    await self._similar(connection, seed, weight, pool)
+                with anyio.move_on_after(LISTENING_GRACE):
+                    await heard.wait()
+            except PlaylistError as exc:
+                failure = exc
+            group.cancel_scope.cancel()
+        if failure is not None:
+            raise failure
+        for at, similar in sorted(listened.items()):
+            weight = seeds[at][1]
+            for artist, title, score in similar[:SIMILAR_PER_SEED]:
                 entry = pool.setdefault(
-                    candidate,
+                    music_key(artist, title),
                     {
                         "artist": artist,
                         "title": title,
                         "album": "",
                         "duration": 0,
                         "score": 0.0,
-                        "reason": "Similar to tracks in your imported history",
+                        "reason": "Listened together with tracks in your imported history",
+                        "lastfm": False,  # (Last.fm may not know it)
                     },
                 )
-                entry["score"] += score
-            await anyio.lowlevel.checkpoint()
+                entry["score"] += min(1.0, max(0.0, score)) * weight
         # Familiar older songs can supply the requested familiar share too.
         for key, weight in weights.most_common(100):
             seed = examples[key]
@@ -273,6 +300,48 @@ class History:
                 },
             )
         return sorted(pool.values(), key=lambda x: -x["score"])[: self.settings.candidate_limit]
+
+    async def _similar(
+        self,
+        connection: Connection,
+        seed: dict[str, Any],
+        weight: float,
+        pool: dict[str, dict[str, Any]],
+    ) -> None:
+        """Last.fm's similar songs of one seed, into the pool."""
+        data = await self.ask(
+            connection,
+            "track.getSimilar",
+            artist=seed["artist"],
+            track=seed["title"],
+            limit=SIMILAR_PER_SEED,
+            autocorrect=0,
+        )
+        similar = data.get("similartracks")
+        if not isinstance(similar, dict):
+            raise PlaylistError("Last.fm returned incomplete similarity data.")
+        for song in items(similar.get("track", [])):
+            artist, title = text(song.get("artist")), text(song.get("name"))
+            if not artist or not title:
+                continue
+            candidate = music_key(artist, title)
+            try:
+                score = min(1, max(0, float(song.get("match", 0)))) * weight
+            except (ValueError, TypeError):
+                continue
+            entry = pool.setdefault(
+                candidate,
+                {
+                    "artist": artist,
+                    "title": title,
+                    "album": "",
+                    "duration": 0,
+                    "score": 0.0,
+                    "reason": "Similar to tracks in your imported history",
+                },
+            )
+            entry["score"] += score
+        await anyio.lowlevel.checkpoint()
 
     async def info(self, connection: Connection, song: dict[str, Any]) -> dict[str, Any]:
         data = await self.ask(

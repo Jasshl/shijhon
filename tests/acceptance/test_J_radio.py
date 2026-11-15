@@ -27,6 +27,8 @@ import pytest
 from pydantic import SecretStr
 
 from shijhon.catalog.model import release_from_data
+from shijhon.config import ListenBrainzSettings
+from shijhon.delivery import pacing
 from shijhon.playlists.model import Connection
 from shijhon.views import radio as radio_module
 from shijhon.views.bursts import Bursts
@@ -38,6 +40,8 @@ from tests.harness.collection import prepare_collection
 from tests.harness.dashboard import Browser
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_lastfm import KEY, FakeLastFm
+from tests.harness.fake_listenbrainz import TOKEN as FAKE_TOKEN
+from tests.harness.fake_listenbrainz import FakeListenBrainz
 from tests.harness.library import Album, Track, write_album
 from tests.harness.logs import collected
 from tests.harness.navidrome import ADMIN_PASSWORD, ADMIN_USER
@@ -196,7 +200,40 @@ def world(
             playlists.history.http = httpx.AsyncClient(transport=lastfm.transport())
 
         w.server.call(connect)
+        # ListenBrainz is off here but for the tests that turn it on (``listenbrainz``).
+        listening = w.services.listenbrainz
+        assert listening is not None
+        listening.settings = ListenBrainzSettings(enabled=False)
         yield w
+
+
+@pytest.fixture
+def listenbrainz(world: DeliveryWorld, radio: CatalogRadio) -> Iterator[FakeListenBrainz]:
+    """ListenBrainz on, as a test says, for the test (it knows nothing otherwise)."""
+    listening = world.services.listenbrainz
+    assert listening is not None
+    fake = FakeListenBrainz()
+    before = listening.http
+
+    async def use(http: httpx.AsyncClient, enabled: bool) -> None:
+        listening.http = http
+        listening.settings = ListenBrainzSettings(enabled=enabled)
+        listening.resting_until = 0.0
+        for kept in (listening._exact, listening._songs, listening._artists):
+            kept.clear()
+        for cache in (
+            listening._metadata,
+            listening._search,
+            listening._similar_songs,
+            listening._artist_ids,
+            listening._similar_artists,
+        ):
+            cache.cache_clear()
+
+    world.server.call(lambda: use(httpx.AsyncClient(transport=fake.transport()), True))
+    yield fake
+    world.server.call(lambda: use(before, False))
+    assert until(lambda: not radio._enriching, 10)  # (none left behind for the next test)
 
 
 @pytest.fixture
@@ -210,7 +247,7 @@ def client(world: DeliveryWorld) -> Iterator[SubsonicClient]:
 def radio(world: DeliveryWorld) -> CatalogRadio:
     radio = world.services.radio
     assert radio is not None
-    radio.resting_until = 0.0
+    radio.resting_until = radio.listening_resting_until = 0.0
     return radio
 
 
@@ -275,8 +312,11 @@ def forget(world: DeliveryWorld, *keys: str) -> None:
     """The lists as never saved, and the catalog's answers as never cached."""
 
     async def delete() -> None:
-        for key in keys:
-            await world.services.store.execute("DELETE FROM discographies WHERE key = ?", [key])
+        for key in keys:  # (and the lists made with ListenBrainz, or without Last.fm)
+            for ending in ("", radio_module.WITH_LISTENBRAINZ, radio_module.WITHOUT_LASTFM):
+                await world.services.store.execute(
+                    "DELETE FROM discographies WHERE key = ?", [key + ending]
+                )
 
     world.server.call(delete)
     clear_cache(world)
@@ -297,6 +337,8 @@ def until(done: Callable[[], bool], seconds: float = 5.0) -> bool:
 
 
 SONG_KEY = f"demo.xx:radio:song:demo:{SEED['ref']['id']}"
+LISTENING_KEY = SONG_KEY + radio_module.WITHOUT_LASTFM
+LISTENING_BOTH_KEY = SONG_KEY + radio_module.WITH_LISTENBRAINZ
 BAND_KEY = "demo.xx:radio:artist:brokenmeadow"
 BAND_SIMILAR_KEY = "demo.xx:radio:similar:brokenmeadow"
 
@@ -430,6 +472,379 @@ def test_without_a_key_or_with_the_setting_off_the_answer_is_navidrome_s_empty_o
     finally:
         listener.close()
     assert len(lastfm.requests) == sent
+
+
+def test_without_a_lastfm_key_the_radio_is_listenbrainz_s_saved_apart(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    lastfm: FakeLastFm,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    listenbrainz.song(FIRST, "Amber 2", SIMILAR)  # by the song's first artist, like Last.fm
+    forget(world, LISTENING_KEY)
+    similar(client, id=SEED_ID)  # (the list made with Last.fm, saved)
+    with_lastfm = saved_refs(world, SONG_KEY)
+    sent = len(lastfm.requests)
+    listener = SubsonicClient(
+        world.server.base_url, "listener", "invented-listener-password", headers=HOST,
+        client="Radio",
+    )  # fmt: skip
+    try:
+        songs = similar(listener, id=SEED_ID)
+    finally:
+        listener.close()
+    expected = [
+        {"owned": native_song(world), "placed": placed_song(world)}.get(e, e) for e in EXPECTED
+    ]
+    assert [s["id"] for s in songs] == expected
+    assert check("song", songs) == (2, len(expected) - 2)
+    # Last.fm was not asked without a key; the list is saved apart from the one made with it.
+    assert len(lastfm.requests) == sent
+    assert saved_at(world, LISTENING_KEY) is not None
+    assert saved_refs(world, SONG_KEY) == with_lastfm
+    # Names alone were sent: no account, no token.
+    for asked in listenbrainz.requests:
+        assert "authorization" not in asked.headers
+        assert "listener" not in json.dumps([asked.params, asked.body]).lower()
+    # With ListenBrainz off, a caller without a key gets Navidrome's empty answer again.
+    listening = world.services.listenbrainz
+    assert listening is not None
+    settings = listening.settings
+    listening.settings = settings.model_copy(update={"enabled": False})
+    try:
+        listener = SubsonicClient(
+            world.server.base_url, "listener", "invented-listener-password", headers=HOST,
+            client="Radio",
+        )  # fmt: skip
+        try:
+            off = listener.request("getSimilarSongs2", {"id": SEED_ID})
+        finally:
+            listener.close()
+    finally:
+        listening.settings = settings
+    assert off.content == empty(world, "getSimilarSongs2")
+
+
+def test_listenbrainz_failing_without_a_key_never_holds_lastfm_s_radio(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    listenbrainz.status = 503
+    forget(world, LISTENING_KEY, SONG_KEY)
+    listener = SubsonicClient(
+        world.server.base_url, "listener", "invented-listener-password", headers=HOST,
+        client="Radio",
+    )  # fmt: skip
+    try:
+        alone = listener.request("getSimilarSongs2", {"id": SEED_ID})
+    finally:
+        listener.close()
+    assert alone.content == empty(world, "getSimilarSongs2")
+    assert saved_at(world, LISTENING_KEY) is None  # a failure is not saved
+    assert radio.listening_resting_until > 0 and radio.resting_until == 0.0
+    expected = [
+        {"owned": native_song(world), "placed": placed_song(world)}.get(e, e) for e in EXPECTED
+    ]
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected
+    assert saved_at(world, SONG_KEY) is not None
+
+
+# A catalog song only ListenBrainz lists as listened together with the seed.
+EXTRA = next(
+    title
+    for title, song in OKAFOR_SONGS.items()
+    if song["ref"]["id"] not in PLACED and (OKAFOR, title) not in SIMILAR
+)
+
+
+def with_extra(ids: list[str]) -> list[str]:
+    """The ids of the radio made with Last.fm alone, with ListenBrainz's song second."""
+    return [ids[0], sid(OKAFOR_SONGS[EXTRA]), *ids[1:]]
+
+
+def expected_ids(world: DeliveryWorld) -> list[str]:
+    return [{"owned": native_song(world), "placed": placed_song(world)}.get(e, e) for e in EXPECTED]
+
+
+def test_with_a_key_listenbrainz_is_not_waited_for_and_joins_the_radio_next_time(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    lastfm: FakeLastFm,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(FIRST, "Amber 2", [(OKAFOR, EXTRA)])
+    listening = world.services.listenbrainz
+    assert listening is not None
+    # As fast as with Last.fm alone, ListenBrainz taking seconds to answer.
+    listening.settings = ListenBrainzSettings(enabled=False)
+    forget(world, SONG_KEY)
+    started = time.monotonic()
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    alone = time.monotonic() - started
+    listening.settings = ListenBrainzSettings(enabled=True, timeout_seconds=10)
+    listenbrainz.delay = 1.0
+    forget(world, SONG_KEY)
+    started = time.monotonic()
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    assert time.monotonic() - started < alone + 0.8
+    asked = len(lastfm.requests)
+    # Saved as made with Last.fm alone; ListenBrainz's part follows in the background...
+    assert saved_at(world, SONG_KEY) is not None
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    # ... and is in the next radio, without asking Last.fm again.
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == with_extra(expected_ids(world))
+    assert len(lastfm.requests) == asked
+    # Names alone went to ListenBrainz: no account, no token.
+    for request in listenbrainz.requests:
+        assert "authorization" not in request.headers
+
+
+def test_a_radio_saved_without_listenbrainz_gets_its_part_in_the_background(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    lastfm: FakeLastFm,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(FIRST, "Amber 2", [(OKAFOR, EXTRA)])
+    listening = world.services.listenbrainz
+    assert listening is not None
+    # A list saved while ListenBrainz was off, as every list saved before it was added.
+    listening.settings = ListenBrainzSettings(enabled=False)
+    forget(world, SONG_KEY)
+    similar(client, id=SEED_ID)
+    listening.settings = ListenBrainzSettings(enabled=True)
+    asked = len(lastfm.requests)
+    # Shown at once as it is; ListenBrainz's part is added behind it.
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == with_extra(expected_ids(world))
+    assert len(lastfm.requests) == asked  # nothing asked of Last.fm for it
+
+
+def test_a_failing_listenbrainz_leaves_lastfm_s_radio_and_is_asked_again_later(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(FIRST, "Amber 2", [(OKAFOR, EXTRA)])
+    listenbrainz.status = 503
+    forget(world, SONG_KEY)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    listening = world.services.listenbrainz
+    assert listening is not None
+    assert until(lambda: listening.resting_until > 0, 10)  # left alone for a while
+    assert until(lambda: not radio._enriching, 10)
+    assert saved_at(world, LISTENING_BOTH_KEY) is None
+    # While it rests: Last.fm's list at once, nothing asked of ListenBrainz.
+    asked = len(listenbrainz.requests)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    assert len(listenbrainz.requests) == asked
+    # Back again: the next radio adds its part.
+    listenbrainz.status, listening.resting_until = 200, 0.0
+    similar(client, id=SEED_ID)
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == with_extra(expected_ids(world))
+
+
+def plain_list_saved(world: DeliveryWorld, client: SubsonicClient) -> None:
+    """The seed's radio saved as made with Last.fm alone (as while ListenBrainz was off)."""
+    listening = world.services.listenbrainz
+    assert listening is not None
+    settings = listening.settings
+    listening.settings = settings.model_copy(update={"enabled": False})
+    forget(world, SONG_KEY)
+    similar(client, id=SEED_ID)
+    listening.settings = settings
+
+
+CLIENT = (ADMIN_USER, "Radio")  # (the caller and client name the radio's guards know)
+
+
+@pytest.mark.parametrize("state", ["radio resting", "catalog resting", "sync"])
+def test_listenbrainz_s_part_waits_while_the_radio_is_held(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+    state: str,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(FIRST, "Amber 2", [(OKAFOR, EXTRA)])
+    plain_list_saved(world, client)
+    additions = world.services.additions
+    assert additions is not None and radio.sync is not None
+    if state == "radio resting":
+        radio.resting_until = radio.clock() + 60
+    elif state == "catalog resting":
+        additions.resting_until = additions.clock() + 60
+    else:
+        radio.sync._until[CLIENT] = radio.sync.clock() + 60
+    try:
+        assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+        time.sleep(0.5)  # (a job would have asked ListenBrainz by now)
+        assert listenbrainz.requests == [] and not radio._enriching
+        assert saved_at(world, LISTENING_BOTH_KEY) is None
+    finally:
+        radio.resting_until = additions.resting_until = 0.0
+        radio.sync._until.pop(CLIENT, None)
+    similar(client, id=SEED_ID)  # held no longer: the next request adds it
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+
+
+def test_listenbrainz_s_part_asks_the_catalog_as_background_work_and_not_in_a_sync(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(FIRST, "Amber 2", [(OKAFOR, EXTRA)])
+    catalog = radio.catalog
+    assert catalog is not None and radio.sync is not None
+    asked: list[tuple[str, int | None]] = []
+    search = catalog.search
+
+    async def watched(term: str, limit: int = 20) -> Any:
+        urgency = pacing.current()
+        asked.append((term.lower(), urgency.level if urgency is not None else None))
+        return await search(term, limit)
+
+    watched.cache_clear = search.cache_clear  # type: ignore[attr-defined]  (for ``forget``)
+    catalog.search = watched  # type: ignore[method-assign]
+    try:
+        # Made after the radio was made, for the same client: when the client began a sync
+        # while ListenBrainz answered, the catalog is not asked for it.
+        listenbrainz.delay = 0.5
+        forget(world, SONG_KEY)
+        assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+        radio.sync._until[CLIENT] = radio.sync.clock() + 60
+        assert until(lambda: listenbrainz.asked("/similar-recordings") != [], 10)
+        assert until(lambda: not radio._enriching, 10)
+        assert saved_at(world, LISTENING_BOTH_KEY) is None
+        assert not any(EXTRA.lower() in term for term, _ in asked)
+        radio.sync._until.pop(CLIENT, None)
+        # Not held: its catalog requests are background work, behind the listeners'.
+        listenbrainz.delay = 0.0
+        similar(client, id=SEED_ID)
+        assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+        theirs = [level for term, level in asked if EXTRA.lower() in term]
+        assert theirs and set(theirs) == {pacing.WARM}
+    finally:
+        catalog.search = search  # type: ignore[method-assign]
+        radio.sync._until.pop(CLIENT, None)
+
+
+SEED_CREDIT = radio_module._lead(SEED["artist"])  # how a radio first names the seed
+
+
+def test_a_corrected_token_brings_listenbrainz_s_part_to_a_saved_radio(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    # Only ListenBrainz's metadata lookup finds the song: it needs a valid token.
+    listenbrainz.song(SEED_CREDIT, SEED["title"], [(OKAFOR, EXTRA)], loose=True)
+    listening = world.services.listenbrainz
+    assert listening is not None
+    listening.settings = ListenBrainzSettings(token="invented-wrong-token")
+    forget(world, SONG_KEY)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    assert until(lambda: listenbrainz.asked("/recording-search") != [], 10)
+    assert until(lambda: not radio._enriching, 10)
+    # Found with a refused token: nothing kept as ListenBrainz's part.
+    assert saved_at(world, LISTENING_BOTH_KEY) is None
+    listening.settings = ListenBrainzSettings(token=FAKE_TOKEN)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == with_extra(expected_ids(world))
+
+
+def test_another_token_forgets_the_radios_made_with_listenbrainz(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(SEED_CREDIT, SEED["title"], [(OKAFOR, EXTRA)], loose=True)
+    listening = world.services.listenbrainz
+    assert listening is not None
+    forget(world, SONG_KEY)
+    similar(client, id=SEED_ID)  # without a token ListenBrainz knows nothing of it
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    # A token is entered: the radios made with ListenBrainz are made again.
+    listening.settings = ListenBrainzSettings(token=FAKE_TOKEN)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == expected_ids(world)
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    assert [s["id"] for s in similar(client, id=SEED_ID)] == with_extra(expected_ids(world))
+
+
+def test_a_radio_made_again_with_last_fm_alone_forgets_the_one_made_with_both(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    replay: Replay,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    replay.aliases[f"{OKAFOR} {EXTRA}".lower()] = TERMS["search-soundtrack"]
+    listenbrainz.song(FIRST, "Amber 2", [(OKAFOR, EXTRA)])
+    forget(world, SONG_KEY)
+    similar(client, id=SEED_ID)
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is not None, 20)
+    listening = world.services.listenbrainz
+    assert listening is not None
+
+    async def age() -> None:
+        await world.services.store.execute(
+            "UPDATE discographies SET fetched_at = 0 WHERE key = ?", [LISTENING_BOTH_KEY]
+        )
+        listening._songs.clear()  # (ListenBrainz's answer no longer known)
+
+    world.server.call(age)
+    listening.resting_until = listening.clock() + 60  # its part cannot be added again now
+    similar(client, id=SEED_ID)  # the old list at once; made again behind it
+    # Made again with Last.fm alone: the list made with both from the older one is gone.
+    assert until(lambda: saved_at(world, LISTENING_BOTH_KEY) is None, 20)
+    assert (saved_at(world, SONG_KEY) or 0) > 0
+
+
+def test_similar_artists_get_listenbrainz_s_in_the_background(
+    world: DeliveryWorld,
+    client: SubsonicClient,
+    lastfm: FakeLastFm,
+    listenbrainz: FakeListenBrainz,
+    radio: CatalogRadio,
+) -> None:
+    titles = [row["title"] for row in fixture("top-songs-band")["body"]]
+    listenbrainz.artist(BAND, titles, [FIRST, "Nobody Known"])
+    forget(world, BAND_SIMILAR_KEY)
+    artist = f"sh.ar.demo.{BAND_ID}"
+    assert info(client, "getArtistInfo2", id=artist)["similarArtist"] == []  # (never waits)
+    assert until(lambda: saved_at(world, BAND_SIMILAR_KEY + radio_module.WITH_LISTENBRAINZ), 20)
+    native = world.nd.client().ok("search3", {"query": OKAFOR, "albumCount": 0, "songCount": 0})
+    own = next(a for a in native["searchResult3"]["artist"] if a["name"] == OKAFOR)
+    found = info(client, "getArtistInfo2", id=artist)["similarArtist"]
+    # Last.fm's first, then ListenBrainz's; the name the catalog does not have left out.
+    assert [a["id"] for a in found] == [own["id"], f"sh.ar.demo.{FIRST_ID}"]
 
 
 def test_a_failing_lastfm_leaves_navidrome_s_empty_answer_and_is_left_alone_for_a_while(

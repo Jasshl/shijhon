@@ -565,6 +565,11 @@ class Pin:
     watchers: list[anyio.CancelScope] | None = field(default=None, repr=False, compare=False)
     gone: bool = False
     won: bool = False  # its race chose it: its audio came first
+    head: bytes | None = None  # its first bytes, once an answer from its start told them
+    # Its file's first bytes as read by a request of their own (``_read_start``), for
+    # continuing plays without a strong ETag: each compares them with its own (None: not
+    # read yet, or the read failed).
+    start_read: bytes | None = None
 
 
 @dataclass
@@ -586,6 +591,27 @@ class Opened:
     # Its bytes as they come from the add-on, kept once it goes to a client
     # (``delivery/retain.py``: ``accept``); None: not kept.
     capture: Capture | None = None
+    # The link it came by (None: not from an add-on's link - from the audio held of it).
+    pin: Pin | None = None
+
+
+@dataclass(eq=False)
+class PlayFile:
+    """The file a listener's play is of: the link its first answer came by (what it tells
+    of the file, also its first bytes once they came) and the file Shijhon holds that the
+    answer filled (``retain.Representation``; None: none). A later range of the play is held
+    to it - not to the file another listener's play is of."""
+
+    pin: Pin
+    representation: Any = None
+
+    @property
+    def known(self) -> Known:
+        return known_of(self.pin)
+
+
+# The play a request belongs to, when the interceptor knows it (``Deliverer.open``).
+_PLAY: ContextVar[PlayFile | None] = ContextVar("shijhon_play", default=None)
 
 
 @dataclass(frozen=True)
@@ -599,6 +625,11 @@ class Known:
     track_id: str
     kind: str | None = None  # its format and bitrate, when its first bytes told
     kbps: int | None = None
+    link: str | None = None  # the link it was played from
+    content_type: str | None = None
+    # Its first bytes (``HEAD_BYTES``), when an answer from its start was read: a file
+    # without a strong ETag is told apart from another of the same size by them.
+    head: bytes | None = None
 
 
 async def _nothing() -> None:
@@ -675,6 +706,8 @@ WRONG_SECONDS = 7 * 86400.0  # a source that delivered another recording is not 
 # the source as this many first bytes - as many as reading a length may need (a large ID3
 # tag) - so their length is read before the client gets any. Only what decides is read.
 PROBE_BYTES = PEEK_BYTES
+# A file's first bytes that tell it from another of the same size (no strong ETag).
+HEAD_BYTES = 4096
 
 
 @dataclass
@@ -889,6 +922,7 @@ class Deliverer:
         heard: bool = True,
         download: bool = False,
         accept: Accept | None = None,
+        play: PlayFile | None = None,
     ) -> Opened:
         """``purpose``: "play", "warm", "ahead" (a client's fetch ahead) or "alone"
         (a fetch ahead that waited out its turn: the primary alone, no fallbacks).
@@ -902,7 +936,19 @@ class Deliverer:
         fetch, which does not use the sources that ask not to be used for downloads
         (``not_for_downloads``). ``accept``: the request's own test of the audio at byte
         zero, by the format and bitrate its first bytes tell (None: it will do; else why
-        not) - audio it refuses is passed over for the next source (``_Refused``)."""
+        not) - audio it refuses is passed over for the next source (``_Refused``). ``play``:
+        the listener's play the request continues: its later ranges are held to its file."""
+        requested_range = ByteRange.parse(range_header)
+        if (
+            requested_range is not None
+            and not requested_range.at_zero
+            and not head
+            and not download
+            and heard
+            and (held := await self._from_held(track, requested_range, play)) is not None
+        ):
+            return held
+        playing = _PLAY.set(play)
         started = self.clock()
         trace = Trace(started - waited)
         if waited >= 0.5:
@@ -961,6 +1007,7 @@ class Deliverer:
             if requested is None or requested.at_zero:
                 self._failed_at.pop(track.key, None)  # it plays: a later routing tries all
         finally:
+            _PLAY.reset(playing)
             _WAITED.reset(waited_on)
             _KEEPS.reset(keeps)
             _ACCEPT.reset(tested)
@@ -976,6 +1023,89 @@ class Deliverer:
             while len(self._heard) > 20000:
                 self._heard.pop(next(iter(self._heard)))
         return opened
+
+    async def _from_held(
+        self, track: Track, requested: ByteRange, play: PlayFile | None = None
+    ) -> Opened | None:
+        """A later range of a play served from the file Shijhon holds of it (an answer read
+        on, ranges kept: ``retention``) - before any link is asked for, so also when the
+        song's link expired and no add-on gives that file again. Only the play's own file:
+        the one its first answer filled (``play``); for a play Shijhon does not know (a
+        restart), the representation the song was last played from (its add-on, track, size
+        and strong ETag - without one, its link, or its first bytes). The file is leased from
+        when it is chosen to the answer's close."""
+        retention = self.retention
+        if retention is None or not retention.holding or requested.start is None:
+            return None
+        names = tuple(dict.fromkeys(n for n in (*self._names(track.song_id), track.ref) if n))
+        first, last = requested.start, requested.end
+        found: tuple[Any, int] | None = None
+        if play is not None:
+            if play.representation is None:
+                return None  # (its first answer filled no file: nothing held of it)
+            known = play.known
+            found = retention.held(names, lambda r: bool(r == play.representation), first, last)
+        else:
+            known_found = next((k for n in names if (k := self._known.get(n)) is not None), None)
+            if known_found is None or known_found.size is None:
+                return None
+            known = known_found
+            by_start: list[Any] = []
+
+            def same(representation: Any) -> bool:
+                if (representation.source, representation.track_id, representation.total) != (
+                    known.source_id, known.track_id, known.size
+                ):  # fmt: skip
+                    return False
+                if known.etag:
+                    return bool(representation.validator == known.etag)
+                if known.link and representation.validator == f"link {known.link}":
+                    return True
+                by_start.append(representation)  # (to be read: its first bytes)
+                return False
+
+            found = retention.held(names, same, first, last)
+            if found is None and by_start and known.head:
+                # Without a validator: the held file whose first bytes are the play's.
+                for representation in by_start:
+
+                    def this(r: Any, rep: Any = representation) -> bool:
+                        return bool(r == rep)
+
+                    candidate = retention.held(names, this, first, last)
+                    if candidate is None:
+                        continue
+                    try:
+                        start = await anyio.to_thread.run_sync(
+                            retention.start_of, candidate[0], len(known.head)
+                        )
+                    except BaseException:
+                        retention.release(candidate[0])  # (canceled, or failed: not served)
+                        raise
+                    if start == known.head:
+                        found = candidate
+                        break
+                    retention.release(candidate[0])
+        if found is None:
+            return None
+        entry, end = found
+        try:
+            total = entry.total
+            assert total is not None  # (held only covers a file of a known size)
+            headers = [
+                (b"content-type", (known.content_type or "application/octet-stream").encode()),
+                (b"accept-ranges", b"bytes"),
+                *([(b"etag", known.etag.encode())] if known.etag else []),
+                *_range_headers(first, end, total),
+            ]
+            body, close = retention.serve(entry, first, end)  # (the lease is the answer's now)
+        except BaseException:
+            retention.release(entry)
+            raise
+        log.info("%r from byte %d: from the audio Shijhon holds of its play", track.title, first)
+        # (Its format and bitrate as the play knew them: a request for a format the file
+        # meets stays a plain stream.)
+        return Opened(206, headers, body, close, "held audio", kind=known.kind, kbps=known.kbps)
 
     def _served(
         self,
@@ -1493,7 +1623,10 @@ class Deliverer:
                     if opened is not None:
                         return opened
                     raise NoSource(failures)
-        known = None if at_zero else self._known.get(track.song_id)
+        play = _PLAY.get()
+        known = None if at_zero else (play.known if play is not None else None)
+        if known is None and not at_zero:
+            known = self._known.get(track.song_id)
         if known is not None and pin is not None and not _holds(pin, known):
             pin = None  # another request's link to another file: the play looks for its own
         foreign: list[Pin] = []  # links found to be other files than a continuing play's
@@ -1614,7 +1747,7 @@ class Deliverer:
                     # knows, and a seek going on has read, stay as they are.)
                     self._learned(
                         track.song_id,
-                        Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps),
+                        known_of(pin),
                     )
                 if fresh and at_zero:  # the attempt's record (its waits at the limits out)
                     took = pin.looked_before + pin.lookup_seconds + pin.link_seconds
@@ -2648,9 +2781,7 @@ class Deliverer:
         self._remember(track.song_id, pin)
         # The play's file is the winner's - never a racer's that answered before it and was
         # refused or stopped: its later ranges stay on it.
-        self._learned(
-            pin.song_id, Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps)
-        )
+        self._learned(pin.song_id, known_of(pin))
         return opened
 
     def _let_go(self, pin: Pin) -> None:
@@ -3146,6 +3277,9 @@ class Deliverer:
                     # The play's own ETag was asked for: that link's file is another one.
                     raise _Other("another file (HTTP 412)")
                 opened = self._answer(pin, requested, head, response, expect, mine)
+                if expect is not None:
+                    await self._held_to(pin, expect, opened, deadline, mine)
+                opened.pin = pin
                 opened.remux = pin.remux if pin.info.transport == "dash" else None
                 file = response.extensions.get(DASH_KEPT)
                 if file is not None and opened.body is not None and self._keeps():
@@ -3181,6 +3315,68 @@ class Deliverer:
         finally:
             if ended is not None and not kept:
                 ended()
+
+    async def _held_to(
+        self, pin: Pin, expect: Known, opened: Opened, deadline: float, mine: bool
+    ) -> None:
+        """A continuing play's answer by a link: of its own file, or ``_Changed`` (``_Other``
+        for another request's link). Without a strong ETag of the play's file (whatever the
+        new link sends), a new link is the play's file only when its first bytes are the
+        play's - one small request per link; with none known, it cannot be told and is not
+        taken. Once shown, the link is what the song is known by, its first bytes the
+        play's."""
+        if (
+            not expect.etag
+            and pin.info.transport != "dash"
+            and pin.info.url != expect.link
+            and opened.body is not None
+        ):
+            if not expect.head:
+                why = "another file, as far as can be told (the play's first bytes are not known)"
+                raise _Changed(why) if mine else _Other(why)
+            if pin.start_read is None:
+                pin.start_read = await self._read_start(pin, deadline)
+            if pin.start_read is None or pin.start_read[: len(expect.head)] != expect.head:
+                why = "another file (its first bytes differ)"
+                raise _Changed(why) if mine else _Other(why)
+        if pin.head is None:
+            pin.head = expect.head  # (the same file: its first bytes are the play's)
+        if not _RACING.get() and (pin.watchers is None or pin.won):
+            self._learned(pin.song_id, known_of(pin))
+
+    async def _read_start(self, pin: Pin, deadline: float) -> bytes | None:
+        """The link's file's first ``HEAD_BYTES`` (fewer: a shorter file), by one ranged
+        request; None when they could not be read (an error, no answer in time)."""
+        headers = dict(pin.info.headers)
+        headers["accept-encoding"] = "identity"
+        headers["range"] = f"bytes=0-{HEAD_BYTES - 1}"
+        data = b""
+        try:
+            with anyio.fail_after(max(0.1, deadline - self.clock())):
+                http = pin.source.http
+                request = http.build_request("GET", pin.info.url, headers=headers)
+                pace = pin.source.pace
+
+                async def hop(url: httpx.URL) -> None:
+                    if pace is not None and (left := pace.audio_blocked) > 0:
+                        raise pacing.Blocked(left)
+
+                response = await pacing.send(
+                    http, request, turn=hop, private=tuple(pin.info.headers)
+                )
+                try:
+                    if response.status_code not in (200, 206):
+                        return None
+                    async for chunk in response.aiter_raw():
+                        data += chunk
+                        if len(data) >= HEAD_BYTES:
+                            break
+                finally:
+                    await response.aclose()
+        except Exception as exc:
+            log.info("the first bytes of a new link were not read: %s", type(exc).__name__)
+            return None
+        return data[:HEAD_BYTES]
 
     def _join_timed_out(self, pin: Pin, waits: pacing.Waits, before: float) -> _TimedOut:
         """A DASH link's attempt whose time ran out: a timeout as ``_timed_out`` says - and
@@ -3485,11 +3681,10 @@ class Deliverer:
         # A racer's file is the play's only once it has won - so is that of a link a race
         # published before its audio, for another request on it (``watchers``): the race
         # notes its winner's.
-        if not _RACING.get() and (pin.watchers is None or pin.won):
-            self._learned(
-                pin.song_id,
-                Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps),
-            )
+        if expect is None and not _RACING.get() and (pin.watchers is None or pin.won):
+            # (A continuing play's new link is the song's file only once it is shown to be
+            # the play's: ``_requested``.)
+            self._learned(pin.song_id, known_of(pin))
         content_type = pin.content_type or "application/octet-stream"
         common = [(b"content-type", content_type.encode()), (b"accept-ranges", b"bytes")]
         if pin.etag:
@@ -3520,6 +3715,8 @@ class Deliverer:
         ):
             capture = self.retention.capture(pin, response, total, etag)
         raw = response.aiter_raw() if capture is None else capture.tap(response.aiter_raw())
+        if pin.head is None and _starts_at_zero(response):
+            raw = self._collecting(raw, pin, total)  # (its first bytes, as they come)
 
         if status == 206:
             out = [
@@ -3550,10 +3747,63 @@ class Deliverer:
         length = [(b"content-length", str(total).encode())] if total is not None else []
         return Opened(200, common + length, raw, response.aclose, pin.source.name, capture=capture)
 
+    async def _collecting(
+        self, chunks: AsyncIterator[bytes], pin: Pin, total: int | None
+    ) -> AsyncIterator[bytes]:
+        """``chunks`` from the file's start, its first ``HEAD_BYTES`` noted on the link (and
+        on what the song is known by, while it is that link's file) as they pass."""
+        wanted = HEAD_BYTES if total is None else min(HEAD_BYTES, total)
+        head = bytearray()
+        ended = False
+        try:
+            async for chunk in chunks:
+                if pin.head is None and len(head) < wanted:
+                    head += chunk[: wanted - len(head)]
+                    if len(head) >= wanted:
+                        self._noted_head(pin, bytes(head))
+                yield chunk
+            ended = True
+        finally:
+            if ended and pin.head is None and head and total is None:
+                self._noted_head(pin, bytes(head))  # (a file shorter than that)
+
+    def _noted_head(self, pin: Pin, head: bytes) -> None:
+        pin.head = head
+        known = self._known.get(pin.song_id)
+        if known is not None and (known.source_id, known.size, known.link) == (
+            pin.source.id, pin.size, pin.info.url
+        ):  # fmt: skip
+            self._known[pin.song_id] = replace(known, head=head)
+
     def _keeps(self) -> bool:
-        """Whether the audio being opened may go to a client and be kept once it has
-        (``retention``)."""
-        return self.retention is not None and self.retention.enabled and _KEEPS.get()
+        """Whether the audio being opened may go to a client and be held once it has
+        (``retention``): read on into its file, its later ranges served from it - and put in
+        the library when songs are kept."""
+        return self.retention is not None and _KEEPS.get()
+
+
+def _starts_at_zero(response: httpx.Response) -> bool:
+    if response.status_code == 200:
+        return True
+    told = str(response.headers.get("content-range", "")).removeprefix("bytes ")
+    return bool(told.split("-", 1)[0] == "0")
+
+
+def known_of(pin: Pin) -> Known:
+    """What a play knows of the file a link serves: by it, its later ranges are held to it."""
+    return Known(
+        pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps, pin.info.url,
+        pin.content_type, pin.head,
+    )  # fmt: skip
+
+
+def _closer(body: AsyncIterator[bytes]) -> Callable[[], Awaitable[None]]:
+    async def close() -> None:
+        aclose = getattr(body, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+    return close
 
 
 def _states(sources: list[Source], answers: dict[int, Availability | None], asked: set[int]) -> str:

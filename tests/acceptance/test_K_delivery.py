@@ -40,6 +40,11 @@ def world(
 ) -> Iterator[DeliveryWorld]:
     nd = navidrome_factory()
     with delivery_world(nd, tmp_path_factory.mktemp("k")) as w:
+        # These tests are of the add-ons' links: seeks and resumed plays served from the
+        # audio Shijhon holds have tests of their own (test_K_held_audio.py).
+        retention = w.services.deliverer.retention
+        assert retention is not None
+        retention.holding = False
         yield w
 
 
@@ -198,7 +203,8 @@ def test_a_play_keeps_its_file_when_the_song_is_saved_while_it_plays(
     """An app downloads the song while it plays: the library's copy is retagged, another
     file. The play's seeks get its own file's bytes from its link; a new play gets the
     library's file, and so do its seeks and another app's. Once the link expires, the
-    play's seeks are the library's too."""
+    play's seeks still get its own file, from a new link to it - never the library's copy
+    at the same offsets."""
     a, b = a_and_b
     song, _, audio = world.placeholder_track("k-saved", [a, b])
     data = audio.read_bytes()
@@ -223,10 +229,12 @@ def test_a_play_keeps_its_file_when_the_song_is_saved_while_it_plays(
         seek = stream(world, song, {"range": "bytes=100-"})
     finally:
         settings.pin_ttl_seconds = ttl
-    assert seek.status_code == 206 and seek.content == library[100:]
+    assert seek.status_code == 206 and seek.content == data[100:]
+    assert len(a.requests("stream")) == 2  # a new link to its file
+    audio_requests = len(a.requests("audio"))
     assert stream(world, song).content == library  # a new play
     assert stream(world, song, {"range": "bytes=100-"}).content == library[100:]
-    assert len(a.requests("audio")) == before + 1 and len(a.requests("stream")) == 1
+    assert len(a.requests("audio")) == audio_requests and len(a.requests("stream")) == 2
 
 
 def test_a_play_first_asked_for_mid_file_keeps_its_file_too(

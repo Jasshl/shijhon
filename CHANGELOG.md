@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.9.0
+
+- ListenBrainz is a second source of similar songs and artists next to Last.fm, and it
+  needs no setup. A radio from a song, an album or an artist that is only in the catalog
+  now has songs for everyone, also for people who have not set up Last.fm: for them it is
+  made of the songs and artists that ListenBrainz's listeners play together, and for
+  those who have, of both lists in turn. A catalog artist's similar artists come from both
+  as well. Discovery mixes choose from ListenBrainz's songs too, and a song both list
+  comes first. Agents get `find_listened_together`, which lists the songs people listen to
+  together with up to five songs. Only artists' and songs' names, and the MusicBrainz IDs
+  ListenBrainz gives for them, are sent to ListenBrainz, never an account or anyone's
+  listening. For people with Last.fm, a radio never waits for ListenBrainz: it is asked in
+  the background, and its songs join that radio from the next time on. A song whose
+  credit names featured artists, which ListenBrainz often knows only under another
+  recording, is found through ListenBrainz's recording search. After a failure
+  ListenBrainz is not asked for a minute. The new **ListenBrainz** page, or
+  `[listenbrainz] enabled = false`, turns it off. An optional ListenBrainz user token, set
+  there or in `[listenbrainz] token`, lets Shijhon also look songs up with ListenBrainz's
+  looser metadata lookup.
+
+- A song you start in an app that loads the next song at the same moment (a player with
+  two audio elements does) no longer waits for the next song's audio first. Shijhon
+  could not tell which of the two you play until the app reported it, a few seconds
+  later, and when the next song's request reached it first, it held the song you chose
+  back as a song fetched ahead, so it started up to a few seconds late. Both now start at
+  once.
+- A song an app loaded ahead, or paused, plays on and can be sought in after its link at
+  the add-on expired. While the app stays connected, Shijhon now reads each song on to its
+  end, also one the app only loaded ahead and reads nothing of for minutes, and feeds the
+  app from the audio it holds. Seeks and an app reading on after a pause are served from
+  that audio at once, without asking the add-on again. Before, such a seek needed a new
+  link, and when the add-on gave none the app got an error and stopped. A play keeps its
+  own file to the end: never the library's copy at the same offsets once the song was
+  saved. An add-on that asks not to be used for downloads is still read only as the app
+  reads.
+- With **Keep streamed songs** (`keep_streamed_audio`) on, every song Shijhon reads in full
+  this way goes into your library, also songs an app only loaded ahead.
+- A new link to a song's file that the add-on gives no ETag for is used for a play only
+  when its first bytes are the play's: another file of the same size is no longer played
+  on from the middle.
+- Each request's line in the log now also tells when Shijhon sent its answer's start and
+  its first body bytes (`start sent …ms, first body sent …ms`) and, when it saw the app
+  close the connection, when (`disconnect seen …ms`), next to how long the whole request
+  took, which for a song is how long the app kept reading it. "Sent" means handed to the
+  web server, not received by the app.
+- The first song started after a change on the Add-ons page no longer holds up every
+  other request for a moment: the add-ons' connections read the system's certificates
+  once, not twice per add-on each time they are set up.
+
+### Upgrading
+
+- ListenBrainz is asked from the first start after the upgrade, for everyone: Shijhon then
+  connects to labs.api.listenbrainz.org (and, with a token, api.listenbrainz.org). To keep
+  it from doing so, set `[listenbrainz] enabled = false` before that start, or turn it off
+  on the ListenBrainz page afterwards. There is no database migration.
+- Radios saved before the upgrade get ListenBrainz's songs in the background the next
+  time they are asked for.
+
+## 0.8.1
+
+- The background correction of joined artist credits ("A, B") now asks only the add-ons
+  that are a catalog only, those listed apart on the Add-ons page. Before, it also searched
+  add-ons that deliver audio, and their searches can reach a service that acts on them.
+  Playlist imports and your own searches still ask every add-on with a catalog.
+
 ## 0.8.0
 
 - Each person can follow their artists on the new **New releases** page: the artists they

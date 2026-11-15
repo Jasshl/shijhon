@@ -35,7 +35,7 @@ been tried yet.
    ```nix
    {
      inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-     inputs.shijhon.url = "github:Jasshl/shijhon/v0.8.0"; # a release tag
+     inputs.shijhon.url = "github:Jasshl/shijhon/v0.9.0"; # a release tag
 
      outputs = { nixpkgs, shijhon, ... }: {
        nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {

@@ -8,6 +8,7 @@ only that ``key=value`` piece is re-encoded; every other byte is forwarded as se
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from urllib.parse import quote_plus, unquote_to_bytes
@@ -211,6 +212,13 @@ class RestCall:
     # Trusted request provenance retained across catalog-to-native rewrites. No
     # query parameter or header can set it independently of an explicit catalog ID.
     catalog_discovery: bool = False
+    # When the request came (``time.monotonic``), kept across rewrites: what it is compared
+    # with (another song's start by the same client) is told by when each came, not by the
+    # work done for it before.
+    arrived: float = field(default_factory=time.monotonic, compare=False)
+    # When its start at byte zero was noted for its listener (``Interceptor.begin``): once
+    # per request, also across rewrites.
+    noted: float | None = field(default=None, compare=False)
     # Each key's first value (as Navidrome reads one), made at the first lookup.
     _first: dict[str, str] | None = field(default=None, repr=False, compare=False)
 
@@ -269,6 +277,8 @@ class RestCall:
         rewritten.catalog_discovery = self.catalog_discovery or (self.get("id") or "").startswith(
             "sh."
         )
+        rewritten.arrived = self.arrived
+        rewritten.noted = self.noted
         return rewritten
 
 

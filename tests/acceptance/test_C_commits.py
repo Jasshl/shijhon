@@ -361,7 +361,8 @@ def test_a_seek_after_the_commit_stays_on_the_first_representation(
     world: DeliveryWorld, client: SubsonicClient
 ) -> None:
     """Once the play's pin has expired, a seek by the new native ID must not continue from
-    another file: it fails, and the client starts again at byte zero."""
+    another file: it gets the play's own, from the audio held of it (without it, it fails
+    and the client starts again at byte zero: test_K_delivery)."""
     addon = world.addons[0]
     track = song(RETRY, 7)
     isrc = tracks(RETRY)[7]["isrc"]
@@ -377,8 +378,7 @@ def test_a_seek_after_the_commit_stays_on_the_first_representation(
     finally:
         settings.pin_ttl_seconds = 1800.0
         addon.tracks[isrc].audio = original
-    assert seek.headers["content-type"].startswith("application/json")
-    assert seek.json()["subsonic-response"]["status"] == "failed"
+    assert seek.status_code == 206 and seek.content == original.read_bytes()[100:]
 
 
 def test_a_catalog_song_that_cannot_be_looked_up_is_an_error(

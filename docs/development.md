@@ -108,8 +108,9 @@ schema:
 11. What Navidrome does alone stays as it is: lyrics, genres, random and starred lists,
     your own covers.
 12. A radio started from a catalog song and from a catalog artist, with Last.fm set up
-    on the Playlists page: it has songs, they play, and one of them can be added to a
-    playlist. Similar artists on a catalog artist's page open.
+    on the Playlists page, and once by an account without Last.fm (ListenBrainz alone):
+    it has songs, they play, and one of them can be added to a playlist. Similar artists
+    on a catalog artist's page open.
 
 ## The development instance
 
@@ -140,7 +141,7 @@ Under `src/shijhon/`:
 | `placeholders/` | Writing releases into the library and recovering interrupted writes; the silent files and their tags |
 | `matching/`, `fill/` | Matching an owned album with a catalog release; fills, the library pass, and the track lists of added releases read again |
 | `delivery/` | Add-ons: the protocol client, routing and streaming, DASH, download-first, limits, warm-ahead, the network policy |
-| `playlists/` | Discovery mixes, described playlists and playlist imports: frozen previews, listening-history and AI connections, Last.fm's similar songs and artists, verified publication to Navidrome |
+| `playlists/` | Discovery mixes, described playlists and playlist imports: frozen previews, listening-history and AI connections, Last.fm's similar songs and artists and ListenBrainz's listened together (`listenbrainz.py`), verified publication to Navidrome |
 | `agents/` | OAuth sign-in and the MCP tools for remote agents ([agent access](agent-access.md)): playlists, song facts, catalog releases added to an account's library (`library.py`), and an administrator's review list and server status (`admin.py`) |
 | `music_imports/` | Private reviewed imports of retained original music files: staging, header checks, publication, removal and restore ([music imports](music-imports.md)) |
 | `downloads/` | Account-scoped playlist audio preparation, saved jobs and progress; uses the ordinary verified download path |

@@ -878,6 +878,8 @@ def _changed(value: Any, key: str) -> Any:
         return value + 1
     if key == "urls":  # (notification addresses: a secret, none by default)
         return SecretStr("ntfy://elsewhere")
+    if key == "token":  # (the ListenBrainz token: a secret, none by default)
+        return SecretStr("invented-token")
     return value * 2 + 1
 
 

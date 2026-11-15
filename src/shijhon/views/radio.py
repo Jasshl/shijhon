@@ -3,17 +3,18 @@
 ``getSimilarSongs`` and ``getSimilarSongs2`` (JSON and XML) of a catalog song, album or
 artist that is not in the library, and the ``similarArtist`` list of ``getArtistInfo`` and
 ``getArtistInfo2`` of a catalog artist. Navidrome knows nothing of such an item and its
-answer is empty; Last.fm, asked with the Last.fm key the caller connected for discovery
-mixes (``playlists/similar.py``), names what is similar, and the catalog and the library
+answer is empty; ListenBrainz (unless it is turned off) and Last.fm - asked with the
+Last.fm key the caller connected for discovery mixes, when there is one - name what is
+similar, their lists in turn (``playlists/similar.py``), and the catalog and the library
 say which of it they have:
 
-- a song: the songs Last.fm lists as similar to it, each looked up in the catalog (a
-  search for its artist and title, the recording chosen by the rules discovery mixes
-  use). A song with fewer than a handful is filled up with its artist's radio;
+- a song: the songs listed as similar to it, each looked up in the catalog (a search for
+  its artist and title, the recording chosen by the rules discovery mixes use). A song
+  with fewer than a handful is filled up with its artist's radio;
 - an artist, and an album (its artist): the artist's top songs in the catalog, then those
-  of the artists Last.fm lists as similar, a few of each in turn;
-- similar artists: the artists Last.fm lists, as the library's artist of that name, else
-  the catalog's.
+  of the artists listed as similar, a few of each in turn;
+- similar artists: the artists listed, as the library's artist of that name, else the
+  catalog's.
 
 A song the library has (an owned one, a placeholder) is the library's own entry for the
 caller, the others are catalog songs as a search shows them; none twice, up to the
@@ -27,7 +28,20 @@ what is known so far; an artist's info never waits for its similar artists (reso
 them takes up to 15 catalog searches) and is answered with none. The list is completed in
 the background, a few catalog requests at a time, and saved for the next request. Nothing
 is asked while a client walks artist pages or trips the search guard, for a while after
-Last.fm or the catalog failed, or for a caller without a Last.fm key. Whenever there is
+every similarity source or the catalog failed, or for a caller without a Last.fm key while
+ListenBrainz is off.
+
+Three kinds of list are saved for an item, by the ending of their keys. Made with Last.fm
+alone (no ending): for a caller with a key while ListenBrainz is off, and while
+ListenBrainz's part is still to come - such a caller never waits for ListenBrainz, which is
+asked in the background, and lists saved before ListenBrainz was added are of this kind
+too. Made with both (``WITH_LISTENBRAINZ``): what callers with a key are shown while
+ListenBrainz is on; when only a list of Last.fm alone is saved, it is shown and
+ListenBrainz's part is added to it in the background (``_enrich_soon``): its similar songs,
+or artists, looked up in the catalog and taken in turn with the list's, saved as the list
+made with both - nothing asked of Last.fm again. Made without Last.fm
+(``WITHOUT_LASTFM``): for a caller without a key, who waits for ListenBrainz (the only
+source) within the request's budget, and is never shown Last.fm's songs. Whenever there is
 nothing to show - and for JSONP and HEAD - the answer is the one from before: Navidrome's
 own empty answer for similar songs, an empty list of similar artists. Nothing is written
 to the library.
@@ -53,10 +67,12 @@ from shijhon.catalog.base import Catalog, CatalogError, client_artwork_template
 from shijhon.catalog.base import scope as catalog_scope
 from shijhon.catalog.editions import merge_twins
 from shijhon.catalog.model import CatalogArtist, CatalogRef, CatalogTrack
+from shijhon.delivery import pacing
 from shijhon.matching.normalize import artist_names, core_title, featured_names, fold
+from shijhon.playlists.listenbrainz import ListenBrainz, ListeningUnavailable
 from shijhon.playlists.repository import Repository
 from shijhon.playlists.resolve import choose, searched
-from shijhon.playlists.similar import Similarity, SimilarUnavailable
+from shijhon.playlists.similar import Similarity, SimilarUnavailable, in_turn
 from shijhon.proxy.app import Handler, HandlerResult, RequestContext
 from shijhon.proxy.auth import Caller, CheckFailed
 from shijhon.proxy.params import RestCall
@@ -83,8 +99,9 @@ Spawn = Callable[[Callable[[], Coroutine[Any, Any, None]]], None]
 SONG_COUNT = 50  # getSimilarSongs' count when a client names none (Navidrome's default)
 ARTIST_COUNT = 20  # ... getArtistInfo's
 RADIO_SONGS = 50  # the songs of a saved list at most
-SIMILAR_TRACKS = 50  # similar songs asked of Last.fm for a song: a catalog search each
-SIMILAR_ARTISTS = 15  # similar artists asked of Last.fm for an artist
+SIMILAR_TRACKS = 50  # similar songs of a song, of both sources: a catalog search each
+SIMILAR_ARTISTS = 15  # similar artists of an artist, of both sources
+TITLES = 5  # an artist's top songs that tell ListenBrainz who it is
 FEW_SONGS = 10  # a song's list with fewer is filled up with its artist's radio
 OWN_SONGS = 10  # an artist's own top songs in its radio
 THEIR_SONGS = 5  # ... and each similar artist's
@@ -99,7 +116,13 @@ INFO_WAIT = 1.0
 # Of a request's budget, what is kept for telling which songs the library has (at most; a
 # quarter of a smaller budget): a list is waited for until then.
 ENTRY_SECONDS = 2.0
-REST_SECONDS = 60.0  # nothing is asked for this long after Last.fm or the catalog failed
+REST_SECONDS = 60.0  # nothing is asked for this long after the sources or the catalog failed
+# The endings of the keys of the lists made without Last.fm (for a caller without a key),
+# and of those made with both (a list made with Last.fm alone has none).
+WITHOUT_LASTFM = ":listenbrainz"
+WITH_LISTENBRAINZ = ":both"
+ENRICHMENTS = 2  # lists that get ListenBrainz's part at a time
+TOKEN_MARK = "radio:listenbrainz:token"  # noqa: S105 (a key: which token the lists had)
 # What an ``Artist`` (getArtistInfo's similar artists) has of an ``ArtistID3``'s fields.
 _ARTIST = ("id", "name", "coverArt", "artistImageUrl")
 
@@ -114,12 +137,23 @@ class Seed:
     credit: str = ""  # a song's credit without its featured artists ("A & B")
 
 
+class _Postponed(Exception):
+    """Adding ListenBrainz's part waits for a later request (the reason is the message)."""
+
+
 class _List[T]:
     """A list being made: what is known of it so far, in its order."""
 
     def __init__(self) -> None:
         self.done = anyio.Event()
         self.found: list[T | None] = []
+        # Made with Last.fm alone while ListenBrainz's part is still to come: saved as such,
+        # and ``after`` adds that part in the background (for the client that asked).
+        self.waiting = False
+        self.after: Callable[[Client], Awaitable[None]] | None = None
+        # False: made from what ListenBrainz found while its token was refused or changed:
+        # shown, not saved.
+        self.kept = True
 
     def so_far(self) -> tuple[T, ...]:
         return tuple(item for item in self.found if item is not None)
@@ -170,11 +204,19 @@ class CatalogRadio:
         self.spawn = spawn  # background work for the app's lifetime
         self.server = server  # Navidrome's envelope fields
         self.clock = additions.clock
-        # Set once playlists are there: Last.fm, and the Last.fm key of an account (None:
-        # it connected none).
+        # Set once playlists are there: Last.fm and ListenBrainz, and the Last.fm key of an
+        # account (None: it connected none).
         self.similarity: Similarity | None = None
         self.key_of: Callable[[str], Awaitable[SecretStr | None]] | None = None
         self.resting_until = 0.0
+        # ... and the lists made without Last.fm, after no source answered for one of them
+        # (ListenBrainz failing for a caller without a key never holds Last.fm's lists).
+        self.listening_resting_until = 0.0
+        self._enriching: set[str] = set()  # the lists getting ListenBrainz's part now
+        # The ListenBrainz token (its fingerprint) the saved lists made with ListenBrainz
+        # were checked against; another one forgets them (``_token_check``).
+        self._token_seen: str | None = None
+        self._token_lock = anyio.Lock()
         self._making: dict[str, _List[Any]] = {}  # the lists being made, by their keys
         self._kinds: dict[str, str] = {}  # ... and what each is: songs, or artists
 
@@ -218,7 +260,7 @@ class CatalogRadio:
         if self.native is not None and await self.native(cid) is not None:
             return None  # in the library: Navidrome's own answer
         key = await self._key(caller)
-        if key is None:
+        if key is None and not self._listening():
             return None
         kind = {"tr": "song", "al": "album", "ar": "artist"}[cid.kind]
         report = RadioReport(call, f"a catalog {kind}")
@@ -234,7 +276,7 @@ class CatalogRadio:
         cid: CatalogId,
         count: int,
         caller: Caller,
-        key: SecretStr,
+        key: SecretStr | None,
         report: RadioReport,
     ) -> HandlerResult:
         deadline = self.clock() + self.additions.budget  # one budget for the whole request
@@ -253,17 +295,29 @@ class CatalogRadio:
             return None
         scope = catalog_scope(catalog)
         store = self.additions.discographies
+        await self._token_check()
         if seed.track is not None:
-            list_key = f"{scope}:radio:song:{seed.track.ref}"
+            base = f"{scope}:radio:song:{seed.track.ref}"
         else:
-            list_key = f"{scope}:radio:artist:{fold(seed.artist)}"
+            base = f"{scope}:radio:artist:{fold(seed.artist)}"
+        list_key = base + self._ending(key)
         saved = await store.get_songs(list_key) if store is not None else None
+        alone = None  # a list of Last.fm alone, to add ListenBrainz's part to
+        if saved is None and store is not None and list_key.endswith(WITH_LISTENBRAINZ):
+            saved = alone = await store.get_songs(base)
+
+        def enrich(songs: tuple[CatalogTrack, ...]) -> Callable[[Client], Awaitable[None]]:
+            if seed.track is not None:
+                return lambda client: self._enrich_songs(catalog, seed, list_key, songs, client)
+            return lambda client: self._enrich_artist(catalog, key, seed, list_key, client)
 
         async def make(found: _List[CatalogTrack]) -> None:
             if seed.track is not None:
                 await self._song_list(catalog, key, seed, found)
             else:
                 await self._artist_list(catalog, key, seed, found)
+            if found.waiting:
+                found.after = enrich(found.so_far())
 
         songs, report.list = await self._list(
             list_key,
@@ -274,6 +328,10 @@ class CatalogRadio:
             (caller.username, call.client),
             "songs",
         )
+        if alone is not None:
+            self._enrich_soon(
+                list_key, enrich(alone.songs), (caller.username, call.client), "songs"
+            )
         # (A list still being made may name a recording twice, or the song itself.)
         songs = _distinct(songs or (), seed.track)
         if not songs:
@@ -390,7 +448,7 @@ class CatalogRadio:
         if count <= 0 or caller is None:
             return []
         key = await self._key(caller)
-        if key is None:
+        if key is None and not self._listening():
             return []
         report = RadioReport(call, "a catalog artist's similar artists")
         try:
@@ -405,15 +463,28 @@ class CatalogRadio:
         artist: CatalogArtist,
         count: int,
         caller: Caller,
-        key: SecretStr,
+        key: SecretStr | None,
         report: RadioReport,
     ) -> list[dict[str, Any]]:
         store = self.additions.discographies
-        list_key = _similar_key(catalog, artist.name)
+        await self._token_check()
+        base = _similar_key(catalog, artist.name)
+        list_key = base + self._ending(key)
         saved = await store.get_artists(list_key) if store is not None else None
+        alone = None  # a list of Last.fm alone, to add ListenBrainz's part to
+        if saved is None and store is not None and list_key.endswith(WITH_LISTENBRAINZ):
+            saved = alone = await store.get_artists(base)
+
+        def enrich(named: tuple[Named, ...]) -> Callable[[Client], Awaitable[None]]:
+            async def work(client: Client) -> None:
+                await self._enrich_similar(catalog, artist.name, artist.ref, named, client)
+
+            return work
 
         async def make(found: _List[Named]) -> None:
-            await self._similar_list(catalog, key, artist.name, found)
+            await self._similar_list(catalog, key, artist.name, found, artist.ref)
+            if found.waiting:
+                found.after = enrich(found.so_far())
 
         named, report.list = await self._list(
             list_key,
@@ -425,6 +496,10 @@ class CatalogRadio:
             "artists",
             waits=False,  # an artist's page never waits for them: they are there next time
         )
+        if alone is not None:
+            self._enrich_soon(
+                list_key, enrich(alone.artists), (caller.username, call.client), "artists"
+            )
         own = await self._library_entries()
         entries: list[dict[str, Any]] = []
         theirs: list[CatalogArtist] = []
@@ -494,7 +569,7 @@ class CatalogRadio:
                 return items, f"skipped: {why}" + (" (the saved list)" if items is not None else "")
             making = self._making[key] = _List()
             self._kinds[key] = kind
-            run = self._run(key, making, make, save)
+            run = self._run(key, making, make, save, client, kind)
             if self.spawn is not None:
                 self.spawn(run)
             elif items is None:  # no background: made while its request waits
@@ -517,12 +592,18 @@ class CatalogRadio:
             )
         return found, "timed out" + (f" ({len(found)} known so far)" if found else "")
 
-    def _held(self, client: Client, key: str, kind: str) -> str | None:
-        """Why no list is made now, if so."""
-        if self.clock() < self.resting_until or self.clock() < self.additions.resting_until:
+    def _held(self, client: Client, key: str, kind: str, *, noted: bool = False) -> str | None:
+        """Why no list is made now, if so. ``noted``: the client's request for ``key`` was
+        counted already (a burst is only looked at)."""
+        resting = self.resting_until
+        if key.endswith(WITHOUT_LASTFM):
+            resting = max(resting, self.listening_resting_until)
+        if self.clock() < resting or self.clock() < self.additions.resting_until:
             return "resting after a failure"
         if self.additions._quiet(client):
             return "sync or burst"
+        if self.sync is not None and noted:
+            return "sync or burst" if self.sync.bursting(client) else None
         if self.sync is not None:
             burst = self.sync.note(client, key)
             if burst is Burst.STARTED:
@@ -545,18 +626,34 @@ class CatalogRadio:
         making: _List[T],
         make: Callable[[_List[T]], Awaitable[None]],
         save: Callable[[str, tuple[T, ...]], Awaitable[None]] | None,
+        client: Client,
+        kind: str,
     ) -> Callable[[], Coroutine[Any, Any, None]]:
         """The making of a list: saved when it is complete, never after a failure (what
-        was found until then is still shown to the requests that wait for it)."""
+        was found until then is still shown to the requests that wait for it). One made with
+        Last.fm alone while ListenBrainz's part is to come is saved under the plain key, the
+        list made with both from an older one forgotten, and that part is added for
+        ``client`` in the background."""
+        store = self.additions.discographies
 
         async def run() -> None:
+            made = False
             try:
                 await make(making)
-                if save is not None:
-                    await save(key, making.so_far())
+                if save is not None and making.kept:
+                    if making.waiting:
+                        await save(key.removesuffix(WITH_LISTENBRAINZ), making.so_far())
+                        if store is not None:  # (made from the plain list before this one)
+                            await store.forget(key)
+                    else:
+                        await save(key, making.so_far())
+                made = True
             except SimilarUnavailable:
-                log.info("radio: Last.fm did not answer")
-                self.resting_until = self.clock() + REST_SECONDS
+                log.info("radio: no similarity source answered")
+                if key.endswith(WITHOUT_LASTFM):
+                    self.listening_resting_until = self.clock() + REST_SECONDS
+                else:
+                    self.resting_until = self.clock() + REST_SECONDS
             except CatalogError as exc:
                 log.info("radio: the catalog unavailable: %s", exc.reason)
                 if exc.kind in ("unavailable", "rate_limited"):
@@ -567,24 +664,19 @@ class CatalogRadio:
                 self._making.pop(key, None)
                 self._kinds.pop(key, None)
                 making.done.set()
+            if made and making.waiting and making.after is not None:
+                self._enrich_soon(key, making.after, client, kind, noted=True)
 
         return run
 
     async def _song_list(
-        self, catalog: Catalog, key: SecretStr, seed: Seed, found: _List[CatalogTrack]
+        self, catalog: Catalog, key: SecretStr | None, seed: Seed, found: _List[CatalogTrack]
     ) -> None:
-        """A song's radio: the songs Last.fm lists as similar to it that the catalog has,
-        in Last.fm's order; with few of them, its artist's radio after them."""
+        """A song's radio: the songs listed as similar to it that the catalog has, in the
+        lists' order; with few of them, its artist's radio after them."""
         assert self.similarity is not None and seed.track is not None
-        # As the catalog names the song; then without its title's qualifiers ("(feat. X)"),
-        # and by its first artist alone: Last.fm may know it under either.
-        titles = dict.fromkeys((seed.track.title, core_title(seed.track.title)))
-        credits = dict.fromkeys((seed.credit or seed.artist, seed.artist))
-        pairs: list[tuple[str, str]] = []
-        for credit in credits:
-            for title in titles:
-                if not pairs:
-                    pairs = await self.similarity.tracks(key, credit, title, SIMILAR_TRACKS)
+        listed = await self.similarity.tracks(key, _names(seed), SIMILAR_TRACKS)
+        pairs, found.waiting, found.kept = listed.items, listed.waiting, listed.kept
         found.found = [None] * len(pairs)
 
         async def look_up(at: int) -> None:
@@ -599,9 +691,10 @@ class CatalogRadio:
             store = self.additions.discographies
             saved = None
             if store is not None:
-                saved = await store.get_songs(
-                    f"{catalog_scope(catalog)}:radio:artist:{fold(seed.artist)}"
-                )
+                artist_key = f"{catalog_scope(catalog)}:radio:artist:{fold(seed.artist)}"
+                saved = await store.get_songs(artist_key + self._ending(key))
+                if saved is None and self._ending(key) == WITH_LISTENBRAINZ:
+                    saved = await store.get_songs(artist_key)
             if saved is not None:
                 more.found = list(saved.songs)
             else:
@@ -654,22 +747,27 @@ class CatalogRadio:
         )
 
     async def _artist_list(
-        self, catalog: Catalog, key: SecretStr, seed: Seed, found: _List[CatalogTrack]
+        self, catalog: Catalog, key: SecretStr | None, seed: Seed, found: _List[CatalogTrack]
     ) -> None:
         """An artist's radio: the artist's top songs in the catalog and those of the
         similar artists, a few of each, in turn - the artist's first, the more similar
         before the less - until there are enough."""
         store = self.additions.discographies
-        list_key = _similar_key(catalog, seed.artist)
+        base = _similar_key(catalog, seed.artist)
+        list_key = base + self._ending(key)
         saved = await store.get_artists(list_key) if store is not None else None
+        if saved is None and store is not None and list_key.endswith(WITH_LISTENBRAINZ):
+            saved = await store.get_artists(base)  # (ListenBrainz's part is still to come)
+            found.waiting = saved is not None
         if saved is not None:
             named = saved.artists
         else:
             similar: _List[Named] = _List()
-            await self._similar_list(catalog, key, seed.artist, similar)
+            await self._similar_list(catalog, key, seed.artist, similar, seed.ref)
             named = similar.so_far()
+            found.waiting = similar.waiting
             if store is not None:
-                await store.save_artists(list_key, named)
+                await store.save_artists(base if similar.waiting else list_key, named)
         own = CatalogArtist(seed.ref, seed.artist) if seed.ref is not None else None
         artists: list[Named] = [(seed.artist, own), *named]
         lists: list[tuple[CatalogTrack, ...]] = []
@@ -719,27 +817,215 @@ class CatalogRadio:
         )
 
     async def _similar_list(
-        self, catalog: Catalog, key: SecretStr, name: str, found: _List[Named]
+        self,
+        catalog: Catalog,
+        key: SecretStr | None,
+        name: str,
+        found: _List[Named],
+        ref: CatalogRef | None = None,
     ) -> None:
-        """The artists Last.fm lists as similar, each with the catalog's artist of that
-        name - not asked for an artist the library has: that one is shown as the
-        library's."""
+        """The artists listed as similar, each with the catalog's artist of that name - not
+        asked for an artist the library has: that one is shown as the library's. ``ref``:
+        the artist's catalog item, when known (its top songs tell ListenBrainz who it is)."""
         assert self.similarity is not None
+        listed = await self.similarity.artists(
+            key, name, SIMILAR_ARTISTS, lambda: self._titles(catalog, name, ref)
+        )
+        found.waiting = listed.waiting
+        found.found = list(await self._named(catalog, name, listed.items))
+
+    async def _titles(self, catalog: Catalog, name: str, ref: CatalogRef | None) -> list[str]:
+        """A few of the artist's top songs in the catalog (they tell ListenBrainz who it is);
+        none when unavailable."""
+        try:
+            artist = CatalogArtist(ref, name) if ref is not None else None
+            artist = artist or await self._artist(catalog, name)
+            songs = await self._top(catalog, artist) if artist is not None else ()
+        except CatalogError as exc:
+            log.info("radio: an artist's top songs unavailable: %s", exc.reason)
+            return []
+        return [song.title for song in songs[:TITLES]]
+
+    async def _named(self, catalog: Catalog, name: str, others: Sequence[str]) -> tuple[Named, ...]:
+        """Each similar artist once (never the artist itself), with the catalog's artist of
+        its name - not asked for one the library has: that one is shown as the library's."""
         names: dict[str, str] = {}
-        for other in await self.similarity.artists(key, name, SIMILAR_ARTISTS):
+        for other in others:
             if _somebody(other) and fold(other) != fold(name):
                 names.setdefault(fold(other), other)
         listed = list(names.values())
         library = await self._library()
-        found.found = [None] * len(listed)
+        found: list[Named | None] = [None] * len(listed)
 
         async def look_up(at: int) -> None:
             if fold(listed[at]) in library:
-                found.found[at] = (listed[at], None)
+                found[at] = (listed[at], None)
             elif (artist := await self._artist(catalog, listed[at])) is not None:
-                found.found[at] = (artist.name, artist)
+                found[at] = (artist.name, artist)
 
         await _each(len(listed), look_up)
+        return tuple(item for item in found if item is not None)
+
+    # --- ListenBrainz's part, added in the background ---------------------------------------
+
+    def _enrich_soon(
+        self,
+        key: str,
+        work: Callable[[Client], Awaitable[None]],
+        client: Client,
+        kind: str,
+        *,
+        noted: bool = False,
+    ) -> None:
+        """Add ListenBrainz's part to the list saved with Last.fm alone, in the background,
+        as background work at the catalog (after the listeners' requests): not while
+        ListenBrainz is off or resting (asked again by a later request), while the radio or
+        the catalog rests after a failure, while the client is in a sync or a burst (the
+        request is counted toward one, unless ``noted``), while the list is made or already
+        getting it, or while ``ENRICHMENTS`` others are. The same guards are looked at again
+        before the catalog is asked."""
+        listening = self.similarity.listening if self.similarity is not None else None
+        if listening is None or not listening.available or self.spawn is None:
+            return
+        if key in self._enriching or key in self._making or len(self._enriching) >= ENRICHMENTS:
+            return
+        if self._held(client, key, kind, noted=noted) not in (None, "busy"):
+            return
+        self._enriching.add(key)
+
+        async def run() -> None:
+            try:
+                with pacing.urgent(pacing.WARM):
+                    await work(client)
+            except _Postponed as why:
+                log.info("radio: ListenBrainz's part postponed: %s", why)
+            except ListeningUnavailable:
+                log.info("radio: ListenBrainz did not answer; its part is added later")
+            except CatalogError as exc:
+                log.info("radio: the catalog unavailable: %s", exc.reason)
+                if exc.kind in ("unavailable", "rate_limited"):
+                    self.resting_until = self.clock() + REST_SECONDS
+            except Exception as exc:
+                log.warning("radio: adding ListenBrainz's part failed: %s", type(exc).__name__)
+            finally:
+                self._enriching.discard(key)
+
+        self.spawn(run)
+
+    def _may_ask_catalog(self, client: Client, key: str) -> None:
+        """:class:`_Postponed` when the catalog must not be asked for ``client`` now."""
+        why = self._held(client, key, "", noted=True)
+        if why not in (None, "busy"):
+            raise _Postponed(why)
+
+    def _listening_client(self) -> ListenBrainz:
+        listening = self.similarity.listening if self.similarity is not None else None
+        if listening is None:
+            raise ListeningUnavailable
+        return listening
+
+    async def _token_check(self) -> None:
+        """A ListenBrainz token other than the one the saved lists made with ListenBrainz were
+        made with (or none where there was one, or the other way round): those lists are
+        forgotten, the radio's and its similar artists', made with both or without Last.fm.
+        Looked at once per token in this process; across restarts by a saved mark."""
+        listening = self.similarity.listening if self.similarity is not None else None
+        store = self.additions.discographies
+        if listening is None or store is None:
+            return
+        token = listening.token_fingerprint() or "none"
+        if token == self._token_seen:
+            return
+        async with self._token_lock:
+            if token == self._token_seen:
+                return
+            if await store.get_name(TOKEN_MARK) != token:
+                for ending in (WITH_LISTENBRAINZ, WITHOUT_LASTFM):
+                    await store.forget_ending(":radio:", ending)
+                await store.save_name(TOKEN_MARK, token)
+            self._token_seen = token
+
+    async def _enrich_songs(
+        self,
+        catalog: Catalog,
+        seed: Seed,
+        key: str,
+        songs: Sequence[CatalogTrack],
+        client: Client,
+    ) -> None:
+        """A song's radio made with Last.fm alone, with ListenBrainz's similar songs that the
+        catalog has taken in turn with its own, saved under ``key`` - not when ListenBrainz's
+        answer was found while its token was refused or changed (asked again later)."""
+        store = self.additions.discographies
+        similar, kept = await self._listening_client().similar_songs_kept(
+            _names(seed), SIMILAR_TRACKS
+        )
+        if not kept:
+            raise _Postponed("ListenBrainz's token was refused or changed")
+        self._may_ask_catalog(client, key)
+        pairs = [(artist, title) for artist, title, _ in similar]
+        found: list[CatalogTrack | None] = [None] * len(pairs)
+
+        async def look_up(at: int) -> None:
+            if sum(1 for t in found if t is not None) < RADIO_SONGS:
+                found[at] = await self._song(catalog, *pairs[at])
+
+        await _each(len(pairs), look_up)
+        theirs = [t for t in found if t is not None]
+        merged = _distinct(_in_turn([list(songs), theirs]), seed.track)[:RADIO_SONGS]
+        merged = await self._with_artists(catalog, merged)
+        if store is not None:
+            await store.save_songs(key, merged)
+
+    async def _enrich_similar(
+        self,
+        catalog: Catalog,
+        name: str,
+        ref: CatalogRef | None,
+        named: Sequence[Named],
+        client: Client,
+    ) -> tuple[Named, ...]:
+        """An artist's similar artists listed by Last.fm alone, with ListenBrainz's taken in
+        turn with them, saved as the list made with both; that list."""
+        store = self.additions.discographies
+        key = _similar_key(catalog, name) + WITH_LISTENBRAINZ
+        self._may_ask_catalog(client, key)  # (the artist's top songs tell who it is)
+        others = await self._listening_client().similar_artists(
+            name, await self._titles(catalog, name, ref), SIMILAR_ARTISTS
+        )
+        known = {fold(n) for n, _ in named}
+        self._may_ask_catalog(client, key)
+        theirs = await self._named(catalog, name, [o for o in others if fold(o) not in known])
+        merged = tuple(in_turn([list(named), list(theirs)], lambda n: fold(n[0])))
+        merged = merged[: max(SIMILAR_ARTISTS, len(named))]
+        if store is not None:
+            await store.save_artists(key, merged)
+        return merged
+
+    async def _enrich_artist(
+        self,
+        catalog: Catalog,
+        key: SecretStr | None,
+        seed: Seed,
+        list_key: str,
+        client: Client,
+    ) -> None:
+        """An artist's radio made with Last.fm alone, made again from its similar artists
+        with ListenBrainz's (those added first when missing), saved under ``list_key``."""
+        store = self.additions.discographies
+        if store is None:
+            return
+        base = _similar_key(catalog, seed.artist)
+        if await store.get_artists(base + WITH_LISTENBRAINZ) is None:
+            alone = await store.get_artists(base)
+            await self._enrich_similar(
+                catalog, seed.artist, seed.ref, alone.artists if alone is not None else (), client
+            )
+        self._may_ask_catalog(client, list_key)
+        more: _List[CatalogTrack] = _List()
+        await self._artist_list(catalog, key, seed, more)
+        if not more.waiting:
+            await store.save_songs(list_key, more.so_far())
 
     async def _artist(self, catalog: Catalog, name: str) -> CatalogArtist | None:
         """The catalog artist of exactly this name: the first one a search for it finds."""
@@ -758,6 +1044,16 @@ class CatalogRadio:
 
     def _on(self) -> bool:
         return self.enabled and self.similarity is not None and self.key_of is not None
+
+    def _listening(self) -> bool:
+        """Whether ListenBrainz is asked (it needs no key)."""
+        return self.similarity is not None and self.similarity.listening is not None
+
+    def _ending(self, key: SecretStr | None) -> str:
+        """The ending of the keys of the lists a caller is shown (see the module)."""
+        if key is None:
+            return WITHOUT_LASTFM
+        return WITH_LISTENBRAINZ if self._listening() else ""
 
     async def _key(self, caller: Caller) -> SecretStr | None:
         """The caller's Last.fm key; None without one (or when that cannot be told)."""
@@ -800,6 +1096,15 @@ class CallerKeys:
 
 
 # --- helpers ------------------------------------------------------------------------------
+
+
+def _names(seed: Seed) -> list[tuple[str, str]]:
+    """A song as the catalog names it; then without its title's qualifiers ("(feat. X)"),
+    and by its first artist alone: a source may know it under either."""
+    assert seed.track is not None
+    titles = dict.fromkeys((seed.track.title, core_title(seed.track.title)))
+    credits = dict.fromkeys((seed.credit or seed.artist, seed.artist))
+    return [(credit, title) for credit in credits for title in titles]
 
 
 def _lead(credit: str) -> str:

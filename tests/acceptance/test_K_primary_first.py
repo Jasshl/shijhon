@@ -28,6 +28,7 @@ from tests.conftest import NavidromeFactory
 from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.engine import catalog_release
 from tests.harness.fake_addon import FakeAddon, FakeTrack
+from tests.harness.logs import collected
 from tests.harness.navidrome import ADMIN_USER
 
 CHECKS = ("stream", "isrc", "availability")
@@ -485,6 +486,55 @@ def test_fetches_ahead_go_to_the_primary_one_at_a_time_after_the_played_song(
     assert sum(line.startswith("fetched ahead 'Title p-ahead-") for line in playback_log) == 3
 
 
+def test_two_songs_asked_for_together_both_start_at_once(
+    world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
+) -> None:
+    """A player with two audio elements loads the song it plays and the next one at the
+    same moment, and reports what it plays only later (one app: two seconds after the
+    change). The next song's request may come first: the song played does not wait behind
+    its routing - both are plays, each its first byte as soon as its add-on has it. The
+    access log tells how long each waited for its first audio bytes."""
+    gate = world.services.interceptor.ahead
+    assert gate is not None
+    gate.window = 0.5
+    played, played_fakes, played_audio = world.placeholder_track(
+        "p-together-played", list(sources.values())
+    )
+    following, following_fakes, _ = world.placeholder_track(
+        "p-together-next", list(sources.values())
+    )
+    following_fakes[sources["primary"]].resolve_delay = 2.0  # the next song's add-on is slow
+    played_fakes[sources["primary"]].resolve_delay = 0.3
+    for fakes in (played_fakes, following_fakes):
+        fakes[sources["a"]].ready = False
+        fakes[sources["b"]].ready = False
+    clients = [world.client(client="two-elements") for _ in range(2)]
+    for client in clients:  # their connections open, as an app's are
+        client.ok("ping")
+
+    def timed(client: Any, song: str) -> tuple[float, bytes]:
+        started = time.monotonic()
+        answer = client.request("stream", {"id": song}, headers={"range": "bytes=0-"})
+        return time.monotonic() - started, answer.content
+
+    try:
+        with collected("shijhon.access") as access, ThreadPoolExecutor(2) as pool:
+            ahead = pool.submit(timed, clients[0], following)
+            time.sleep(0.01)
+            current = pool.submit(timed, clients[1], played)
+            took, content = current.result()
+            ahead.result()
+    finally:
+        gate.window = 0.0
+        for client in clients:
+            client.close()
+    assert content == played_audio.read_bytes()
+    assert took < 1.5  # never behind the other song's 2 s routing
+    assert not logged(playback_log, "fetched ahead 'Title p-together-")
+    assert [line for line in access if "rest stream c=two-elements GET 206" in line
+            and ", first body sent " in line]  # fmt: skip
+
+
 def test_a_fetch_ahead_the_primary_cannot_serve_is_routed_as_usual(
     world: DeliveryWorld, sources: dict[str, FakeAddon], playback_log: list[str]
 ) -> None:
@@ -534,18 +584,19 @@ def test_a_fetch_ahead_while_the_primary_cools_down_goes_to_the_next_add_on(
     gate = world.services.interceptor.ahead
     assert gate is not None
     gate.window = 0.5
-    tracks = [world.placeholder_track(f"p-cooling-{n}", list(sources.values())) for n in range(2)]
+    # (Two fetches ahead: one song alone beside the played one could be either.)
+    tracks = [world.placeholder_track(f"p-cooling-{n}", list(sources.values())) for n in range(3)]
     for _, fakes, _ in tracks:
         fakes[sources["a"]].ready = True
     primary = source(world, "Primary")
     try:
-        with ThreadPoolExecutor(2) as pool:
+        with ThreadPoolExecutor(3) as pool:
             played = pool.submit(play, world, tracks[0][0], "cool-client")
             time.sleep(0.1)
             world.services.sources.cool_down(primary.id, 30.0)  # after the played song began
-            ahead = pool.submit(play, world, tracks[1][0], "cool-client")
+            ahead = [pool.submit(play, world, song, "cool-client") for song, _, _ in tracks[1:]]
             assert played.result() == tracks[0][2].read_bytes()
-            assert ahead.result() == tracks[1][2].read_bytes()
+            assert [f.result() for f in ahead] == [audio.read_bytes() for _, _, audio in tracks[1:]]
     finally:
         gate.window = 0.0
         world.services.sources.cool_down(primary.id, 0.0)
@@ -614,6 +665,7 @@ def test_during_a_primary_outage_the_next_song_is_prepared_first(
         with ThreadPoolExecutor(4) as pool:
             played = pool.submit(play, world, tracks[0][0], "outage-client")
             until(lambda: sources["a"].requests("stream"))  # the played song is being routed
+            time.sleep(0.1)  # (fetches ahead come after it, never together with it)
             gate.report = gate.wait  # (held: released below)
             ahead = []
             for count, n in enumerate((3, 2, 1), start=1):  # the next song's request last

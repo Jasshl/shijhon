@@ -222,6 +222,9 @@ def test_the_song_being_played_is_never_held_back_by_the_audio_openings(
     (played,) = songs(world, addon, "l-held", 1, seconds=6)
     (queued,) = songs(world, addon, "l-held-queued", 1)
     since = known(world, addon, "l-held-first")
+    retention = world.services.deliverer.retention
+    assert retention is not None
+    retention.holding = False  # (the seek at the add-on: not from the audio held of the play)
     with ThreadPoolExecutor(2) as pool:
         opening = pool.submit(fetch, world, "download", slow)  # holds the one opening
         time.sleep(0.6)
@@ -232,6 +235,7 @@ def test_the_song_being_played_is_never_held_back_by_the_audio_openings(
         # ... while another download waits for the opening to be over.
         waiting = pool.submit(fetch, world, "download", queued)
         assert opening.result().status_code == 200 and waiting.result().status_code == 200
+    retention.holding = True
     at = [r["at"] for r in addon.requests("audio") if r["at"] >= since]
     assert len(at) == 4  # the slow download, the play, its seek, the queued download
     assert at[1] - at[0] < 1.5 and at[2] - at[0] < 2.0  # the play and the seek: at once

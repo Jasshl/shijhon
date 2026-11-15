@@ -79,7 +79,12 @@ presets arrange them for you: Fastest (all in one step), Fastest three (the thre
 right now, then the rest one at a time), Main with backups (the first alone, then the rest
 together), One at a time, and Ready first. The page shows each add-on's recent speed, and
 Diagnostics lists the latest starts with every add-on asked, when each later step joined,
-what each answered and how long it took.
+what each answered and how long it took. In Shijhon's log, each request's line gives its
+whole time - for a song, as long as the app kept reading - and when Shijhon sent the
+answer's start and its first body bytes (`start sent`, `first body sent`), and when it saw
+the app disconnect (`disconnect seen`). "Sent" means handed to the web server: an app that
+already closed the connection does not get it, and Shijhon notices a disconnect only when
+it looks, so an app can be gone before the line says so.
 
 An add-on still trying when another's audio comes counts a timeout toward its cooldown
 only when it was slow for itself: past its step's time and past `[delivery] slow_after`
@@ -90,11 +95,25 @@ add-on's own request limits are not its slowness. Give one that is often a littl
 works a higher **Slow after** of its own in its settings. When apps stop waiting with no
 audio at all, every add-on still trying counts a timeout.
 
+A play's audio is held while it goes on: Shijhon reads the add-on's answer on to the
+song's end while the app stays connected - also a song the app only loaded ahead - and
+feeds the app from it. The play's seeks, and an app reading on after a pause, are served
+from it at once, without asking the add-on again, also once the song's link expired and
+the add-on gives no new one. Only the play's own file is used: the same add-on track, size
+and ETag (without an ETag, the same link or the same first bytes); what is not held yet goes
+to the add-on as before, and a new link to a file the add-on gives no ETag for is accepted
+only when its first bytes are the play's. An add-on that asks not to be used for downloads
+(`allowDownloads`) is read only as the app reads. With **Keep streamed songs** on, a song
+held in full goes into your library.
+
 Requests that nobody waits on never race. An app's fetch ahead goes to the plan's first
 add-on alone, and warm-ahead and downloads ask one add-on at a time in the plan's order, so
 several add-ons are not asked for the same song. Each add-on then has its **Time for a
 download** (`budget_seconds`, else `[delivery] budget_seconds`), not its step's time. An
-app's probe of a song just before it plays races like the play.
+app's probe of a song just before it plays races like the play. When an app loads two songs
+at the same moment, as a player with two audio elements loads the song it plays and the
+next one, Shijhon cannot tell which one plays until the app reports it, so both race like
+plays.
 
 With **Ask which add-ons have the song ready** on, the add-ons that can tell are asked when
 a song starts. One that says it has the song ready joins once a song has had no audio for

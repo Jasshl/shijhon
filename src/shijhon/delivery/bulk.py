@@ -43,6 +43,7 @@ from shijhon.delivery.playback import (
     _Reacquire,
     _Refused,
     _SignIn,
+    known_of,
 )
 from shijhon.delivery.playback import (
     log as playback_log,
@@ -708,7 +709,7 @@ class BulkAcquisition:
             continuing := self._pins.get(track.key)
         ):
             pin = continuing[0]
-            plan.expect = Known(pin.size, pin.etag, pin.source.id, pin.track_id, pin.kind, pin.kbps)
+            plan.expect = known_of(pin)
             choices, excluded = await self._choices(track)
             plan.failures.extend(excluded)
             plan.choices = [

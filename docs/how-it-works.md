@@ -12,12 +12,16 @@ catalog. Navidrome checks every login.
   library: silent FLAC files with the right tags. Navidrome scans them, so they become
   normal tracks with real IDs. Looking at catalog items, and playing them as plain
   streams, writes nothing.
-- **Streams** come from your add-ons and are not stored in your library - unless
-  **Keep streamed songs** is on (the Cleanup page, [`keep_streamed_audio`](configuration.md#delivery)):
-  then a song whose whole audio Shijhon received while an app streamed it replaces its
-  placeholder, as a download does, and Navidrome serves it from then on. Shijhon fetches
-  nothing more for this; a song skipped before Shijhon had all of it is not kept. A play's start and
-  its seeks count together when they are of the same file at the add-on.
+- **Streams** come from your add-ons. While the app stays connected, Shijhon reads each
+  song on to its end - also one the app only loaded ahead and reads nothing of for a
+  while - and feeds the app from what it holds, so the add-on's connection never sits idle
+  and the play's seeks are served from that audio, also after the song's link expired. It
+  is not stored in your library - unless **Keep streamed songs** is on (the Cleanup page,
+  [`keep_streamed_audio`](configuration.md#delivery)): then a song whose whole audio Shijhon
+  received replaces its placeholder, as a download does, and Navidrome serves it from then
+  on. A song the app left before Shijhon had all of it is not kept. A play's start and its
+  seeks count together when they are of the same file at the add-on. An add-on that asks
+  not to be used for downloads is read as the app reads, not on to the end.
 - **Downloads and conversions** (to another format, or a lower bitrate than the add-on's
   audio has), Navidrome's jukebox and its share links: Shijhon fetches the whole song
   first and puts it in place of the placeholder, and Navidrome serves it from there. After
@@ -33,7 +37,7 @@ catalog. Navidrome checks every login.
   after a start and every few hours, and rewrites those placeholders in place (their IDs
   stay); downloaded audio keeps its tags until it is a placeholder again. When the catalog
   cannot say, and **Each artist of a joined credit** is on, the other catalogs named for
-  artist lists and the add-on catalogs are asked as for your own files
+  artist lists and the add-ons that are a catalog only are asked as for your own files
   ([below](#each-artist-of-a-joined-credit)).
 - **A track found in your library** on another release (the single of an album track, say)
   plays your own file - unless that file is below your
@@ -125,15 +129,49 @@ similar artists. Navidrome answers for the music in your library. It knows nothi
 song, an album or an artist that is only in the catalog, so its answer for those is empty
 and a radio started there has no songs.
 
-For a person who has set up Last.fm on the Playlists page
-([playlists.md](playlists.md#discovery-playlists)), Shijhon answers these requests with
-what Last.fm lists as similar. A catalog song's radio is the songs Last.fm lists as
-similar to it, each looked up in the catalog by its artist and title. An artist's radio,
-and an album's, is the artist's top songs in the catalog and those of the similar
-artists, a few of each in turn. A song for which fewer than ten similar songs are found
-is filled up with its artist's radio. A catalog artist's similar artists are the ones
-Last.fm lists: your library's artist where you have one of that name, the catalog's
-artist otherwise.
+Shijhon answers these requests with what two sources list as similar. ListenBrainz, on
+by default for everyone ([`[listenbrainz]`](configuration.md#listenbrainz)), lists the
+songs and artists its listeners play together. Last.fm lists its similar songs and
+artists for a person who has set up Last.fm on the Playlists page
+([playlists.md](playlists.md#discovery-playlists)), asked with that person's key. Their
+lists are taken in turn: Last.fm's first song, then ListenBrainz's first, then each one's
+second, and so on, each song once. A catalog song's
+radio is the songs listed as similar to it, each looked up in the catalog by its artist
+and title. An artist's radio, and an album's, is the artist's top songs in the catalog and
+those of the similar artists, a few of each in turn. A song for which fewer than ten
+similar songs are found is filled up with its artist's radio. A catalog artist's similar
+artists are the ones listed: your library's artist where you have one of that name, the
+catalog's artist otherwise.
+
+For a person with Last.fm, ListenBrainz is never waited for. The first radio from an item
+is made of Last.fm's songs alone, and ListenBrainz is asked in the background; its songs
+are then looked up in the catalog and taken in turn with the saved list's, and the next
+radio from that item has both, without Last.fm being asked again. A radio saved before
+ListenBrainz was added, or while it was off or not answering, gets ListenBrainz's songs the
+same way the next time it is asked for. This background work asks the catalog after the
+listeners' requests, and waits, like the rest of the radio, while an app syncs or the
+catalog rests after a failure. A radio made with ListenBrainz is made again when the
+ListenBrainz token changes. A person without Last.fm waits for ListenBrainz,
+their only source, no longer than for the catalog.
+
+ListenBrainz has similar songs only for a song's canonical MusicBrainz recording. Shijhon
+looks for it in up to three steps, each one request, and stops at the first recording that
+has similar songs. First ListenBrainz Labs' lookup of the exact artist and title,
+punctuation, accents and capitals aside: as the catalog names the song, without
+qualifiers such as "(feat. ...)", and by its first artist alone. With a ListenBrainz token,
+then ListenBrainz's own metadata lookup, which matches names more loosely. Then Labs'
+recording search for the song's lead artist and title, of whose results Shijhon takes only
+one credited to that lead artist with that title (the title without qualifiers), not tried
+yet, preferring the one whose credit also names the song's featured artists. A result
+marked as another version - live, karaoke, instrumental, a remix, acoustic, a demo and
+the like - or credited to a tribute, karaoke or covers act is never taken, unless the
+song's own names say the same. The exact
+lookup often finds a compilation's or a single's copy of a song with a featured credit,
+such as "Daft Punk feat. Pharrell Williams - Get Lucky", which has no similar songs; the
+search finds the original. An artist is known by the lookup of a few of its top songs.
+ListenBrainz Labs is an experimental service, so its part is optional. After a failure or
+a rate limit, ListenBrainz is not asked for a minute (a rate limit for as long as it says,
+ten minutes at most). Answers are kept in memory for a day.
 
 A song of a radio that is in your library is your library's own entry. The others are
 catalog songs like those in search results: they play, and are added to playlists and
@@ -141,18 +179,23 @@ favorites, the same way. The answer itself adds nothing to your library.
 
 Shijhon saves each list and refreshes it in the background once it is older than
 `[search] discography_max_age_days` (a week), so a radio asked for again answers at once.
-The first request for an item waits for Last.fm and the catalog no longer than a search
+The first request for an item waits for the sources and the catalog no longer than a search
 does (`[search] budget_seconds`) and then answers with the songs found by then. The rest
 are looked up in the background, two catalog requests at a time, and the next request has
 the whole list. A catalog artist's page does not wait for its similar artists: the first
 view shows none, they are looked up in the background, and the page has them from the next
 view on.
 
-A person who has not set up Last.fm gets Navidrome's empty answer, as before, and so does
-everyone while `[search] radio` is off. The same holds whenever Last.fm or the catalog
-does not answer; nothing is asked again for a minute after that. What Navidrome answers
-about the songs, albums and artists in your library does not change.
-[Privacy and security](privacy-and-security.md#network) says what is sent to Last.fm.
+A person who has not set up Last.fm gets ListenBrainz's songs alone. Their lists are saved
+apart from those made with Last.fm, so nobody without a key is shown Last.fm's songs, and a
+list made without them never stands in for one made with them. With ListenBrainz off, a
+person without Last.fm gets Navidrome's empty answer, as before, and so does everyone while
+`[search] radio` is off. The same holds whenever the person's first source (Last.fm with a
+key, ListenBrainz without one) does not answer, or the catalog does
+not answer; nothing is asked again for a minute after that. What Navidrome answers about the
+songs, albums and artists in your library does not change.
+[Privacy and security](privacy-and-security.md#network) says what is sent to Last.fm and
+ListenBrainz.
 
 ## Each artist of a joined credit
 
@@ -167,7 +210,9 @@ song's artists. The artist text the file shows stays as it is.
 
 The list comes from the catalog item linked to the song (a song of an album Shijhon
 filled, say), else from the catalog itself, the other catalogs you name for artist lists,
-and the catalogs of all your add-ons that have one: the song's ISRC, and only when that
+and the add-ons that are a catalog only (listed apart on the Add-ons page; an add-on that
+delivers audio is never asked, since its search can reach a service that acts on it): the
+song's ISRC, and only when that
 gives no list, a search by title, artist and length with the same rules Shijhon uses to
 find a song at an add-on. They are asked at the same time, each at its own pace (the
 catalogs at the library pass's), and their answers are read in that order: the catalog,

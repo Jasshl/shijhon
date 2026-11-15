@@ -303,8 +303,9 @@ class DeliverySettings(BaseModel):
     # With ready_checks: when no add-on has a song ready, ask one that said "not now" to
     # prepare it for the next play.
     prepare_when_not_ready: bool = False
-    # A song whose whole audio Shijhon received while streaming it to an app replaces its
-    # silent placeholder, as a download does (nothing more is asked of the add-ons for it).
+    # A song whose whole audio Shijhon received while streaming it to an app - it reads an
+    # answer on to its end while the app keeps its connection - replaces its silent
+    # placeholder, as a download does. Off, that audio is only held for the play's ranges.
     keep_streamed_audio: bool = False
     # Audio in place of placeholders - downloaded, or kept from streams - goes back to the
     # silent placeholder after this many days without use, and the least recently used
@@ -549,9 +550,9 @@ class SearchSettings(BaseModel):
     budget_seconds: float = Field(default=8.0, gt=0, le=120)
     artist_pages: bool = True  # add the catalog releases missing from a library artist
     # Radio from catalog items: the similar songs of a catalog song, album or artist that
-    # is not in the library, and a catalog artist's similar artists, as Last.fm lists them,
-    # for a caller who connected a Last.fm key for discovery mixes (views/radio.py). Off:
-    # Navidrome's empty answer, as for a caller without a key.
+    # is not in the library, and a catalog artist's similar artists, as ListenBrainz
+    # ([listenbrainz]) and Last.fm - for a caller who connected a Last.fm key for discovery
+    # mixes - list them (views/radio.py). Off: Navidrome's empty answer, as with neither.
     radio: bool = True
     # Artist discographies are saved: a saved list answers at once and is refreshed
     # in the background when older than this.
@@ -756,6 +757,27 @@ class PlaylistSettings(BaseModel):
     import_max_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
 
 
+class ListenBrainzSettings(BaseModel):
+    """ListenBrainz's songs and artists listened together, next to Last.fm's similar ones:
+    radio from catalog items, discovery mixes' candidates and an agent tool
+    (``playlists/listenbrainz.py``). Only artist and song names and the MusicBrainz IDs
+    ListenBrainz gives for them are sent, never an account or listening history."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    enabled: bool = True
+    # A ListenBrainz user token, for everyone (optional): a song ListenBrainz Labs' exact
+    # lookup does not find with similar songs is then also looked up with ListenBrainz's
+    # own metadata lookup, which needs one. Sent only to api.listenbrainz.org.
+    token: SecretStr | None = None
+    # The longest one request to ListenBrainz may take: its wait for a turn and its answer.
+    timeout_seconds: float = Field(default=4.0, gt=0, le=30)
+
+    def api_token(self) -> str:
+        """The token, "" when none is set."""
+        return self.token.get_secret_value().strip() if self.token is not None else ""
+
+
 class NotificationSettings(BaseModel):
     """Notifications of states that need a person (``notifications.py``), sent through
     Apprise to the addresses an administrator gives. Off while ``urls`` is empty."""
@@ -842,6 +864,7 @@ class Settings(BaseSettings):
     fill: FillSettings = Field(default_factory=FillSettings)
     cleanup: CleanupSettings = Field(default_factory=CleanupSettings)
     audiomuse: AudioMuseSettings = Field(default_factory=AudioMuseSettings)
+    listenbrainz: ListenBrainzSettings = Field(default_factory=ListenBrainzSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     # Audio add-ons in the order they are tried. When given (even empty), the configuration
     # owns the list: at startup add-ons are added, updated and ordered to match it, and

@@ -156,13 +156,19 @@ has less to go on than an adapter's:
 - **A favorite or a playlist entry of a song from search results or top songs** looks
   its album up first, which takes a few seconds.
 - **A radio from a song, an album or an artist that is only in the catalog needs
-  Last.fm.** It has songs for a person who set up Last.fm on the Playlists page
-  ([how it works](how-it-works.md#radio-from-catalog-items)); for everyone else it is
-  empty. The first radio from an item can be short when the catalog answers slowly: it
-  starts with the songs found within the wait, and asked for again it has them all.
-- **A radio holds what Last.fm lists under the same names.** Each similar song is looked
-  up in the catalog by its artist and title. One that Last.fm lists under another
-  spelling, or that the catalog does not have, is left out.
+  ListenBrainz or Last.fm.** With ListenBrainz turned off, it has songs only for a person
+  who set up Last.fm on the Playlists page
+  ([how it works](how-it-works.md#radio-from-catalog-items)). The first radio from an item
+  can be short when the catalog answers slowly: it starts with the songs found within the
+  wait, and asked for again it has them all.
+- **A radio holds what the sources list under the same names.** Each similar song is
+  looked up in the catalog by its artist and title. One listed under another spelling, or
+  that the catalog does not have, is left out. ListenBrainz has songs only for a song's
+  canonical MusicBrainz recording; one that neither its exact lookup nor its recording
+  search (nor, with a token, its metadata lookup) finds has no ListenBrainz songs.
+- **ListenBrainz's songs join a radio the next time.** For a person with Last.fm, the
+  first radio from an item has Last.fm's songs alone; ListenBrainz's are added in the
+  background.
 - **After a restart**, catalog songs an app still lists from an earlier search do not
   play until a search or an album shows them again.
 

@@ -38,6 +38,23 @@ Configured server AI can still fail at runtime.
   when it is not set up or not reachable; `get_capabilities` reports both. All of this is
   optional, approximate information: an agent's own knowledge of the music comes first,
   and songs without facts are never a reason to drop a song.
+- `find_listened_together` (library-read permission) lists songs that people listen to
+  together with up to five seeds: library songs by Navidrome song ID (`seed_song_ids`)
+  and songs named by artist and title (`seed_tracks`). It asks
+  [ListenBrainz](../configuration.md#listenbrainz) for everyone, unless an administrator
+  turned it off, and Last.fm when the user's playlist connection has a Last.fm key, and
+  sends them only the seeds' artists and titles. It returns up to 100 songs (`count`,
+  30 by default), the songs on several lists and high on them first, each with its artist,
+  title and the `sources` that list it; the seeds themselves are left out. `sources` in
+  the result says for each source `ok`, `partial` (it answered for some seeds, but failed
+  or ran out of the call's twelve seconds for others), `unavailable` (it answered for
+  none), `off` (ListenBrainz turned off) or `not_configured` (no Last.fm key). Each
+  source's songs are kept as they arrive: one source running out of time never loses the
+  other's. Without either source the tool answers `setup_required` with
+  `listening_similarity`, as `get_capabilities` reports. The songs are names: whether the
+  library or the catalog has them is not looked up, so an agent finds them with
+  `search_library` or `search_catalog`, or submits them as artist/title tracks to
+  `create_playlist`. Like the sound tools, this is a hint for the agent's own judgement.
 - `get_listening_history` returns bounded artist/title listen counts from the
   connected Last.fm history source, restricted to the configured `history_days` window.
   It needs that source configured and history permission; it does not substitute library membership for listening evidence.

@@ -702,7 +702,12 @@ class Playlists:
                 continue
             if edits is not None and edits.leaves_out(key):
                 continue
-            detailed = await self.history.info(connection, wanted)
+            try:
+                detailed = await self.history.info(connection, wanted)
+            except PlaylistError:
+                if wanted.get("lastfm", True):
+                    raise
+                detailed = wanted  # only ListenBrainz listed it: Last.fm may not know it
             found = await self.resolver.resolve(connection, detailed)
             if found is not None:
                 found = await self.matched_edition(found)

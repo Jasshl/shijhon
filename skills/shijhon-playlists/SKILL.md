@@ -119,6 +119,12 @@ connect AudioMuse-AI on the Sound analysis page of Shijhon's settings. Tell the 
 many songs you could not check. When Shijhon's own AI describes the playlist,
 sound-suggested songs join only if you set `use_library`.
 
+`find_listened_together` lists songs people listen to together with up to five seed
+songs (library song IDs or artist and title), from ListenBrainz and, with the user's
+Last.fm key, Last.fm. They are names that may or may not be in the library or the
+catalog: judge them yourself, and submit the ones you choose as artist/title tracks to
+`create_playlist`.
+
 ## Optional: Shijhon's server AI, discovery mixes and imports
 
 - With server AI configured, `create_playlist` also takes a description alone.

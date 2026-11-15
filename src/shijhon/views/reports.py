@@ -78,9 +78,11 @@ class Reports:
         if caller is None:
             return
         if queue is not None:
-            self.listening.saved_queue(caller.username, [keys[i] for i in queue], index)
+            self.listening.saved_queue(
+                caller.username, [keys[i] for i in queue], index, client=call.client
+            )
         if playing:
-            self.listening.reported(caller.username, keys[playing])
+            self.listening.reported(caller.username, keys[playing], client=call.client)
 
     async def keys(self, ids: list[str]) -> tuple[dict[str, str], bool]:
         """Each ID's listening key - the catalog track for catalog songs and

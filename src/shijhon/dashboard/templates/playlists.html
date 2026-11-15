@@ -39,7 +39,7 @@
       <label>Last.fm API key source<select name="history_source">{% for key, label in [('navidrome', "Navidrome's key"),('manual','An API key')] %}<option value="{{ key }}"{% if history_source == key %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
       <p class="field-help" data-show-for="history_source" data-values="navidrome">{% if saved_history_source == 'navidrome' %}A blank password keeps the saved Navidrome key.{% else %}Reading Navidrome's Last.fm key needs the password.{% endif %}</p>
       <label data-show-for="history_source" data-values="manual">Last.fm API key<input type="password" name="history_key" autocomplete="off">{% if saved_history_source == 'manual' %}<span class="field-help">Blank keeps the saved key.</span>{% endif %}</label>
-      {% if radio %}<p class="field-help">With Last.fm set up, your apps also get similar songs and similar artists for music that is only in the catalog. For those, Last.fm is sent an artist and a title with the key, not your username.</p>{% endif %}
+      {% if radio %}<p class="field-help">{% if listening %}Your apps get similar songs and similar artists for music that is only in the catalog from ListenBrainz, and with Last.fm set up from Last.fm too.{% else %}With Last.fm set up, your apps also get similar songs and similar artists for music that is only in the catalog.{% endif %} For those, Last.fm is sent an artist and a title with the key, not your username.</p>{% endif %}
     </div>
     <div class="form-actions"><button{% if not connected %} class="btn-primary"{% endif %}>Save connection</button></div>
   </form>

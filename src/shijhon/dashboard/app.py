@@ -179,6 +179,7 @@ NAV = (
             ("library", "Library"),
             ("agent-access", "Agent access"),
             ("sound", "Sound analysis"),
+            ("listenbrainz", "ListenBrainz"),
             ("cleanup", "Cleanup"),
             ("notifications", "Notifications"),
             ("diagnostics", "Diagnostics"),
@@ -199,6 +200,7 @@ PAGE_SECTIONS = {
     "playback": "delivery",
     "catalog": "catalog",
     "sound": "audiomuse",
+    "listenbrainz": "listenbrainz",
     "agent-access": "agents",
     "notifications": "notifications",
 }
@@ -214,6 +216,13 @@ SECTION_WORDS = {
     "sound": (
         "Sound analysis",
         "AudioMuse-AI analyzes how your songs sound; described playlists use it as a hint.",
+    ),
+    "listenbrainz": (
+        "ListenBrainz",
+        "Songs and artists that ListenBrainz's listeners play together: radio from songs,"
+        " albums and artists you don't own, discovery mixes and agents use them next to"
+        " Last.fm's similar songs. Only artist and song names are sent, never an account or"
+        " what anyone listened to.",
     ),
     "notifications": (
         "Notifications",
@@ -268,6 +277,7 @@ def _page_of(section: str, key: str) -> str:
         "agents": "Agent access",
         "playlists": "Playlists",
         "notifications": "Notifications",
+        "listenbrainz": "ListenBrainz",
     }
     return pages.get(section, "Sound analysis")
 
@@ -548,6 +558,7 @@ class Dashboard:
             Route("/catalog/check", page(self.catalog_check_now), methods=["POST"]),
             Route("/catalog/wait", page(self.catalog_wait_save), methods=["POST"]),
             Route("/sound", page(self.section_page), methods=["GET", "POST"]),
+            Route("/listenbrainz", page(self.section_page), methods=["GET", "POST"]),
             Route("/agent-access", page(self.section_page), methods=["GET", "POST"]),
             Route("/notifications", page(self.section_page), methods=["GET", "POST"]),
             Route("/notifications/test", page(self.notification_test), methods=["POST"]),

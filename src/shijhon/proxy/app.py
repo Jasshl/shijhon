@@ -11,8 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +29,7 @@ from shijhon.proxy.params import (
     unreadable,
 )
 from shijhon.proxy.responses import music_send
+from shijhon.proxy.timing import RequestTiming
 from shijhon.proxy.upstream import (
     Receive,
     Scope,
@@ -185,13 +185,9 @@ class ProxyApp:
             if scope["type"] == "websocket":
                 await send({"type": "websocket.close", "code": 1003})
             return
-        started = time.perf_counter()
-        status: list[int] = [0]
-
-        async def tracking_send(message: MutableMapping[str, Any]) -> None:
-            if message["type"] == "http.response.start":
-                status[0] = message["status"]
-            await send(message)
+        timing = RequestTiming()
+        tracking_send = timing.send(send)
+        receive = timing.receive(receive)
 
         path: str = scope["path"]
         raw_path: bytes = scope.get("raw_path") or path.encode()
@@ -252,8 +248,11 @@ class ProxyApp:
         except anyio.EndOfStream:
             label = label or "http"  # client left while sending its request
         finally:
-            elapsed = (time.perf_counter() - started) * 1000
-            access_log.info("%s %s %s %.0fms", label, scope["method"], status[0], elapsed)
+            # The whole request's time (an audio answer's: until the client stopped reading,
+            # or left), and when its start and first body bytes were sent and its client's
+            # disconnect was seen (``proxy/timing.py``).
+            status, elapsed, waited = timing.line()
+            access_log.info("%s %s %s %.0fms, %s", label, scope["method"], status, elapsed, waited)
 
     async def _rest(self, scope: Scope, receive: Receive, send: Send) -> str:
         raw_path: bytes = scope.get("raw_path") or scope["path"].encode()

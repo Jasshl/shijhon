@@ -54,6 +54,7 @@ SECTIONS: Final = (
     "cleanup",
     "search",
     "audiomuse",
+    "listenbrainz",
     "agents",
     "playlists",
     "notifications",

@@ -203,10 +203,12 @@ are discarded. On later saves, a blank Navidrome password keeps the saved key; e
 the password again to pick up a changed key. Switching key sources requires a new
 manual key or a password to read Navidrome's key.
 
-The same key answers a [radio from a catalog item](how-it-works.md#radio-from-catalog-items)
-in your apps: the similar songs and similar artists of music that is not in your library.
-For those requests Shijhon sends Last.fm an artist's name, or an artist and a title, with
-the key. It sends neither your Last.fm username nor anything about what you listened to.
+The same key adds Last.fm's lists to a
+[radio from a catalog item](how-it-works.md#radio-from-catalog-items) in your apps: the
+similar songs and similar artists of music that is not in your library. ListenBrainz's
+lists are there without a key, unless an administrator turned ListenBrainz off. For those
+requests Shijhon sends Last.fm an artist's name, or an artist and a title, with the key.
+It sends neither your Last.fm username nor anything about what you listened to.
 
 Fill in **New discovery mix** and choose **Create and publish**, then listen and review
 the playlist in your music app.
@@ -240,8 +242,14 @@ A brief such as “melodic, adventurous music for an evening walk” requires AI
 The initial import covers 90 days of Last.fm history by default. Later imports add new
 listens and overlap seven days to pick up delayed scrobbles. “Unfamiliar” means absent
 from the imported history, not that you have never heard a track. Your library's contents
-and placeholder files do not count as listening history. Last.fm similarity supplies
-candidates; Shijhon checks recording titles, versions, artists and available duration,
+and placeholder files do not count as listening history. Last.fm's similar songs and
+ListenBrainz's songs listened together (unless an administrator turned ListenBrainz off)
+supply candidates: those listed as similar to the twelve songs you played most, recently
+weighing more. A song both list scores for both and comes first. Shijhon sends
+ListenBrainz the artists and titles of those twelve songs, without your name or account.
+ListenBrainz is optional here: it is asked beside Last.fm and waited for at most ten
+seconds after Last.fm's last answer, and when it fails the mix is made from Last.fm's
+songs. Shijhon checks recording titles, versions, artists and available duration,
 album and recording identifiers. Ambiguous matches are skipped. If too few recordings
 meet the rules, the run fails, and the rules can be adjusted before generating again.
 

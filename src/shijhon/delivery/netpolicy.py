@@ -16,6 +16,7 @@ httpx; it hooks into httpcore's documented network-backend interface.
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 import ssl
 from collections.abc import Awaitable, Callable, Iterable
@@ -138,6 +139,49 @@ class PolicyBackend(httpcore.AsyncNetworkBackend):
         await self.inner.sleep(seconds)
 
 
+# The shared TLS context and the trust store it was read from (``_trust``).
+_TLS: tuple[tuple[object, ...], ssl.SSLContext] | None = None
+
+
+def _trust() -> tuple[object, ...]:
+    """What the system's certificates are read from, and each file's or folder's size and
+    change time: a changed trust store (an updated CA bundle) shows here."""
+    paths = ssl.get_default_verify_paths()
+    found: list[object] = [os.environ.get("SSL_CERT_FILE"), os.environ.get("SSL_CERT_DIR")]
+    for path in dict.fromkeys(
+        (paths.cafile, paths.capath, paths.openssl_cafile, paths.openssl_capath)
+    ):
+        try:
+            stat = os.stat(path) if path else None
+        except OSError:
+            stat = None
+        found.append((path, stat.st_size, stat.st_mtime_ns) if stat else (path, None, None))
+    return tuple(found)
+
+
+def _tls() -> ssl.SSLContext:
+    """The system's certificates, read once and shared by every client: reading them takes
+    tens of milliseconds, in the event loop - each add-on's client, built again after a
+    change of the add-on settings, would hold up every request then. ``refresh_tls`` reads
+    them again when they changed."""
+    global _TLS
+    if _TLS is None:
+        _TLS = (_trust(), ssl.create_default_context())
+    return _TLS[1]
+
+
+async def refresh_tls() -> None:
+    """Before clients are built: when the trust store changed, a new context is read off
+    the event loop and replaces the shared one for the clients built from then on - the
+    one in use by others is never changed under them."""
+    global _TLS
+    found = await anyio.to_thread.run_sync(_trust)
+    if _TLS is not None and _TLS[0] == found:
+        return
+    context = await anyio.to_thread.run_sync(ssl.create_default_context)
+    _TLS = (found, context)
+
+
 class PolicyTransport(httpx.AsyncHTTPTransport):
     """httpx transport whose connections go through :class:`PolicyBackend`."""
 
@@ -149,10 +193,10 @@ class PolicyTransport(httpx.AsyncHTTPTransport):
         limits: httpx.Limits | None = None,
     ) -> None:
         limits = limits or httpx.Limits(max_connections=32, max_keepalive_connections=8)
-        super().__init__(limits=limits, trust_env=False)
+        super().__init__(verify=_tls(), limits=limits, trust_env=False)
         # httpx does not expose httpcore's network_backend; build the pool it would build.
         self._pool = httpcore.AsyncConnectionPool(
-            ssl_context=ssl.create_default_context(),
+            ssl_context=_tls(),
             max_connections=limits.max_connections,
             max_keepalive_connections=limits.max_keepalive_connections,
             keepalive_expiry=limits.keepalive_expiry,

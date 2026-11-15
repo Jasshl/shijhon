@@ -13,10 +13,13 @@
   saved audio never expires. A play of it paused longer than that may fail to seek or go
   on afterwards, since the new file's bytes lie elsewhere; playing it again works (an
   answer being sent keeps reading the old file).
-- Kept streams (`keep_streamed_audio`): the requests of a play are joined into one file
-  only when the add-on gives the same file a strong ETag, or within one link; an answer
-  whose size the add-on does not tell is kept only when it is the whole song alone, its
-  end told by its framing (chunked, or HTTP/2). A kept song stays in the add-on's container
+- Held and kept streams (`keep_streamed_audio`): the requests of a play are joined into one
+  file only when the add-on gives the same file a strong ETag, or within one link; an
+  answer whose size the add-on does not tell is held only when it is the whole song alone,
+  its end told by its framing (chunked, or HTTP/2). At most 16 songs
+  are held at once (4 GiB with the whole songs waiting for the library), each until it has
+  been unused for an hour; past that the least recently used goes, and a later seek of it
+  goes to the add-on again. A kept song stays in the add-on's container
   (FLAC, M4A, MP3, Opus, Ogg Vorbis,
   Speex, WAVE, AIFF, DSF, TrueAudio, Monkey's Audio, WavPack, Musepack, WMA, Matroska);
   audio in a container whose length Navidrome does not read goes in as the same audio in
@@ -29,6 +32,21 @@
   index it (the pinned macOS build). Downloads still put only FLAC, M4A, MP3, Opus and
   Ogg Vorbis in place. A catalog song streamed before it is in the library is kept
   only when it is added within half an hour.
+- Two songs an app loads at the same moment are both played from the start only when their
+  requests reach Shijhon within 0.05 s of each other; further apart, the later one is a
+  fetch ahead until the app reports it, which some apps do only seconds later. So is a
+  song an app starts within half a second of another one. The order the requests came in
+  decides which is which: a start waits up to half a second for the same app's earlier
+  requests whose credentials are still being checked, and after that it is decided
+  without them. Reports and saved queues belong to the account: another device's report
+  of a song makes this app's fetch of it a play.
+- A seek in a song Shijhon holds only in part (the app left early, it read only what the
+  app asked for, the disk was too slow or full to hold it, or it was not held), once the
+  song's link expired, needs a new link to the same file: the add-on the play started at
+  first, then the others. A new link to a file without a strong ETag is taken only when its
+  first bytes are the play's; when the play never read them (it began in the middle, after
+  a restart), such a link is not taken. When none is taken, the request gets an error
+  answer, which a web player reports as a media error.
 - A song an app fetches ahead goes to the plan's first add-on that can be asked: when it
   cannot serve the song, the fetch is routed one add-on at a time, and one that waited out
   its turn fails, so the song starts cold when played.

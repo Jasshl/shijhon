@@ -19,6 +19,8 @@ import pytest
 from shijhon.app import create_app
 from shijhon.catalog import plugin
 from shijhon.config import load_settings
+from shijhon.playlists.listenbrainz import ListenBrainz
+from tests.harness.fake_listenbrainz import FakeListenBrainz
 from tests.harness.navidrome import (
     ADMIN_PASSWORD,
     ADMIN_USER,
@@ -126,3 +128,12 @@ def shijhon_factory(
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def listenbrainz_offline() -> Iterator[None]:
+    """ListenBrainz is on by default: in the tests it is a stand-in that knows nothing (a
+    test that needs answers gives its own), so no test reaches the real service."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ListenBrainz, "transport", FakeListenBrainz().transport())
+        yield

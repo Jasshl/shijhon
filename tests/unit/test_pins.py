@@ -19,6 +19,7 @@ from shijhon.delivery.playback import (
     ByteRange,
     Deliverer,
     Known,
+    Opened,
     Pin,
     PinBroken,
     PlaybackSettings,
@@ -335,7 +336,8 @@ def test_a_play_from_the_add_ons_keeps_its_file_while_its_link_is_kept() -> None
     """Once the song's audio is in the library: a later range of a listener's play served
     from the add-ons stays there - not a HEAD, not another listener's, not after the
     listener began another play of it (also when an older play's first bytes came after
-    that), not once the song's link expired. A play for a format and bitrate is another
+    that) - also once the song's link expired (a new link to its file, or the audio held
+    of it: never Navidrome's copy). A play for a format and bitrate is another
     one: its start does not end the plain stream's. A play first asked for at a later
     range (after a restart) counts once it was served there."""
     now = [0.0]
@@ -372,9 +374,7 @@ def test_a_play_from_the_add_ons_keeps_its_file_while_its_link_is_kept() -> None
     interceptor._began(resumed)
     assert interceptor._on_its_file(later, get, other, track)
     now[0] = 1801.0  # the song's link expired
-    assert not interceptor._on_its_file(later, get, me, track)
-    d._remember("song", link(now[0]))
-    assert not interceptor._on_its_file(later, get, me, track)  # handed over for good
+    assert interceptor._on_its_file(later, get, me, track)  # still its file
 
 
 def test_a_link_dropped_after_it_failed_still_holds_the_song_until_it_would_expire() -> None:
@@ -403,3 +403,32 @@ def test_a_link_dropped_after_it_failed_still_holds_the_song_until_it_would_expi
     assert not d.holds(track)
     d.forget("song")  # (all of the song's links, as for a song put in the library unplayed)
     assert not d.holds(track)
+
+
+def test_a_late_first_answer_of_an_older_play_never_becomes_the_newer_play_s_file() -> None:
+    """Two plays of one song by one listener began a moment apart; the newer one's answer
+    comes first, the older one's after it: the newer play stays of its own file."""
+    now = [0.0]
+    d = deliverer(now)
+    nothing = cast(Any, None)
+    interceptor = Interceptor(nothing, d, cast(Any, SimpleNamespace(engine=None)), nothing, nothing)
+    track = Track("song", None, "T", "A", 1000, ref="demo:1")
+    me, get = ("user", "app"), cast(Any, SimpleNamespace(head=False))
+    older = interceptor._starting(_call(None), get, me, track.key)
+    newer = interceptor._starting(_call(None), get, me, track.key)
+    assert older is not None and newer is not None and older != newer
+
+    async def nothing_to_close() -> None:
+        pass
+
+    def answer(pin: Any) -> Opened:
+        return Opened(206, [], None, nothing_to_close, pin=pin)
+
+    newer_link, older_link = link(now[0]), link(now[0], source_id=2)
+    interceptor._began(newer)
+    interceptor._identify(newer, answer(newer_link))
+    interceptor._began(older)  # (late: no longer the listener's play)
+    interceptor._identify(older, answer(older_link))
+    found = interceptor._file_of(newer)
+    assert found is not None and found.pin is newer_link
+    assert interceptor._file_of(older) is None

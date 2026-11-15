@@ -560,9 +560,12 @@ def test_a_play_keeps_its_file_when_the_song_is_saved_while_it_plays(
     assert a.requests() == []
 
 
-def test_once_the_play_s_link_expires_its_seeks_are_the_library_s(
+def test_once_the_play_s_link_expires_its_seeks_still_get_its_own_file(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon], dash: Dash
 ) -> None:
+    """The song went into the library (another file) and the play's link expired: the
+    play's seeks still get the file it played, never the library's at the same offsets; a
+    new play gets the library's."""
     a, _ = a_and_b
     song, _, _ = dash_song(world, "s-saved-expiry", a, seconds=LONG)
     first = stream(world, song, {"range": "bytes=0-999"})
@@ -579,11 +582,10 @@ def test_once_the_play_s_link_expires_its_seeks_are_the_library_s(
         seek = stream(world, song, {"range": "bytes=1000-1999"})
     finally:
         settings.pin_ttl_seconds = ttl
-    assert seek.status_code == 206 and seek.content == library[1000:2000]
-    assert seek.headers["content-range"] == f"bytes 1000-1999/{len(library)}"
-    later = stream(world, song, {"range": "bytes=-100"})  # handed over for good
-    assert later.status_code == 206 and later.content == library[-100:]
-    assert a.requests() == []
+    assert seek.status_code == 206 and seek.content == kept.content
+    assert seek.headers["etag"] == first.headers["etag"]
+    assert library[1000:2000] != kept.content
+    assert stream(world, song).content == library  # a new play
 
 
 def test_with_dash_start_complete_a_play_keeps_its_joined_file(

@@ -266,6 +266,11 @@ LIVE: dict[tuple[str, str], tuple[Target, ...]] = {
             "snapshot_skipped",
         )
     },
+    # [listenbrainz]: read at every request (the whole section at once).
+    **{
+        ("listenbrainz", key): (Target("listenbrainz.settings", lambda s: s, optional=True),)
+        for key in ("enabled", "token", "timeout_seconds")
+    },
     # [playlists]: the playlist services and their curator share one settings object, and
     # read this at every API request.
     ("playlists", "allow_private_api"): (

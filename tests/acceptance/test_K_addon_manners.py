@@ -150,8 +150,8 @@ def test_a_rate_limit_on_its_api_leaves_the_songs_playing_from_it_alone(
     world: DeliveryWorld, a_and_b: tuple[FakeAddon, FakeAddon]
 ) -> None:
     """An add-on that says "too many requests" to a lookup is asked for nothing new - but a
-    song already playing from it goes on: its later ranges are served from the link it
-    has."""
+    song already playing from it goes on: its later ranges are served from the audio held
+    of it, or the link it has - never an API request."""
     a, b = a_and_b
     playing, _, audio = world.placeholder_track("m-playing", [a], seconds=6)
     assert stream(world, playing).content == audio.read_bytes()
@@ -164,7 +164,7 @@ def test_a_rate_limit_on_its_api_leaves_the_songs_playing_from_it_alone(
     client = world.client()
     seek = client.request("stream", {"id": playing}, headers={"range": "bytes=2000-"})
     assert seek.status_code == 206 and seek.content == audio.read_bytes()[2000:]
-    assert [r["endpoint"] for r in a.requests()] == ["audio"]  # its audio, nothing else
+    assert {r["endpoint"] for r in a.requests()} <= {"audio"}  # its audio at most
 
 
 def test_a_rate_limit_on_an_availability_check_names_its_time_too(

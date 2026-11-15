@@ -78,7 +78,8 @@ class Addons:
     def __init__(self, *catalogs: Catalog) -> None:
         self.list = [(f"add-on {n}", c) for n, c in enumerate(catalogs)]
 
-    async def catalogs(self) -> list[tuple[str, Catalog]]:
+    async def catalogs(self, *, catalog_only: bool = False) -> list[tuple[str, Catalog]]:
+        assert catalog_only  # (the artist lists ask catalog-only add-ons alone)
         return self.list
 
 
@@ -375,8 +376,9 @@ async def test_a_catalog_that_raises_something_unexpected_counts_as_failed(
     assert later.value.answered and skips.failures["add-on 0"] == 1
 
 
-def test_every_add_on_that_declares_a_catalog_is_asked() -> None:
-    """(``AddonCatalogs.catalogs()``: an add-on that also streams is asked too.)"""
+def test_only_catalog_only_add_ons_are_asked_for_artist_lists() -> None:
+    """(``AddonCatalogs.catalogs(catalog_only=True)``: an add-on that also streams is not
+    asked - its search can reach a service that acts on it; playlist imports still ask it.)"""
     import httpx
 
     from shijhon.catalog.addon import AddonCatalogs
@@ -401,8 +403,14 @@ def test_every_add_on_that_declares_a_catalog_is_asked() -> None:
     async def run() -> None:
         catalogs = AddonCatalogs(registry)  # type: ignore[arg-type]
         try:
-            # (Sources asks each catalog listed here: the streaming add-on's list counts.)
             assert [n for n, _ in await catalogs.catalogs()] == ["Streams", "Catalog"]
+            listed = await catalogs.catalogs(catalog_only=True)
+            assert [n for n, _ in listed] == ["Catalog"]
+            # Through the artist lists' own question: the streaming add-on is never asked.
+            from shijhon.artist_lists.sources import Sources
+
+            asked = await Sources(None, None, catalogs)._catalogs()  # type: ignore[arg-type]
+            assert [a.name for a in asked] == ["Catalog"]
         finally:
             await catalogs.aclose()
 

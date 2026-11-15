@@ -1429,12 +1429,16 @@ class AddonCatalogs:
         self,
         unanswered: set[str] | None = None,
         unreadable: set[str] | None = None,
+        *,
+        catalog_only: bool = False,
     ) -> list[tuple[str, CachedCatalog]]:
         """The catalogs to ask, with their add-ons' names, in the add-ons' order. An add-on
-        in ``unanswered`` or ``unreadable`` is passed over. One whose manifest cannot be
-        read now is added to ``unanswered`` when it did not answer (no connection, no
-        answer in time, a rate limit), else to ``unreadable`` (its answer was refused or
-        broken: asking again later does not help), and passed over."""
+        in ``unanswered`` or ``unreadable`` is passed over. ``catalog_only``: only the
+        add-ons that are a catalog only (their manifests declare no ``stream``, as on the
+        Add-ons page): background work that must not send an audio add-on searches. One
+        whose manifest cannot be read now is added to ``unanswered`` when it did not answer
+        (no connection, no answer in time, a rate limit), else to ``unreadable`` (its answer
+        was refused or broken: asking again later does not help), and passed over."""
         if self.registry is None:
             return []
         found = []
@@ -1457,6 +1461,10 @@ class AddonCatalogs:
                 if passed is not None:
                     passed.add(source.name)
                 continue
+            if declared and catalog_only:
+                # (its manifest was just read: a catalog only declares no ``stream``)
+                known = source.addon.known
+                declared = known is not None and not known.streams
             if declared:
                 found.append((source.name, self._catalog(source)))
         return found

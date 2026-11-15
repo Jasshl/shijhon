@@ -110,7 +110,7 @@ what it shows, and that API shows your library without the catalog.
 
 ## Status
 
-Shijhon is in beta (0.8.0), tested with Navidrome 0.64.2. The configuration and the
+Shijhon is in beta (0.9.0), tested with Navidrome 0.64.2. The configuration and the
 database can change between beta versions; the database migrates itself at startup and
 keeps a snapshot from before the upgrade. What changed is in [CHANGELOG.md](CHANGELOG.md).
 

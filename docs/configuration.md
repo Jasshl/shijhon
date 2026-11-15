@@ -10,7 +10,8 @@ Lowest first:
 1. the built-in default;
 2. the configuration file;
 3. a value saved on the dashboard (the `[delivery]`, `[catalog]`, `[fill]`, `[cleanup]`,
-   `[audiomuse]`, `[agents]` and `[notifications]` settings, `[search] budget_seconds`,
+   `[audiomuse]`, `[listenbrainz]`, `[agents]` and `[notifications]` settings,
+   `[search] budget_seconds`,
    `[playlists] allow_private_api`, and the add-ons);
 4. an environment variable. The dashboard shows such a setting locked, with the variable's
    name.
@@ -80,7 +81,7 @@ on its Cleanup page.
 | `budget_seconds` (9) | A new step's time in the plan: how long its add-ons try before the next step's join them ([the plan](add-ons.md#the-plan)); also an add-on's time for a download or a song prepared ahead, for one without its own |
 | `ready_checks` (false), `ready_handover_seconds` (4.5) | Ask the add-ons that can tell whether they have a song ready; one that has joins a song without audio after this long (0: it goes first). Set on the Add-ons page |
 | `max_wait_seconds` (30) | The longest an app waits for the first audio, all steps together: the add-ons asked keep trying until then. At least `budget_seconds`; keep it below the apps' own timeouts |
-| `keep_streamed_audio` (false) | A song whose whole audio Shijhon received while an app streamed it replaces its silent placeholder, as downloaded audio does ([how it works](how-it-works.md#placeholders)). Nothing more is fetched to finish a song: one skipped before Shijhon had all of it is not kept. Applies at once |
+| `keep_streamed_audio` (false) | Every song whose whole audio Shijhon received while an app streamed it replaces its silent placeholder, as downloaded audio does ([how it works](how-it-works.md#placeholders)). Shijhon reads a song on to its end while the app stays connected, also one the app only loaded ahead, so this is every song an app streamed or loaded to its end; a song the app left before that is not kept. Off, that audio is only held for the play's seeks. Applies at once |
 | `delivered_days` (30), `delivered_gb` (10) | After this many days unused, downloaded or kept audio is replaced by its silent placeholder again. Once all of it together is larger than this size, the least recently used is replaced first. 0: no age limit, or no size limit; with both 0 it is kept for good |
 | `quality_default` (`"192"`) | The lowest quality listeners hear from a file unless they chose their own on their Audio quality page ([below](#audio-quality)): `"128"`, `"160"`, `"192"`, `"256"` or `"320"` - compressed audio (MP3, AAC, Opus...) needs at least that many kbit/s, lossless audio (FLAC, ALAC...) is accepted at any bitrate, and both need 44.1 kHz - or `"lossless"` (lossless audio only, 44.1 kHz or more) or `"any"` (no check). Applies at once |
 | `dash_quality_from` (`"any"`), `dash_quality_to` (`"lossless"`) | Of the qualities a DASH manifest offers, the highest in this range: `"128"`, `"192"`, `"256"`, `"320"` (kbit/s) or `"lossless"`; the lower end may also be `"any"`, and may not be above the upper |
@@ -155,7 +156,7 @@ On the dashboard's Catalog page.
 | `artist_lists_catalogs` (none) | More catalogs asked for the lists of `artist_lists`, after the catalog in use: installed catalog adapters by name, such as `["musicbrainz"]`. Each is built with its adapter's default settings, used for these lists only and asked at the library pass's pace; one that is not installed or cannot be built is logged at startup and passed over ([how-it-works.md](how-it-works.md#each-artist-of-a-joined-credit)). Applies after a restart. Under Advanced settings |
 | `new_releases_days` (30) | How long after its release date a followed artist's release leads the newest albums of the people who turned **New releases** on ([how-it-works.md](how-it-works.md#new-releases)). 0: nobody can turn it on, and nothing is checked or shown. Applies at once. Under Advanced settings |
 | `[search] budget_seconds` (8) | The longest a search, the page of an artist in your library, an artist's top songs or a radio from a catalog item waits for the catalog ([catalogs.md](catalogs.md#a-catalog-that-answers-slowly)). 120 at most |
-| `[search] radio` (on) | Similar songs and similar artists of songs, albums and artists that are only in the catalog, as Last.fm lists them, for each person who set up Last.fm on the Playlists page ([how-it-works.md](how-it-works.md#radio-from-catalog-items)). Off: Navidrome's empty answer for them, as before. Set in the configuration file or the environment |
+| `[search] radio` (on) | Similar songs and similar artists of songs, albums and artists that are only in the catalog, as ListenBrainz lists them for everyone (while [`[listenbrainz]`](#listenbrainz) is on) and Last.fm for each person who set up Last.fm on the Playlists page ([how-it-works.md](how-it-works.md#radio-from-catalog-items)). Off: Navidrome's empty answer for them, as before. Set in the configuration file or the environment |
 
 With `SHIJHON_ARTIST_LISTS_REPORT=1` in Shijhon's environment, `artist_lists` logs once
 a start what it would at most write, by source, and why other songs are left; nothing is
@@ -196,6 +197,22 @@ which is set in the file or the environment only.
 | `reach` (`public`) | Where it runs: `loopback` (this machine; in a container, the container itself), `private` (also your network and the Docker host) or `public` |
 | `timeout_seconds` (20) | The longest one request to it may take |
 | `sync_hours` (6) | How often Shijhon reads which songs are analyzed, and their analysis (it also does once after starting, if the last time was longer ago) |
+
+### `[listenbrainz]`
+
+On the dashboard's ListenBrainz page. ListenBrainz is a second source of similar songs and
+artists next to Last.fm: the songs and artists its listeners play together. Radio from
+catalog items, discovery mixes and agents use it
+([how it works](how-it-works.md#radio-from-catalog-items)). It is on by default and needs
+no setup or account. Only artist and song names, and the MusicBrainz IDs ListenBrainz
+gives for them, are sent ([privacy](privacy-and-security.md#network)). These settings
+apply at once.
+
+| Setting | What it sets |
+|---|---|
+| `enabled` (on) | Whether ListenBrainz is asked. Off: radio from catalog items is made with Last.fm alone, for the people who set it up, and so are discovery mixes; agents' `find_listened_together` uses Last.fm alone |
+| `token` | Optional. A ListenBrainz user token, from your ListenBrainz settings page, used for everyone. A song that ListenBrainz Labs' exact lookup does not find with similar songs is then looked up again with ListenBrainz's metadata lookup, which needs a token and matches names more loosely, before Labs' recording search, which needs none. It is sent only to api.listenbrainz.org, is never shown or logged, and is hidden by `shijhon saved`. A token ListenBrainz refuses is said once in the log, without itself |
+| `timeout_seconds` (4) | The longest one request to ListenBrainz may take, its wait for a turn and its answer together: Shijhon asks it at most once a second, as ListenBrainz asks of applications. A radio for a person with Last.fm never waits for ListenBrainz at all |
 
 ### `[notifications]`
 
@@ -312,6 +329,8 @@ and audio prepared for your apps, and **New releases** follows your artists
   long and how much saved audio is kept). A change that lets it take out
   more first shows what the next check would take out.
 - **Sound analysis**: the connection to AudioMuse-AI ([guide](sound-analysis.md)).
+- **ListenBrainz**: whether ListenBrainz is asked for songs and artists listened together,
+  and its optional token ([settings](#listenbrainz)).
 - **Notifications**: the Apprise addresses notifications go to, what is reported, and
   **Send a test notification** ([settings](#notifications)).
 - **Diagnostics**: Navidrome, the add-ons, the catalog, versions, recent errors, and

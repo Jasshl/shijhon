@@ -174,6 +174,10 @@ GROUPS: dict[str, list[Group]] = {
         Group("connection", "Connection"),
         Group("advanced", "Requests and reading the analysis", more=True),
     ],
+    "listenbrainz": [
+        Group("listenbrainz", "ListenBrainz"),
+        Group("advanced", "Requests to ListenBrainz", more=True),
+    ],
     "catalog": [
         Group("connection", "Connection"),
         Group("albums", "Albums and songs"),
@@ -394,10 +398,10 @@ META: dict[str, dict[str, Meta]] = {
         ),
         "keep_streamed_audio": Meta(
             "Keep streamed songs",
-            "When Shijhon has received a song's whole audio while an app streams it, the song"
-            " replaces its silent placeholder, as a downloaded song does. Nothing more is"
-            " fetched to finish a song: one skipped before Shijhon had all of it isn't kept."
-            " The limits below apply to it too.",
+            "Every song Shijhon receives in full while an app streams it replaces its silent"
+            " placeholder, as a downloaded song does. Shijhon reads a song on to its end while"
+            " the app stays connected, also one the app only loaded ahead; a song the app"
+            " left before then isn't kept. The limits below apply to it too.",
             "downloads",
         ),
         "delivered_days": Meta(
@@ -740,6 +744,32 @@ META: dict[str, dict[str, Meta]] = {
             "Read the analysis every",
             "How often Shijhon reads AudioMuse-AI's analysis of your songs. It also reads it"
             " once after starting, if the last read is older than this.",
+            "advanced",
+        ),
+    },
+    "listenbrainz": {
+        "enabled": Meta(
+            "Ask ListenBrainz",
+            "Radio from catalog songs, albums and artists, discovery mixes and agents also use"
+            " the songs and artists ListenBrainz's listeners play together, for everyone and"
+            " without a Last.fm key. Only artist and song names and the MusicBrainz IDs"
+            " ListenBrainz gives for them are sent. Off: Last.fm alone, for those who"
+            " connected a key.",
+            "listenbrainz",
+        ),
+        "token": Meta(
+            "User token",
+            "Optional. A ListenBrainz user token (on your ListenBrainz settings page): songs"
+            " that ListenBrainz does not find by their exact names are then also looked up"
+            " with its metadata lookup, which needs one. Used for everyone; it is sent only to"
+            " ListenBrainz, never with anyone's account or listening. " + _WRITE_ONLY,
+            "listenbrainz",
+        ),
+        "timeout_seconds": Meta(
+            "Request timeout",
+            "How long one request to ListenBrainz may take, its wait for a turn (it is asked"
+            " at most once a second) and its answer together. A radio for someone with"
+            " Last.fm never waits for ListenBrainz.",
             "advanced",
         ),
     },

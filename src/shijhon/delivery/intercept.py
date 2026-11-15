@@ -50,7 +50,7 @@ import httpx
 
 from shijhon.catalog.model import CatalogTrack
 from shijhon.delivery import pacing
-from shijhon.delivery.ahead import AheadGate
+from shijhon.delivery.ahead import AheadGate, Arrival
 from shijhon.delivery.download_first import (
     DownloadFirst,
     Turn,
@@ -69,6 +69,7 @@ from shijhon.delivery.playback import (
     NoSource,
     Opened,
     PinBroken,
+    PlayFile,
     Track,
     _Changed,
 )
@@ -195,6 +196,7 @@ class _Kept:
 
 
 _KEPT = "download-first:"  # a request's kept fetch of a song (by its track key)
+_ARRIVING = "ahead:arriving"  # a request's place among its client's starts not noted yet
 # A listener's play of a song: (listener, the song's key, the format and bitrate asked for
 # - a transcode stream's: ``_TRANSCODE``), and its start: that, and its number.
 _PlayKey = tuple[Listener, str, tuple[str, int] | None]
@@ -202,6 +204,13 @@ _Start = tuple[_PlayKey, int]
 # A transcode stream's play (``getTranscodeStream``): one of its own, which goes on only
 # with the decision it was accepted with (``Interceptor._decided``).
 _TRANSCODE = ("transcode", -1)
+
+
+def _ago(call: RestCall) -> float:
+    """How long ago the request came: its start is noted as of then (``Listening.started``),
+    so that two songs a client asked for together are seen together, whatever was done
+    for each first (a credential check, a catalog lookup)."""
+    return max(0.0, time.monotonic() - call.arrived)
 
 
 def _processing(call: RestCall) -> tuple[str, int] | None:
@@ -281,6 +290,9 @@ class Interceptor:
         # decisions (tokens) it goes on with and the client profile they were accepted
         # with (``_from_addons``). Kept with its play, whatever later decisions say.
         self._decided: dict[_PlayKey, tuple[int, frozenset[str], DirectPlay]] = {}
+        # The file each play from the add-ons is of (its number, and that file): its later
+        # ranges are held to it, whatever file another listener's play of the song is of.
+        self._files: dict[_PlayKey, tuple[int, PlayFile]] = {}
 
     def handlers(self) -> dict[str, Any]:
         return {
@@ -335,6 +347,7 @@ class Interceptor:
     # --- stream ----------------------------------------------------------------------
 
     async def stream(self, call: RestCall, ctx: RequestContext) -> HandlerResult:
+        self.arriving(call, ctx)  # (before anything that can take a while)
         ident = call.get("id") or ""
         engine = self.engine
         # An old ID of a release taken out first: its record plays it, also while an
@@ -358,6 +371,9 @@ class Interceptor:
                     row = await self.placeholder(ident)
             if waited.cancelled_caught:
                 return subsonic_error(call, 0, "audio unavailable: its album is being added")
+        # Its start noted at once, before any slower work: how it compares with the client's
+        # other starts is told by when each came (``AheadGate.note``).
+        await self.begin(call, ctx, track_of(row).key if row is not None else ident, row is None)
         if row is None:
             if (going := await self._going_on(call, ctx, ident)) is not None:
                 return going  # a play from the add-ons: its later ranges stay on their file
@@ -660,7 +676,9 @@ class Interceptor:
             if as_is.served:
                 played()
             return as_is.reply if as_is.reply is not None else fallback
-        opening = self._opening(call, track, ctx.head, who, accept=accept)
+        opening = self._opening(
+            call, track, ctx.head, who, accept=accept, play=self._file_of(start)
+        )
         try:
             opened = await opening.open(Departure())
         except (NoSource, PinBroken) as exc:
@@ -696,9 +714,70 @@ class Interceptor:
         if caller is None:
             return
         who = (caller.username, call.client)
-        at = self.warm.listening.started(who, key)
+        at = self._noted(call, who, key)
         if track is not None:
             self.warm.started(who, track, at)
+
+    async def begin(
+        self, call: RestCall, ctx: RequestContext, key: str, owned: bool = False
+    ) -> None:
+        """A stream's start at byte zero, noted for a verified caller (cached check) as soon
+        as its song's key is known - before catalog lookups, quality checks and routing -,
+        so that its class as a play or a fetch ahead does not depend on which of the
+        client's requests got through that work first. An owned song's only while fetches
+        ahead are told apart."""
+        if self.warm is None or not key or call.noted is not None:
+            return
+        if not self._starts(call, ctx.head):
+            return
+        if owned and (self.ahead is None or self.ahead.window <= 0):
+            return
+        self.arriving(call, ctx)
+        try:
+            caller = await ctx.caller()
+        except CheckFailed:
+            return
+        if caller is None:
+            return
+        found: tuple[Listener, Arrival] | None = ctx.kept.get(_ARRIVING)
+        if self.ahead is not None and found is not None:
+            # Its client's requests that came before it are noted first.
+            claimed, entry = found
+            await self.ahead.settle(claimed, entry.at, entry)
+        self._noted(call, (caller.username, call.client), key)
+        if self.ahead is not None and found is not None:
+            self.ahead.arrived(*found)
+
+    def arriving(self, call: RestCall, ctx: RequestContext) -> None:
+        """A request that may start a song (a GET at byte zero) came: the client's later
+        starts wait for it to be noted (``AheadGate.settle``) - or, if it is none, for the
+        request's end. By the user it names, not verified yet."""
+        if self.ahead is None or self.warm is None or self.ahead.window <= 0:
+            return
+        if _ARRIVING in ctx.kept or call.noted is not None or not self._starts(call, ctx.head):
+            return
+        claimed = ((call.get("u") or "").lower(), call.client)
+        at = self.warm.listening.clock() - _ago(call)
+        entry = self.ahead.arriving(claimed, at)
+        if entry is None:
+            return
+        ctx.kept[_ARRIVING] = (claimed, entry)
+        gate = self.ahead
+
+        async def gone() -> None:
+            gate.arrived(claimed, entry)
+
+        ctx.closing.push_async_callback(gone)
+
+    def _noted(self, call: RestCall, who: Listener, key: str) -> float:
+        """When the request's start was noted - now, as of when the request came, the first
+        time (for warm-ahead and the fetch-ahead classification)."""
+        assert self.warm is not None
+        if call.noted is None:
+            call.noted = self.warm.listening.started(who, key, _ago(call))
+            if self.ahead is not None:
+                self.ahead.note(who, key, call.noted)
+        return call.noted
 
     @staticmethod
     def _starts(call: RestCall, head: bool) -> bool:
@@ -737,8 +816,9 @@ class Interceptor:
         """The listener's play of the song is no longer remembered (``decided``: nor the
         decisions it went on with)."""
         found = self._plays.pop(play, None)
-        if decided:
+        if decided:  # (a play set again keeps its decisions and its file)
             self._decided.pop(play, None)
+            self._files.pop(play, None)
         if found is not None and found[1]:
             left = self._at_addons.get(play[1], 0) - 1
             if left > 0:
@@ -777,25 +857,40 @@ class Interceptor:
             self._plays[play] = (number, True)  # (in its place)
             self._at_addons[play[1]] = self._at_addons.get(play[1], 0) + 1
 
+    def _file_of(self, start: _Start | None) -> PlayFile | None:
+        """The file the play ``start`` is of, once its first answer from the add-ons came."""
+        if start is None:
+            return None
+        found = self._files.get(start[0])
+        return found[1] if found is not None and found[0] == start[1] else None
+
+    def _identify(self, start: _Start, result: Opened) -> None:
+        """The play's first answer from an add-on's link: the play is of that file (its
+        later answers, by other links to the same file, leave it so)."""
+        if result.pin is None or self._file_of(start) is not None:
+            return
+        found = self._plays.get(start[0])
+        if found is None or found[0] != start[1]:
+            return  # (the listener began another play of the song meanwhile: its own file)
+        held = result.capture.representation if result.capture is not None else None
+        self._files[start[0]] = (start[1], PlayFile(result.pin, held))
+
     def _on_its_file(
         self, call: RestCall, ctx: RequestContext, who: Listener, track: Track
     ) -> bool:
         """Whether a request for a song whose audio is in the library continues the
         listener's play from the add-ons: a later range (not a HEAD) of a play that began
-        there with the same format and bitrate asked for (a plain stream: none), while the
-        song has a link that has not expired (``pin_ttl_seconds``, or the link's own
-        expiry; also one being renewed after it failed: ``Deliverer.holds``). After that,
-        Navidrome's file."""
+        there with the same format and bitrate asked for (a plain stream: none). It stays on
+        the add-ons' file - the audio Shijhon holds of it, its link, or a new link to that
+        file - never Navidrome's copy, which is another file."""
         if ctx.head or self._starts(call, ctx.head):
             return False
         play = (who, track.key, _processing(call))
         found = self._plays.get(play)
-        if found is None or not found[1]:
-            return False
-        if self.deliverer.holds(track):
-            return True
-        self._drop_play(play)  # its link expired: Navidrome's file from now on
-        return False
+        # (Navidrome's copy is another file - tagged, perhaps another container: never the
+        # same offsets of it. The add-ons' file comes from what Shijhon holds of it, its
+        # link, or a new link to the same file.)
+        return found is not None and found[1]
 
     def _playing(
         self, call: RestCall, who: Listener, track: Track, at: float | None = None
@@ -814,7 +909,7 @@ class Interceptor:
         parsed = ByteRange.parse(header(call.headers, b"range") or None)
         if not (parsed is None or parsed.at_zero):
             return self.deliverer.played(track)
-        since = self.warm.listening.started(who, track.key) if at is None else at
+        since = self._noted(call, who, track.key) if at is None else at
         return self.ahead.current(who, track.key, since)
 
     async def _as_is(
@@ -866,7 +961,7 @@ class Interceptor:
         at_zero = not head and (parsed is None or parsed.at_zero)
         if not at_zero and known is None:
             return _AsIs()  # nothing read to tell by: download-first, as before
-        opening = self._opening(call, track, head, who, accept=accept)
+        opening = self._opening(call, track, head, who, accept=accept, play=self._file_of(start))
         turn: Turn | None = None
         if at_zero:
             playing = self._playing(call, who, track, opening.at)
@@ -886,7 +981,9 @@ class Interceptor:
             if row is not None and row["state"] == "delivered":
                 ctx.kept[_KEPT + track.key] = _Kept(turn)
                 return _AsIs(at=opening.at)
-            opening = self._opening(call, track, head, who, at=opening.at, accept=accept)
+            opening = self._opening(
+                call, track, head, who, at=opening.at, accept=accept, play=self._file_of(start)
+            )
         try:
             # (In its download turn it is as urgent at the add-ons' limits as that turn.)
             with pacing.urgent(turn.urgency) if turn is not None else contextlib.nullcontext():
@@ -999,6 +1096,7 @@ class Interceptor:
         resume: bool = False,
         at: float | None = None,
         accept: Accept | None = None,
+        play: PlayFile | None = None,
     ) -> _Opening:
         """How a plain stream from the add-ons is opened: in the user's turn when it routes,
         a play first and its fetches ahead one at a time; its start is noted
@@ -1074,7 +1172,7 @@ class Interceptor:
         parsed = ByteRange.parse(range_header)
         starts = not head and (parsed is None or parsed.at_zero)
         if at is None:
-            at = self.warm.listening.started(who, track.key) if self.warm and starts else 0.0
+            at = self._noted(call, who, track.key) if self.warm and starts else 0.0
         cold = self.deliverer.pinned(track.song_id) is None  # it is looked up at the add-ons
         routes = starts and cold
         gate = self.ahead if routes else None
@@ -1092,7 +1190,7 @@ class Interceptor:
             if not cold or self.limits is None:
                 return await self.deliverer.open(
                     track, range_header, head=head, purpose=purpose, waited=waited,
-                    departure=departure, resume=resume, accept=accept,
+                    departure=departure, resume=resume, accept=accept, play=play,
                 )  # fmt: skip
             settings = self.deliverer.settings
             cap = settings.max_wait_seconds - waited
@@ -1133,7 +1231,7 @@ class Interceptor:
                         return await self.deliverer.open(
                             track, range_header, head=head, purpose=purpose, budget=budget,
                             waited=waited + turn, departure=departure, resume=resume,
-                            accept=accept,
+                            accept=accept, play=play,
                         )  # fmt: skip
             except Limited as exc:
                 log.info("no audio for %r: %s", track.title, exc.reason)
@@ -1149,8 +1247,11 @@ class Interceptor:
                 async with gate.playing(who):
                     return await routed(departure, playing=told_apart)
             async with gate.turn(who, track.key) as turn:  # a fetch ahead
-                purpose = "play" if turn.promoted else "alone" if turn.alone else "ahead"
-                return await routed(departure, turn.waited, purpose, turn.promoted and told_apart)
+                if turn.promoted:  # the client says it plays it now: a play being opened
+                    async with gate.playing(who):
+                        return await routed(departure, turn.waited, "play", told_apart)
+                purpose = "alone" if turn.alone else "ahead"
+                return await routed(departure, turn.waited, purpose, False)
 
         return _Opening(open_it, starts, at)
 
@@ -1172,7 +1273,9 @@ class Interceptor:
         answer, opened already (by ``opening``). ``start``: the listener's play it belongs to
         (``_starting``), noted as one at the add-ons once its first bytes are sent."""
         if opening is None:
-            opening = self._opening(call, track, head, who, resume=resume)
+            opening = self._opening(
+                call, track, head, who, resume=resume, play=self._file_of(start)
+            )
         starts, at = opening.starts, opening.at
 
         async def reply(receive: Receive, send: Send) -> None:
@@ -1212,17 +1315,24 @@ class Interceptor:
             if departure.at is not None:  # nobody to send it to
                 await result.close()
                 return
+            body, close = result.body, result.close
             if result.capture is not None and result.status in (200, 206):
-                # It goes to a client: its bytes are kept, and once the whole file is
-                # there it replaces the song's placeholder (``delivery/retain.py``).
+                # It goes to a client: its bytes are held - and once the whole file is
+                # there, while songs are kept, it replaces the song's placeholder - and an
+                # answer that goes to the file's end is read on to it while the client keeps
+                # its connection, the client fed from the file (``delivery/retain.py``).
                 result.capture.accept(track)
+                span = _span(result.status, result.headers)
+                if span is not None and body is not None:
+                    following = result.capture.read_on(body, close, *span)
+                    if following is not None:
+                        body, close = following
             if start is not None and result.status in (200, 206):
                 self._began(start)
+                self._identify(start, result)
             if self.warm is not None and starts:
                 self.warm.started(who, track, at)
-            await send_stream(
-                receive, send, result.status, result.headers, result.body, result.close
-            )
+            await send_stream(receive, send, result.status, result.headers, body, close)
 
         return reply
 
@@ -1966,6 +2076,19 @@ async def _first_bytes(response: httpx.Response, limit: int = _ERROR_BYTES) -> b
         if len(data) >= limit:
             break
     return data[:limit]
+
+
+def _span(status: int, headers: list[tuple[bytes, bytes]]) -> tuple[int, int | None] | None:
+    """The first and last byte of the file an answer sends (its Content-Range, else a whole
+    file's Content-Length); None when it does not tell."""
+    told = {k.lower(): v.decode("latin-1") for k, v in headers}
+    if status == 206:
+        found = re.fullmatch(r"bytes (\d+)-(\d+)/\d+", told.get(b"content-range", "").strip())
+        return (int(found.group(1)), int(found.group(2))) if found else None
+    length = told.get(b"content-length", "")
+    if not length:
+        return (0, None)  # (a whole file of a size not told: its end is the answer's)
+    return (0, int(length) - 1) if length.isdigit() and int(length) > 0 else None
 
 
 def _subsonic_error(body: bytes) -> bool:

@@ -3,6 +3,7 @@ first, then a client's other requests, then Shijhon's own background work."""
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -142,7 +143,9 @@ def test_a_probe_or_a_later_range_of_a_song_never_played_is_no_play() -> None:
 
     def call(method: str, range_header: str | None = None) -> Any:
         headers = [(b"range", range_header.encode())] if range_header else []
-        return SimpleNamespace(http_method=method, headers=headers)
+        return SimpleNamespace(
+            http_method=method, headers=headers, arrived=time.monotonic(), noted=None
+        )
 
     assert interceptor._playing(call("GET"), who, song) is True  # a play at byte zero
     assert interceptor._playing(call("HEAD"), who, song) is False

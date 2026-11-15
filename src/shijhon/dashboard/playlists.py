@@ -116,6 +116,13 @@ class Pages:
         services = self.dashboard.services
         return bool(services and services.catalog and services.radio and services.radio.enabled)
 
+    @property
+    def listening(self) -> bool:
+        """Whether ListenBrainz is asked too (it needs no key)."""
+        services = self.dashboard.services
+        listening = getattr(services, "listenbrainz", None)
+        return bool(listening and listening.on)
+
     async def owned_connection(self, session: Session) -> Connection:
         connection = await self.service.connection(session.user_id)
         if not session.user_id or connection.user_id != session.user_id:
@@ -278,6 +285,7 @@ class Pages:
             ),
             # The key also answers the radio of catalog items, while that is on.
             radio=self.radio,
+            listening=self.listening,
             ai_mode=(
                 "shared"
                 if connection and connection.use_shared_ai

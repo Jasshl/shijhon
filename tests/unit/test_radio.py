@@ -28,6 +28,7 @@ class Discovery:
     def __init__(self, lastfm: FakeLastFm, pace: AsyncLimiter | None = None) -> None:
         self.http = httpx.AsyncClient(transport=lastfm.transport())
         self.pace = pace or AsyncLimiter(100, 1)
+        self.listenbrainz = None  # (Last.fm alone here: tests/unit/test_listenbrainz.py)
 
 
 def similarity(lastfm: FakeLastFm, pace: AsyncLimiter | None = None) -> Similarity:
@@ -43,7 +44,7 @@ def test_similar_songs_are_asked_for_by_artist_and_title_and_nothing_else() -> N
             ("Otto Vance", "Harbor Lights"),
         ]
         asking = similarity(lastfm)
-        found = await asking.tracks(SECRET, "Ana Brandt", "Paper Boats", 50)
+        found = (await asking.tracks(SECRET, [("Ana Brandt", "Paper Boats")], 50)).items
         assert found == [("Ilse Marek", "Low Tide"), ("Otto Vance", "Harbor Lights")]
         assert lastfm.requests == [
             {
@@ -57,8 +58,8 @@ def test_similar_songs_are_asked_for_by_artist_and_title_and_nothing_else() -> N
             }
         ]
         # A song Last.fm does not know has no similar songs: that is an answer.
-        assert await asking.tracks(SECRET, "Ana Brandt", "Unheard", 50) == []
-        assert await asking.tracks(SECRET, "Ana Brandt", "Paper Boats", 1) == found[:1]
+        assert (await asking.tracks(SECRET, [("Ana Brandt", "Unheard")], 50)).items == []
+        assert (await asking.tracks(SECRET, [("Ana Brandt", "Paper Boats")], 1)).items == found[:1]
         assert asking.requests == 3
 
     anyio.run(main)
@@ -69,7 +70,10 @@ def test_similar_artists_are_asked_for_by_name() -> None:
         lastfm = FakeLastFm()
         lastfm.artists["Ana Brandt"] = ["Ilse Marek", "Otto Vance", "Ilse Marek"]
         asking = similarity(lastfm)
-        assert await asking.artists(SECRET, "Ana Brandt", 15) == ["Ilse Marek", "Otto Vance"]
+        assert (await asking.artists(SECRET, "Ana Brandt", 15)).items == [
+            "Ilse Marek",
+            "Otto Vance",
+        ]
         assert lastfm.requests[0] == {
             "api_key": KEY,
             "method": "artist.getSimilar",
@@ -78,7 +82,7 @@ def test_similar_artists_are_asked_for_by_name() -> None:
             "artist": "Ana Brandt",
             "limit": "15",
         }
-        assert await asking.artists(SECRET, "Nobody Heard", 15) == []
+        assert (await asking.artists(SECRET, "Nobody Heard", 15)).items == []
 
     anyio.run(main)
 
@@ -106,7 +110,9 @@ def test_the_shapes_lastfm_answers_in(answer: dict[str, Any], expected: list[Any
     async def main() -> None:
         lastfm = FakeLastFm()
         lastfm.body = json.dumps(answer).encode()
-        assert await similarity(lastfm).tracks(SECRET, "Ana Brandt", "Paper Boats", 50) == expected
+        assert (
+            await similarity(lastfm).tracks(SECRET, [("Ana Brandt", "Paper Boats")], 50)
+        ).items == expected
 
     anyio.run(main)
 
@@ -126,7 +132,7 @@ def test_an_answer_that_is_none_is_unavailable_never_an_empty_list(body: bytes) 
         lastfm = FakeLastFm()
         lastfm.body = body
         with pytest.raises(SimilarUnavailable):
-            await similarity(lastfm).tracks(SECRET, "Ana Brandt", "Paper Boats", 50)
+            await similarity(lastfm).tracks(SECRET, [("Ana Brandt", "Paper Boats")], 50)
         with pytest.raises(SimilarUnavailable):
             await similarity(lastfm).artists(SECRET, "Ana Brandt", 15)
 
@@ -139,11 +145,11 @@ def test_a_failing_or_slow_lastfm_is_unavailable(monkeypatch: pytest.MonkeyPatch
         lastfm.tracks[("Ana Brandt", "Paper Boats")] = [("Ilse Marek", "Low Tide")]
         lastfm.status = 503
         with pytest.raises(SimilarUnavailable):
-            await similarity(lastfm).tracks(SECRET, "Ana Brandt", "Paper Boats", 50)
+            await similarity(lastfm).tracks(SECRET, [("Ana Brandt", "Paper Boats")], 50)
         # An error status is no answer, whatever its body says.
         lastfm.body = b'{"similartracks": {"track": []}, "similarartists": {"artist": []}}'
         with pytest.raises(SimilarUnavailable):
-            await similarity(lastfm).tracks(SECRET, "Ana Brandt", "Paper Boats", 50)
+            await similarity(lastfm).tracks(SECRET, [("Ana Brandt", "Paper Boats")], 50)
         with pytest.raises(SimilarUnavailable):
             await similarity(lastfm).artists(SECRET, "Ana Brandt", 15)
         lastfm.body = None
@@ -151,7 +157,7 @@ def test_a_failing_or_slow_lastfm_is_unavailable(monkeypatch: pytest.MonkeyPatch
         monkeypatch.setattr(similar, "SIMILAR_SECONDS", 0.2)
         started = anyio.current_time()
         with pytest.raises(SimilarUnavailable):
-            await similarity(lastfm).tracks(SECRET, "Ana Brandt", "Paper Boats", 50)
+            await similarity(lastfm).tracks(SECRET, [("Ana Brandt", "Paper Boats")], 50)
         assert anyio.current_time() - started < 2.0
 
         async def unreachable(request: httpx.Request) -> httpx.Response:
