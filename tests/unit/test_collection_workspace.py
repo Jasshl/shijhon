@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qsl
@@ -1465,3 +1466,65 @@ async def test_deeply_nested_selection_shows_the_collection_error(workspace, dep
     )
     assert response.status_code == 200
     assert "Select rows and try again." in response.text
+
+
+async def test_the_page_says_the_library_is_prepared_by_itself_or_what_is_wrong(tmp_path):
+    """With Shijhon's service account preparing the library, the page shows that it is
+    being prepared, or the reason it cannot be - never that someone must sign in - and
+    Refresh music needs no new sign-in."""
+    from html import unescape
+    from unittest.mock import AsyncMock
+
+    from shijhon.access import Principal
+
+    store = await Store.open(tmp_path / "state.db")
+    service = Collection(store, Access())
+    await Origins(store).initialize_legacy("1")
+    dashboard = Dashboard(service)
+    principal = Principal("one", "Listener", False, frozenset({1}))
+    requested = []
+    refresher = SimpleNamespace(
+        running=False,
+        automatic=True,
+        problem="",
+        reader=SimpleNamespace(
+            has_bearer=lambda owner: False, token_for=AsyncMock(return_value=None)
+        ),
+        requested=lambda: requested.append(True) or True,
+    )
+    dashboard.services.collection_refresh = refresher
+    original = dashboard._personal_page
+
+    def with_principal(handler, form_reader=None, cache_identity=False):
+        async def handled(request, session):
+            return await handler(request, replace(session, principal=principal))
+
+        return original(handled, form_reader, cache_identity)
+
+    dashboard._personal_page = with_principal
+    app = Starlette(routes=[Mount("/shijhon", routes=Pages(dashboard).routes())])
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test"
+        ) as client:
+            page = await client.get("/shijhon/collection")
+            assert "Preparing your library. Your music appears here and in your apps" in page.text
+            assert "data-source-progress" in page.text
+            assert "Choose Refresh music to prepare" not in page.text
+            refresher.problem = "Shijhon's service account could not sign in to Navidrome."
+            page = await client.get("/shijhon/collection")
+            assert "Shijhon's service account could not sign in to Navidrome." in unescape(
+                page.text
+            )
+            assert "data-source-progress" not in page.text
+            # With a snapshot the problem is said too: the last one is used meanwhile.
+            await service.refresh("one", "1")
+            page = await client.get("/shijhon/collection")
+            assert "could not sign in to Navidrome. Until then" in unescape(page.text)
+            refreshed = await client.post(
+                "/shijhon/collection", data={"action": "refresh", "profile_id": "all"}
+            )
+            assert refreshed.status_code == 303 and requested == [True]
+            assert "sign-in" not in refreshed.headers["location"]
+    finally:
+        await store.close()

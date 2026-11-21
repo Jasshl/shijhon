@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.10.0
+
+- Music apps get your library right after installing or starting Shijhon, with nobody
+  signing in to the dashboard first. Before, every app's library lists answered "Sign in
+  once…" until an administrator signed in to Collection, which after a takeover of a
+  Navidrome a household already uses stopped everyone's apps. Shijhon now reads the library
+  with its own Navidrome account when it starts, after Navidrome's first scan and after the
+  library changes, and apps answer that the library is being prepared only while the very
+  first read runs. What each account may see, and its own choice of music, are unchanged.
+  Accounts that may also read Navidrome's other libraries get those the same way, limited
+  to the libraries Navidrome lets them read. Music added to the folder reaches apps by
+  itself, usually about a minute after Navidrome has scanned it, and **Refresh music**
+  shows it at once without asking you to sign in again. When Shijhon's Navidrome account
+  cannot read the library (a wrong password, or no longer an admin), the Collection page
+  says so, and apps keep the music they had. Shijhon's log has a line for each read of the
+  library, with its reason and how long it took.
+- The Docker setup can put Shijhon in front of a Navidrome you already run, as the NixOS
+  module does with `navidrome.manage = false`. `setup.sh` asks whether to set up a new
+  Navidrome or use a running one; for a running one it asks for its address and an admin
+  account, creates Shijhon's own account with it and starts Shijhon without the bundled
+  Navidrome. The admin password is never stored. The deployment guide's section "In front
+  of a Navidrome you already run" says what to change on your Navidrome (the address it
+  trusts, the music folder they share) and replaces the steps that copied Navidrome's
+  database into a new one.
+- `setup.sh` picks a network range for the Docker containers that is free on your machine
+  and saves it in `.env` as `SHIJHON_NETWORK`, instead of always using 172.30.99.0/24,
+  which failed with "Pool overlaps" where that range was taken. If you changed the range in
+  `compose.yaml` by hand, set `SHIJHON_NETWORK` in `.env` instead.
+- Each Docker installation builds its own image, named after its Compose project, so a
+  second installation on the same machine no longer replaces the image of the first. The
+  default project keeps `shijhon:local`. Run a second installation's setup as
+  `COMPOSE_PROJECT_NAME=name ./setup.sh`: the name is saved in its `.env`, so later Compose
+  commands in its folder act on it.
+- Diagnostics shows a play of a song's own file, for example an MP3 below your minimum
+  quality that no add-on had, as played from its file, not as "No audio".
+- Setup and documentation fixes: `setup.sh`'s last message names the account you just
+  created, the adapter question gives an example, and the NixOS guide gives the right
+  status command and port for a Navidrome you run yourself and says that `systemctl status`
+  shows Shijhon active a little before it answers.
+
 ## 0.9.0
 
 - ListenBrainz is a second source of similar songs and artists next to Last.fm, and it

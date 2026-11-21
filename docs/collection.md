@@ -22,11 +22,14 @@ you left them, plus or minus what you add to or remove from All itself. Use **Cr
 custom library** beside the picker to make a named selection that changes only when you
 change it.
 
-Sign in to **Collection** once to prepare the first library view. This starts automatically
-using your own access. Progress updates while you wait; the page shows your music when
-ready. Choose **More → Open music** to continue to the native website. For a large library,
-finish this preparation before opening a music app. The completed view survives restarts.
-**More → Refresh music** updates the available music and may ask you to sign in again.
+Shijhon prepares the library view by itself when it starts, using its own service
+account, so apps show your music without anyone signing in first. While the first
+preparation runs, apps' library lists answer that the library is being prepared (album
+and artist pages already open); for a large library this can take a few minutes. The
+Collection page shows its progress and your music when it is ready. If the service
+account cannot prepare it (a wrong password, for example), apps and the page say what is
+wrong. The completed view survives restarts. Choose **More → Open music** to continue to
+the native website. **More → Refresh music** reads new and changed songs at once.
 
 Your imports belong to your Original imported library and All - also songs the library
 already had when you imported them, which your import is linked to, catalog songs
@@ -206,9 +209,13 @@ library, once each; playing or opening one uses the library's copy.
   playlist, an import or a first play adds) enter the lists from your apps' own
   requests: Shijhon looks for them at most every ten seconds while apps read the library
   and adds them at most once a minute - so a large addition comes in as one - usually
-  within a minute; apps keep getting their lists meanwhile. **Refresh music**, signing in to Shijhon's pages and the native
-  website (at most every five minutes) refresh the whole library, also music added to
-  the folder outside Shijhon.
+  within a minute; apps keep getting their lists meanwhile.
+- Music you add to the music folder, change or delete shows in your apps by itself,
+  usually within a minute or two of Navidrome finding it: Shijhon reads the library again
+  once the changes have settled, and at least every five minutes while they go on. On a
+  large library it waits a little longer between two reads. **Refresh music** reads it
+  at once. Shijhon also reads it after a start when the library changed meanwhile, and
+  what it adds itself at least every hour.
 
 The direct row action explicitly chooses the whole current album or artist, in the
 music Show lists. Every library can be changed, also Original imported library, and also
@@ -262,9 +269,10 @@ has separate retention settings.
 
 ## Refresh music
 
-The page reads a local index of music the signed-in account can access. **Refresh music** updates
-it in bounded background pages. Browsing continues on the last complete index if a refresh
-is interrupted. Personal library choices survive metadata cleanup and adding the music
+The page reads a local index of the library's music, which Shijhon keeps current by itself
+(above); each account sees in it what Navidrome lets that account access. **Refresh music**
+updates it at once, in bounded background pages. Browsing continues on the last complete
+index if a refresh is interrupted. Personal library choices survive metadata cleanup and adding the music
 back. Original and catalog origin are tracked per song, including partly filled albums;
 downloading a catalog track does not turn it into an original import.
 

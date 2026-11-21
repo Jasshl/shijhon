@@ -193,25 +193,27 @@
   <div class="group-head">
     <h2 id="starts-title">Recent starts</h2>
     <p class="group-meta">Since Shijhon started, newest first</p>
-    <p class="group-help">How each song's audio was found: the add-ons asked, when each later step joined, what each answered and how long it took. Use it to arrange the plan on <a href="{{ prefix }}/addons#plan">Add-ons</a>.</p>
+    <p class="group-help">How each song's audio was found: the add-ons asked, when each later step joined, what each answered and how long it took. Use it to arrange the plan on <a href="{{ prefix }}/addons#plan">Add-ons</a>. A song whose file in the library is below the listener's minimum quality is asked for at the add-ons first; when they have nothing for it, its file plays.</p>
   </div>
 {% if starts %}
   <ol class="starts">
 {% for start in starts %}
-    <li class="start{% if not start.served %} start-failed{% endif %}">
+    <li class="start{% if not start.served and not start.file %} start-failed{% endif %}">
       <details>
         <summary>
           <span class="start-time">{{ start.at|hm }}</span>
           <span class="start-song"><span class="start-title">{{ start.title }}</span> <span class="muted">{{ start.artist }}</span></span>
           <span class="start-purpose muted">{{ start.purpose }}</span>
-          <span class="start-result">{% if start.served %}{{ start.served }} after {{ start.seconds|round(1)|number }} s{% else %}<span class="status-error">No audio after {{ start.seconds|round(1)|number }} s</span>{% endif %}</span>
+          <span class="start-result">{% if start.served %}{{ start.served }} after {{ start.seconds|round(1)|number }} s{% elif start.file %}From its file after {{ start.seconds|round(1)|number }} s{% else %}<span class="status-error">No audio after {{ start.seconds|round(1)|number }} s</span>{% endif %}</span>
         </summary>
 {% if start.steps or start.ended %}
         <ol class="start-steps">
 {% for step in start.steps %}
           <li>{{ step }}</li>
 {% endfor %}
-{% if start.ended %}
+{% if start.ended and start.file %}
+          <li>The add-ons had no audio for it ({{ start.ended }}), so its file in the library played.</li>
+{% elif start.ended %}
           <li class="status-error">{{ start.ended }}</li>
 {% endif %}
         </ol>

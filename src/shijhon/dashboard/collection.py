@@ -183,12 +183,12 @@ class Pages:
         page_adjusted = False
         profile: dict[str, Any] = {"id": "", "selection_id": "all", "name": "All", "builtin": True}
         active = profile
+        refresher = getattr(self.dashboard.services, "collection_refresh", None)
         try:
             active = await self.service.profile(session.user_id)
             profile = await self.service.profile(session.user_id, profile_id)
             profiles = await self.service.list_profiles(session.user_id)
             state = await self.service.index_state(session.user_id, self.library)
-            refresher = getattr(self.dashboard.services, "collection_refresh", None)
             if refresher is not None and refresher.running:
                 state = replace(state, state="indexing")
             reasons = getattr(self.dashboard.services, "reasons", None)
@@ -276,6 +276,10 @@ class Pages:
             listing=listing,
             listing_ready=listing_ready,
             index_state=state,
+            # The library is prepared without a sign-in (Shijhon's service account), and
+            # why it cannot be ("" while nothing is known against it).
+            source_automatic=bool(refresher is not None and refresher.automatic),
+            source_problem=refresher.problem if refresher is not None else "",
             op=op,
             recent=recent,
             error=error,
@@ -411,6 +415,9 @@ class Pages:
                 await service.actor(session.user_id, library)
                 refresher = getattr(self.dashboard.services, "collection_refresh", None)
                 if refresher is not None and session.principal is not None:
+                    if refresher.requested():
+                        # (with Shijhon's service account: no new sign-in needed)
+                        return self.see(query, profile or "all", layout)
                     token = await refresher.reader.token_for(session.principal)
                     if token is None:
                         from shijhon.dashboard.app import PATH

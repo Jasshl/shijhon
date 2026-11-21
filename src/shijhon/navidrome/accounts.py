@@ -38,6 +38,15 @@ class Unsettled(AccountsError):
     for a moment, an answer could not be read): tried again until the wait ends."""
 
 
+class RateLimited(Unsettled):
+    """Navidrome refuses logins for a moment: 5 within 20 seconds from one address. Tried
+    again once that window has passed, since each try counts as further attempts."""
+
+
+# How long a try waits after Navidrome refused logins (its window, and a second more).
+LOGIN_WINDOW = 21.0
+
+
 @dataclass(frozen=True)
 class Names:
     """How the messages name what the person sets: the command line's words by default;
@@ -76,11 +85,27 @@ def ensure(
         )
     deadline = time.monotonic() + wait
     made = [False]  # (a password written by an earlier try is this run's too)
+    # Whether the person's account created Shijhon's (in this or an earlier try): it is then
+    # not reported as an account that was kept.
+    through = [False]
+    # The person's password, read once: it can come on a pipe, which a later try finds empty.
+    read: dict[Path, str] = {}
     with connect.client(socket, base_url=url.rstrip("/"), timeout=10) as http:
         while True:
             try:
                 _wait(http, deadline, wait)
-                _ensure(http, user, password_file, account, account_password_file, say, names, made)
+                _ensure(
+                    http,
+                    user,
+                    password_file,
+                    account,
+                    account_password_file,
+                    say,
+                    names,
+                    made,
+                    read,
+                    through,
+                )
                 return
             except httpx.HTTPError:
                 problem: AccountsError = Unsettled(
@@ -90,7 +115,8 @@ def ensure(
                 problem = exc
             if time.monotonic() > deadline:
                 raise problem
-            time.sleep(2)
+            pause = LOGIN_WINDOW if isinstance(problem, RateLimited) else 2.0
+            time.sleep(min(pause, max(deadline - time.monotonic(), 0.0) + 2.0))
 
 
 def _ensure(
@@ -102,6 +128,8 @@ def _ensure(
     say: Callable[[str], None],
     names: Names,
     made: list[bool],
+    read: dict[Path, str],
+    through: list[bool],
 ) -> None:
     shown = names.password_file or str(password_file)
     if _new_password(password_file):
@@ -121,7 +149,7 @@ def _ensure(
             if token is None:
                 try:
                     token = _through(
-                        http, user, password, account, account_password_file, shown, names
+                        http, user, password, account, account_password_file, shown, names, read
                     )
                 except Unsettled:
                     raise  # (tried again with the same password)
@@ -129,6 +157,7 @@ def _ensure(
                     if made[0]:  # (a password made in this run fits nothing)
                         password_file.unlink(missing_ok=True)
                     raise
+                through[0] = True
                 say(
                     f'Navidrome\'s account "{user}" created for Shijhon, an admin, by your'
                     f' account "{account}"'
@@ -156,7 +185,8 @@ def _ensure(
             raise AccountsError(f"Navidrome has no account for a person yet: set {names.account}")
         return
     if account.casefold() in found:
-        say(f'Navidrome has the account "{account}": kept, with the password it has')
+        if not through[0]:
+            say(f'Navidrome has the account "{account}": kept, with the password it has')
         return
     if account_password_file is None:
         raise AccountsError(f'creating the account "{account}" needs {names.account_password}')
@@ -165,6 +195,7 @@ def _ensure(
         f'Navidrome has no account "{account}" yet, and the password file that creates it'
         f" ({names.account_password})",
         strip=False,
+        once=read,
     )
     body = {"userName": account, "name": account, "password": own, "isAdmin": True}
     made_own = http.post("/api/user", headers=headers, json=body)
@@ -186,6 +217,7 @@ def _through(
     account_password_file: Path | None,
     shown: str,
     names: Names,
+    read: dict[Path, str],
 ) -> str:
     """Create Shijhon's account ``user`` in a Navidrome that has accounts, signed in as the
     person's own admin account: that account's token. Raises :class:`AccountsError` with
@@ -205,10 +237,11 @@ def _through(
         account_password_file,
         f'the password file of "{account}" ({names.account_password})',
         strip=False,
+        once=read,
     )
     answer = http.post("/auth/login", json={"username": account, "password": own})
     if answer.status_code == 429:
-        raise Unsettled("Navidrome refuses logins for a moment (too many attempts)")
+        raise RateLimited("Navidrome refuses logins for a moment (too many attempts)")
     if answer.status_code in (401, 403):
         raise AccountsError(
             f'{has} one of them, and "{account}" does not sign in with the password in'
@@ -279,7 +312,10 @@ def _new_password(path: Path) -> bool:
     return True
 
 
-def _read(path: Path, what: str, *, strip: bool = True) -> str:
+def _read(path: Path, what: str, *, strip: bool = True, once: dict[Path, str] | None = None) -> str:
+    """A password file's password; with ``once``, each file is read only the first time."""
+    if once is not None and path in once:
+        return once[path]
     try:
         text = path.read_text()
     except OSError as exc:
@@ -291,6 +327,8 @@ def _read(path: Path, what: str, *, strip: bool = True) -> str:
     text = text.strip() if strip else text.rstrip("\r\n")
     if not text:
         raise AccountsError(f"{what} is empty")
+    if once is not None:
+        once[path] = text
     return text
 
 
@@ -300,7 +338,7 @@ def _login(http: httpx.Client, user: str, password: str) -> str | None:
     if answer.status_code == 200:
         return _token(answer)
     if answer.status_code == 429:
-        raise Unsettled("Navidrome refuses logins for a moment (too many attempts)")
+        raise RateLimited("Navidrome refuses logins for a moment (too many attempts)")
     if answer.status_code in (401, 403):
         return None
     raise Unsettled(f"Navidrome answered {answer.status_code} at its login")

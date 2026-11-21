@@ -1,0 +1,52 @@
+# Shijhon in front of a Navidrome you already run, in place of a Navidrome of its own
+# (docs/deployment.md, "In front of a Navidrome you already run"). setup.sh sets it up. By
+# hand, in .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.existing-navidrome.yaml
+#
+# and [navidrome] url in config/shijhon.toml is your Navidrome's address.
+#
+# Shijhon's network is one that neither Compose project owns, so that your Navidrome can
+# join it: <project>-navidrome (shijhon-navidrome unless COMPOSE_PROJECT_NAME is set), made
+# once with SHIJHON_NETWORK's range:
+#
+#   docker network create --subnet 172.30.99.0/24 --ip-range 172.30.99.128/25 shijhon-navidrome
+#
+# For the usage export, name your Navidrome's data in .env, as a folder
+# (EXISTING_NAVIDROME_DATA) or a Docker volume (EXISTING_NAVIDROME_VOLUME), and add
+# COMPOSE_PROFILES=usage-export.
+services:
+  navidrome:
+    profiles: [bundled-navidrome]  # never started: yours is used
+
+  data-owner:
+    # Your Navidrome's data is not this one's to change: only Shijhon's own volumes.
+    tmpfs: !override [/music, /data]
+    volumes: !override
+      - ${SHIJHON_DATA:-shijhon-data}:/shijhon-data
+      - ${USAGE_EXPORT_DATA:-usage-export}:/usage
+
+  shijhon:
+    depends_on: !override
+      data-owner: {condition: service_completed_successfully}
+
+  usage-export:
+    profiles: [usage-export]
+    depends_on: !override
+      data-owner: {condition: service_completed_successfully}
+    volumes: !override
+      - ${EXISTING_NAVIDROME_DATA:-existing-navidrome-data}:/navidrome-data:ro
+      - ${USAGE_EXPORT_DATA:-usage-export}:/usage
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME:-shijhon}-navidrome
+    external: true
+    ipam: !reset {}
+
+volumes:
+  # Your Navidrome's Docker volume, read by the usage export alone (read-only), when
+  # EXISTING_NAVIDROME_VOLUME names it.
+  existing-navidrome-data:
+    external: true
+    name: ${EXISTING_NAVIDROME_VOLUME:-set-EXISTING_NAVIDROME_VOLUME-or-EXISTING_NAVIDROME_DATA}

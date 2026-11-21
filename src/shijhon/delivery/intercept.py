@@ -72,6 +72,7 @@ from shijhon.delivery.playback import (
     PlayFile,
     Track,
     _Changed,
+    file_plays,
 )
 from shijhon.delivery.quality_gate import LibrarySong, QualityGate, refusal
 from shijhon.delivery.warm import WarmAhead
@@ -672,7 +673,8 @@ class Interceptor:
 
         wanted = requested_processing(call)
         if wanted is not None:
-            as_is = await self._as_is(call, ctx, track, who, wanted, start, accept=accept)
+            with file_plays():  # (none: the file plays, converted by Navidrome)
+                as_is = await self._as_is(call, ctx, track, who, wanted, start, accept=accept)
             if as_is.served:
                 played()
             return as_is.reply if as_is.reply is not None else fallback
@@ -680,7 +682,8 @@ class Interceptor:
             call, track, ctx.head, who, accept=accept, play=self._file_of(start)
         )
         try:
-            opened = await opening.open(Departure())
+            with file_plays():  # (Diagnostics: no audio there is a play of its file)
+                opened = await opening.open(Departure())
         except (NoSource, PinBroken) as exc:
             log.info("%r: no audio at the add-ons that does (%s); its file plays", track.title, exc)
             return fallback

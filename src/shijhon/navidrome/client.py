@@ -42,6 +42,12 @@ class NavidromeError(RuntimeError):
         self.unsent = unsent
 
 
+class ServiceRefused(NavidromeError):
+    """Navidrome refused the service account itself: a wrong name or password (401 or 403
+    at sign-in), or an account that is no admin. Asking again changes nothing until the
+    configuration or the account is put right."""
+
+
 class NavidromeService:
     def __init__(
         self,
@@ -128,16 +134,32 @@ class NavidromeService:
                     raise NavidromeError(
                         f"service login: {type(exc).__name__}", unsent=True
                     ) from None
+                if response.status_code in (401, 403):
+                    raise ServiceRefused(
+                        f"service login failed ({response.status_code})",
+                        status=response.status_code,
+                        unsent=True,
+                    )
                 if response.status_code != 200:
                     raise NavidromeError(
                         f"service login failed ({response.status_code})", unsent=True
                     )
                 body = response.json()
                 if not body.get("isAdmin"):
-                    raise NavidromeError("the Shijhon service account must be a Navidrome admin")
+                    raise ServiceRefused("the Shijhon service account must be a Navidrome admin")
                 self._jwt = body["token"]
             assert self._jwt is not None
             return self._jwt
+
+    async def sign_in(self) -> None:
+        """Make sure the service account is signed in to Navidrome's native API (a sign-in
+        only when none is at hand). Raises ``ServiceRefused`` when Navidrome refuses it,
+        else ``NavidromeError``."""
+        await self._login()
+
+    def forget_sign_in(self) -> None:
+        """The next native call signs in anew (and checks the account again)."""
+        self._jwt = None
 
     async def native(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         """Navidrome's native API as the service account. ``path`` must already be quoted

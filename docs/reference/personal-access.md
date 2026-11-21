@@ -30,10 +30,13 @@ their string IDs and intersect these grants with collection predicates before or
 counting or pagination. This module does not change collection membership or filter
 music. Saved Subsonic authorization supports owner actions. Structural collection
 scans use the caller's native bearer from a successful password sign-in or verified
-native request, with stable ID ordering and a physical-library constraint. These
-bearers stay in bounded memory for at most one hour, never in SQLite or logs; a restart
-drops them. The last complete structural index and personal selections survive.
-Service-account credentials never fetch collection song pages or personal artwork.
+native request, or Shijhon's service account (`ServiceLibrary`) so that the library is
+prepared with nobody signing in, always with stable ID ordering and a physical-library
+constraint, and keeping structural fields only: whose reads fill the shared index changes
+nothing in it. Caller bearers stay in bounded memory for at most one hour, never in
+SQLite or logs; a restart drops them. The last complete structural index and personal
+selections survive. Service-account credentials never read an account's favorites,
+choices, imports or personal artwork.
 
 Dashboard adapters use `Dashboard._personal_page(handler, *, form_reader=None)` for
 own-account pages. The callback receives `Session.user_id` and the freshly checked

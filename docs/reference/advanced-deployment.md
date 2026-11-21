@@ -8,7 +8,9 @@ docker buildx build --platform linux/amd64 --load -t shijhon:amd64 .   # for ano
 ```
 
 The image runs as a non-root user, needs no capabilities and works with a read-only root
-filesystem and a temporary `/tmp`. The Compose file builds it as `shijhon:local`.
+filesystem and a temporary `/tmp`. The Compose file builds it with the Compose project's
+name, as `shijhon:local` by default, or `<name>:local` with another `COMPOSE_PROJECT_NAME`,
+so that each installation on a machine has its own image.
 
 ## Catalog adapters in detail
 
@@ -34,7 +36,8 @@ service's build:
   records keep the address: give none that holds a password or a token, and install such
   an adapter from its wheel.
 - Docker reuses the step while the line stays the same. When what an address serves has
-  changed, `docker compose build --no-cache shijhon`, then `docker compose up -d`.
+  changed, run `docker compose build --no-cache shijhon`, then `docker compose up -d`, in
+  `packaging/`.
 
 ## Client addresses
 
@@ -45,8 +48,10 @@ address from Shijhon, and Shijhon from the proxy. Where it does not, all clients
 one: a device with an old password locks that user's other devices.
 
 - **Navidrome trusts Shijhon, and only Shijhon**: `ND_EXTAUTH_TRUSTEDSOURCES` holds
-  Shijhon's address as a network, `172.30.99.10/32` in the Compose file (a bare address
-  matches nothing; no space after a comma). With both on one host over loopback it is
+  Shijhon's address as a network, `.10` of `SHIJHON_NETWORK` in the Compose file
+  (`172.30.99.10/32` by default; a bare address matches nothing; no space after a comma).
+  For a Navidrome you run yourself, the address depends on where it runs
+  ([deployment](../deployment.md#your-navidrome-trusts-shijhon)). With both on one host over loopback it is
   `127.0.0.1/32`, and every local process is then trusted, so keep Navidrome's port to
   yourself. Or put Navidrome on a Unix socket that only Shijhon can open (Navidrome's
   `Address = "unix:<path>"`, Shijhon's `[navidrome] socket`) and trust only it with
@@ -91,7 +96,8 @@ Cleanup page says why.
 
 Instead of the `usage-export` service (not both for one file), a timer on the host can run
 one export a minute. Here the data is in folders (`NAVIDROME_DATA=/srv/data/navidrome`,
-`USAGE_EXPORT_DATA=/srv/data/usage`):
+`USAGE_EXPORT_DATA=/srv/data/usage`), the containers run as 1000:1000 (your `PUID:PGID`)
+and the image is `shijhon:local` (`<name>:local` with another `COMPOSE_PROJECT_NAME`):
 
 ```ini
 # /etc/systemd/system/shijhon-usage-export.service
@@ -149,15 +155,22 @@ host folder on Docker Desktop, nothing refuses a second writer.
 
 ## Moving data into a volume
 
-From a folder named in `.env`: run `docker compose down`, take the folder's line out of
-`.env`, then, with the volume's name and your `PUID:PGID`:
+From a folder named in `.env`: run `docker compose down` in `packaging/`, take the
+folder's line out of `.env`, then, also in `packaging/`, copy the folder into the volume
+and give it to your `PUID:PGID` (on macOS usually `501:20`, which `.env` has). The volume
+is named for the Compose project, `shijhon_navidrome-data` by default; `docker volume ls`
+lists them. `docker compose up --no-start` creates the volumes and containers without
+starting them (and builds the image if there is none yet). For Navidrome's data:
 
 ```sh
 docker compose up --no-start &&
 docker run --rm -v shijhon_navidrome-data:/data -v /path/to/folder:/from:ro alpine \
-    sh -c 'cp -a /from/. /data/ && chown -R 1000:1000 /data' &&
+    sh -c 'cp -a /from/. /data/ && chown -R 501:20 /data' &&
 docker compose up -d
 ```
+
+Put your volume's name in place of `shijhon_navidrome-data`, and the `PUID:PGID` of `.env`
+in place of `501:20`.
 
 ## Restoring a backup
 
@@ -217,7 +230,8 @@ published since it was taken; otherwise later work is lost or no longer matches 
 For a snapshot that means going back soon after the upgrade.
 
 An archive of the whole volume, made with Shijhon stopped as earlier versions of the
-[backup guide](../deployment.md#backups) described, takes the place of step 2:
+[backup guide](../deployment.md#backups) described, takes the place of step 2. The volume
+is `shijhon_shijhon-data`, or starts with your `COMPOSE_PROJECT_NAME`:
 
 ```sh
 docker run --rm -v shijhon_shijhon-data:/data -v ~/shijhon-backups:/backup:ro alpine \
@@ -227,13 +241,14 @@ docker run --rm -v shijhon_shijhon-data:/data -v ~/shijhon-backups:/backup:ro al
 
 If it fails, start nothing: an unreadable archive leaves the volume as it was, a failure
 while unpacking leaves part of it. Into an installation with another `PUID:PGID`, add
-`&& chown -R <PUID>:<PGID> /data` at the end of the quoted command.
+`&& chown -R <PUID>:<PGID> /data` at the end of the quoted command, with the two numbers
+from `.env`.
 
 ## Undoing automatic fills
 
 `shijhon fills-undo` lists the automatic fills the fill policy would not make now; with
 `--apply` it undoes those nobody ever used, by the cleanup's rules. It writes into the
-library, so it works only with Shijhon stopped:
+library, so it works only with Shijhon stopped. From `packaging/`:
 
 ```sh
 docker compose run --rm shijhon --config /config/shijhon.toml fills-undo   # the list, and its digest

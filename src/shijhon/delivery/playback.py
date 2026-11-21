@@ -359,9 +359,29 @@ class Routing:
     seconds: float
     steps: tuple[str, ...]
     ended: str = ""  # why it ended without audio
+    # The add-ons had no audio for it (why: ``ended``), so the song's own file in the
+    # library played: a song whose file is below the listener's minimum (``file_plays``).
+    file: bool = False
 
 
 _TRACE: ContextVar[Trace | None] = ContextVar("shijhon_routing_trace", default=None)
+# Set while a song whose own file plays when the add-ons have no audio for it is routed
+# (``file_plays``).
+_FILE_PLAYS: ContextVar[bool] = ContextVar("shijhon_file_plays", default=False)
+
+
+@contextlib.contextmanager
+def file_plays() -> Iterator[None]:
+    """Around the routing of a song whose own file in the library plays when the add-ons
+    have no audio for it (its file is below the listener's minimum): a routing that ends
+    without audio is noted for Diagnostics as played from its file, not as no audio."""
+    token = _FILE_PLAYS.set(True)
+    try:
+        yield
+    finally:
+        _FILE_PLAYS.reset(token)
+
+
 # A download-first fetch's routing: the sources it does not use (``Deliverer.open``'s
 # ``download``, ``not_for_downloads``), in their order - each with why, for its failures.
 _NOT_FOR_DOWNLOAD: ContextVar[tuple[tuple[int, str], ...]] = ContextVar(
@@ -1164,13 +1184,17 @@ class Deliverer:
             or ("; ".join(exc.reasons) if isinstance(exc, NoSource) else str(exc))
             or "no source to try"
         )
+        left = departure is not None and departure.at is not None
         if departure is not None and departure.at is not None:
             why = f"the client left after {departure.at - trace.started:.1f}s; then {why}"
+        # (A client that left got no file either: a start without audio, as it was.)
+        on_file = _FILE_PLAYS.get() and not left
         if purpose != "seek":
-            self._noted(track, purpose, trace, "", elapsed, why)
+            self._noted(track, purpose, trace, "", elapsed, why, file=on_file)
         steps = "; ".join(trace.steps) or "no source was asked"
         log.info(
-            "no audio for %r (%s) after %.1fs: %s; %s",
+            "%s for %r (%s) after %.1fs: %s; %s",
+            "no audio at the add-ons" if on_file else "no audio",
             track.title,
             _PURPOSES.get(purpose, purpose),
             elapsed,
@@ -1179,13 +1203,21 @@ class Deliverer:
         )
 
     def _noted(
-        self, track: Track, purpose: str, trace: Trace, served: str, seconds: float, ended: str
+        self,
+        track: Track,
+        purpose: str,
+        trace: Trace,
+        served: str,
+        seconds: float,
+        ended: str,
+        *,
+        file: bool = False,
     ) -> None:
         """A routing at byte zero, kept for Diagnostics (its steps name no links)."""
         self.recent.append(
             Routing(
                 time.time() - seconds, track.title, track.artist, purpose, served, seconds,
-                tuple(trace.steps), ended,
+                tuple(trace.steps), ended, file,
             )
         )  # fmt: skip
 

@@ -1,5 +1,206 @@
 # Deployment
 
+Shijhon runs in front of a stock Navidrome that only Shijhon reaches.
+[quick-start.md](quick-start.md) sets up a new one with the Compose file and the example
+configuration in [`packaging/`](../packaging), and
+[below](#in-front-of-a-navidrome-you-already-run) Shijhon goes in front of a Navidrome you
+already run. [Advanced deployment](reference/advanced-deployment.md) has the rarer setups.
+
+On NixOS, [the NixOS service](nixos.md) sets up Navidrome and Shijhon together, also with
+a Navidrome you already run. [Its reference](reference/nixos.md) covers catalog adapters
+and moving from the Docker setup.
+
+## In front of a Navidrome you already run
+
+Shijhon can go in front of the Navidrome you run now, which keeps running as it is, with
+its accounts, IDs, playlists, favorites and play counts. Nothing is copied: Shijhon reaches
+your Navidrome over the network, Compose starts no Navidrome of its own, and you change two
+settings of yours.
+
+This needs Docker Compose 2.24.4 or newer (`docker compose version`). Run `./setup.sh` in
+the checkout and answer `running` to its first question. It then asks
+for the music folder your Navidrome scans, your Navidrome's address, an admin account of
+yours, your Navidrome's data for the usage export, and the port your apps connect to. The
+admin account is used once, to create Shijhon's own admin account, `shijhon`. Its password
+is not saved. The script makes Shijhon's Docker network, `<project>-navidrome`: that is
+`shijhon-navidrome`, or `<name>-navidrome` with another `COMPOSE_PROJECT_NAME`. Its range is
+one that nothing on the machine uses (`SHIJHON_NETWORK` in `packaging/.env`), and Shijhon's
+address there is always `.10`, for example `172.30.99.10`. Once the image is built, the
+script prints the changes your Navidrome needs, with the network's name and Shijhon's
+address, and at a terminal waits until you press Enter once your Navidrome has joined.
+Without a terminal it stops there, and the next run goes on. If Shijhon still can't reach
+your Navidrome, the script says so and offers to try again.
+
+The script writes `COMPOSE_FILE=compose.yaml:compose.existing-navidrome.yaml` into
+`packaging/.env`. The [second file](../packaging/compose.existing-navidrome.yaml) leaves out
+the Compose file's Navidrome and uses that network. Later Compose commands in `packaging/`
+use both files.
+
+### Your music folder
+
+Give the folder your Navidrome scans, as this machine has it: for a Navidrome in a
+container, the folder on the host that is mounted as its music folder, not a folder above
+or inside it. Shijhon creates its placeholder folder, `_shijhon`, in that folder, so
+Navidrome finds the files Shijhon writes inside its own library, at the path it has for
+it. Navidrome can keep the folder mounted read-only. Shijhon's container runs as `PUID:PGID`
+from `packaging/.env`, your user, which has to be able to read the music and write
+`_shijhon`.
+
+If your Navidrome has more than one library, Shijhon uses the first one. For another, set
+`library_id` under `[navidrome]` in `packaging/config/shijhon.toml` to its ID
+(`getMusicFolders` lists them) and restart Shijhon.
+
+### Your Navidrome trusts Shijhon
+
+Navidrome limits failed logins per client address. It learns each app's address from
+Shijhon only when it trusts the address it sees Shijhon at, its `ExtAuth.TrustedSources`
+(`ND_EXTAUTH_TRUSTEDSOURCES` in its environment). Without that, all apps count as one, and
+a device with an old password locks that person out on every other device for a while
+([client addresses](reference/advanced-deployment.md#client-addresses)). Trust only
+Shijhon's address, written as a network (`/32`) without spaces, and make sure apps can no
+longer reach Navidrome directly. Which address that is depends on where your Navidrome
+runs.
+
+**A Navidrome in a container on this machine**, in a Compose project of its own or started
+with `docker run`, joins Shijhon's network. There it sees Shijhon at Shijhon's own address,
+and Shijhon reaches it by its service or container name, for example
+`http://navidrome:4533`. In your Navidrome's Compose file, with the range and the network
+name the script printed in place of `172.30.99` and `shijhon-navidrome`:
+
+```yaml
+services:
+  navidrome:
+    environment:
+      ND_EXTAUTH_TRUSTEDSOURCES: 172.30.99.10/32
+    networks: [default, shijhon]
+    # Remove its "ports:" once your apps use Shijhon.
+networks:
+  shijhon:
+    name: shijhon-navidrome
+    external: true
+```
+
+Then run `docker compose up -d` in your Navidrome's folder. A container started with
+`docker run` joins with `docker network connect <project>-navidrome <its name>`, which lasts
+until the container is created again, and gets the setting with
+`-e ND_EXTAUTH_TRUSTEDSOURCES=172.30.99.10/32` when you create it.
+
+**A Navidrome on this machine outside Docker** is reached at
+`http://host.docker.internal:4533` (with its port). On Linux, which has not been tried yet,
+that name is the address of Docker's bridge, usually `172.17.0.1`. Navidrome then listens
+on every address (`ND_ADDRESS=0.0.0.0`), with a firewall that keeps its port from the
+network but lets Shijhon's range in, for example with ufw
+`sudo ufw allow from 172.30.99.0/24 to any port 4533 proto tcp`. It sees Shijhon at
+Shijhon's own address, `172.30.99.10/32` in the example. With Docker Desktop on a Mac,
+Navidrome can keep listening on `127.0.0.1`, and it sees Shijhon at `127.0.0.1`.
+Trusting `127.0.0.1/32` trusts every program on that computer, which can then sign in to
+Navidrome as anyone, so only do that where you trust them all.
+
+**A Navidrome on another machine** is reached at its address, for example
+`http://192.168.1.20:4533`. It sees Shijhon at this machine's address on your network, which
+is the one to trust; let only this machine reach Navidrome's port, with a firewall on
+Navidrome's machine. Shijhon also needs the same music files: share Navidrome's music folder
+with this machine (over NFS or SMB, for example), give the shared folder as the music folder,
+and let your user write `_shijhon` in it. Leave out the usage export, because a database
+shouldn't be read over a network share.
+
+If your Navidrome signs people in through a reverse proxy's header (`ExtAuth.UserHeader`
+or `ReverseProxyUserHeader`), see
+[sign-in by the reverse proxy](reference/advanced-deployment.md#sign-in-by-the-reverse-proxy).
+Your Navidrome must also meet [what Shijhon needs](#what-shijhon-needs-from-navidrome).
+
+### Moving your apps
+
+Your apps then connect to Shijhon, at the port you gave, with the same accounts. Add
+Shijhon as a **Subsonic** server ([connecting](quick-start.md#connecting)). Remove your
+Navidrome's published port, so that nothing reaches it except through Shijhon: apps that
+still connect to it directly would see Shijhon's placeholders there as silent songs. To give
+Shijhon the port your apps used, set `SHIJHON_PORT` in `packaging/.env` to it once
+Navidrome no longer uses it, and run `docker compose up -d` in `packaging/`. A reverse
+proxy that sent people to Navidrome now sends them to Shijhon instead
+([network and reverse proxy](#network-and-reverse-proxy)).
+
+### Taking Shijhon out again
+
+Stop Shijhon with `docker compose down` in `packaging/`. Your Navidrome still lists the
+songs Shijhon wrote into `_shijhon`, as silent files: delete that folder, let Navidrome
+scan, and remove the missing files in its web interface. Then take the network and
+`ND_EXTAUTH_TRUSTEDSOURCES` out of your Navidrome's settings and restart it, remove the
+network with `docker network rm <project>-navidrome`, and delete the `shijhon` account under
+**Users**.
+
+### The usage export with your Navidrome
+
+The cleanup needs [the usage export](#the-usage-export), which reads your Navidrome's
+database read-only. Give the script your Navidrome's data folder, the one mounted as its
+`/data` (it holds `navidrome.db`), or the name of its Docker volume (`docker volume ls`
+lists them). The export runs as `PUID:PGID` and needs to be able to read those files: the
+files of a Navidrome container that runs as root can be read by everyone, and so can those
+of one that runs as your user.
+
+Without it, Shijhon can't tell whether anyone used a catalog release it added: the cleanup
+doesn't run, and when an album is filled from another release, the earlier release's songs
+stay in the library. Everything else works. To add it later, add
+`EXISTING_NAVIDROME_DATA='/path'` (a folder) or `EXISTING_NAVIDROME_VOLUME=name` (a volume)
+and `COMPOSE_PROFILES=usage-export` to
+`packaging/.env`, uncomment `usage_export_path` under `[navidrome]` in
+`packaging/config/shijhon.toml`, and run `docker compose up -d` in `packaging/`.
+
+### By hand
+
+The same, from `packaging/`:
+
+1. Write `.env` and the configuration as in the quick start's
+   [steps by hand](quick-start.md#by-hand), steps 1 and 2, with `MUSIC_DIR` your Navidrome's
+   music folder, and add to `.env`:
+
+   ```dotenv
+   SHIJHON_NETWORK=172.30.99
+   COMPOSE_FILE=compose.yaml:compose.existing-navidrome.yaml
+   ```
+
+   In `config/shijhon.toml`, set `url` under `[navidrome]` to your Navidrome's address, and
+   for the usage export follow [the section above](#the-usage-export-with-your-navidrome),
+   or comment out `usage_export_path`.
+
+2. Make Shijhon's network with that range, and connect your Navidrome to it
+   ([above](#your-navidrome-trusts-shijhon)). It is named `shijhon-navidrome`, or
+   `<name>-navidrome` with `COMPOSE_PROJECT_NAME=<name>` in `.env`. Other containers on it
+   get addresses from `.128` up, so `.10` stays Shijhon's:
+
+   ```sh
+   docker network create --subnet 172.30.99.0/24 --ip-range 172.30.99.128/25 shijhon-navidrome
+   ```
+
+3. Create Shijhon's account in your Navidrome's web interface, under **Users**, as an
+   admin, with a long random password. Put that password in `config/navidrome-password`,
+   readable only by you, as in the quick start's step 3.
+
+4. Start Shijhon:
+
+   ```sh
+   docker compose up -d --build
+   ```
+
+### What Shijhon needs from Navidrome
+
+- **Version 0.64.2**, unmodified, **not reachable from outside**, at the root of its
+  address (no `BaseURL`).
+- **A service account**: a Navidrome admin account used only by Shijhon, not a person's.
+- **The same library files** in Shijhon's container (at `/music` there, whatever path
+  Navidrome has them at), read-only, with only the placeholder folder writable - unless you turn on **Also fix files in your music folder**
+  ([how it works](how-it-works.md#each-artist-of-a-joined-credit)): then mount the library
+  writable for Shijhon (in `compose.yaml`, drop `:ro` from the `/music` line); only files owned by
+  Shijhon's user are changed.
+- **`Scanner.PurgeMissing = never`**, its default. With another value a placeholder that
+  is gone for a moment would lose every user's favorites and playlist entries of it, so
+  Shijhon then writes nothing into the library: such actions are answered with the reason,
+  and downloads get the add-on's own format. Shijhon reads the value from Navidrome's
+  configuration, which Navidrome shows its admins while `DevUIShowConfig` is on (its
+  default). With that off, set `[navidrome] purge_missing = "never"` yourself.
+
+## Music imports
+
 Optional [personal music-file imports](music-imports.md) need an additional
 dedicated writable directory. In Compose, provision `MUSIC_IMPORTS_DIR`, give
 `PUID:PGID` access and add it to `packaging/.env`. Keep the
@@ -15,6 +216,11 @@ Then start from `packaging/`:
 docker compose up -d --build
 ```
 
+With Shijhon [in front of a Navidrome you already run](#in-front-of-a-navidrome-you-already-run),
+keep its second file in the list,
+`COMPOSE_FILE=compose.yaml:compose.existing-navidrome.yaml:compose.imports.yaml`, and mount
+the same directory into your Navidrome as `_imports` inside its music folder, read-only.
+
 Compose and `./setup.sh` use this file set on later runs. If an existing project was
 started with `-f` instead, setup reads its containers' Compose file set and saves it in
 `packaging/.env` when no `COMPOSE_FILE` is specified. An explicit `COMPOSE_FILE` in the
@@ -24,67 +230,6 @@ Navidrome and enables imports in Shijhon. Include this entire directory and Shij
 state in backups; it must
 not be treated as disposable catalog audio. Complete the reviewed administrator
 setup from **Collection → Import music** before accepting uploads.
-
-Shijhon runs in front of a stock Navidrome that only Shijhon reaches.
-[quick-start.md](quick-start.md) sets one up with the Compose file and the example
-configuration in [`packaging/`](../packaging); [advanced deployment](reference/advanced-deployment.md)
-has the rarer setups.
-
-On NixOS, [the NixOS service](nixos.md) sets up Navidrome and Shijhon together, also with
-a Navidrome you already run. [Its reference](reference/nixos.md) covers catalog adapters
-and moving from the Docker setup.
-
-## Starting from an existing Navidrome
-
-Shijhon's Navidrome can start from a copy of the one you run, keeping its users, IDs,
-playlists, favorites and play counts.
-
-1. Write `.env` and the configuration as in the quick start's
-   [steps by hand](quick-start.md#by-hand), steps 1 and 2. Start nothing yet.
-2. Take a **consistent** copy of the database with SQLite's backup, not a file copy of a
-   running database, into a folder of its own:
-   `sqlite3 'file:/path/navidrome.db?mode=ro' ".backup /path/to/copy/navidrome.db"`.
-   Copy the old data folder's `artwork` folder there too (uploaded images). Then put the
-   copy into Navidrome's volume, owned by your `PUID:PGID` from `.env` (1000:1000 here),
-   from `packaging/`:
-
-   ```sh
-   docker compose up --no-start &&
-   docker run --rm -v shijhon_navidrome-data:/data -v /path/to/copy:/from:ro alpine \
-       sh -c 'cp -a /from/. /data/ && chown -R 1000:1000 /data'
-   ```
-
-   With `NAVIDROME_DATA` naming a folder, copy it into that folder instead.
-3. Mount the music at the **same path inside the container** as before (usually `/music`,
-   as the Compose file does), so that the IDs stay the same. Use the same Navidrome
-   version, and check its log for "no migrations to run".
-4. Keep Navidrome's `PasswordEncryptionKey` as it was (unset stays unset), or existing
-   accounts cannot log in.
-5. Create Shijhon's service account as in the quick start's step 3, and set
-   `[navidrome] library_id`: `getMusicFolders` lists the IDs, and a migrated Navidrome's
-   library is not always 1.
-6. Start everything. Before you switch your apps over, compare with the old Navidrome:
-   playlists (entry counts and order), song and album counts, favorites and a sample of
-   song IDs, before and after a full scan.
-
-The copy is then the new setup's data; do not copy the old database over it again.
-
-### What Shijhon needs from Navidrome
-
-- **Version 0.64.2**, unmodified, **not reachable from outside**, at the root of its
-  address (no `BaseURL`).
-- **A service account**: a Navidrome admin account used only by Shijhon, not a person's.
-- **The library at the same path** in Shijhon's container, read-only, with only the
-  placeholder folder writable - unless you turn on **Also fix files in your music folder**
-  ([how it works](how-it-works.md#each-artist-of-a-joined-credit)): then mount the library
-  writable for Shijhon (in `compose.yaml`, drop `:ro` from the `/music` line); only files owned by
-  Shijhon's user are changed.
-- **`Scanner.PurgeMissing = never`**, its default. With another value a placeholder that
-  is gone for a moment would lose every user's favorites and playlist entries of it, so
-  Shijhon then writes nothing into the library: such actions are answered with the reason,
-  and downloads get the add-on's own format. Shijhon reads the value from Navidrome's
-  configuration, which Navidrome shows its admins while `DevUIShowConfig` is on (its
-  default). With that off, set `[navidrome] purge_missing = "never"` yourself.
 
 ## Network and reverse proxy
 
@@ -100,8 +245,8 @@ for a network you trust. For access from outside, put a TLS reverse proxy in fro
    machine only. Otherwise a device that connects directly could appear to come from the
    proxy's address, and would be trusted.
 2. List the proxy's address, and nothing else, in `[server] trusted_proxies`. For a proxy
-   on the host, the example configuration has the line. Never list an address apps
-   connect from directly.
+   on the host, the configuration has the line, with the gateway of Shijhon's network
+   (`.1` of `SHIJHON_NETWORK` in `.env`). Never list an address apps connect from directly.
 3. Have the proxy append the client's address to `X-Forwarded-For` (`X-Real-IP` is not
    read) and send `X-Forwarded-Proto: https`, which marks the dashboard's cookie `Secure`.
 4. Keep credentials out of the proxy's access log: apps send them in the query string
@@ -114,7 +259,8 @@ address ([how](reference/advanced-deployment.md#client-addresses)).
 
 An adapter is installed into the image when it is built: a published one by a line in
 `packaging/.env` and a rebuild ([catalogs.md](catalogs.md#installing-an-adapter)), one
-that is not published from its wheel (`uv build --wheel` in the adapter's project):
+that is not published from its wheel (`uv build --wheel` in the adapter's project), with
+this command in the checkout:
 
 ```sh
 docker build --build-context adapters=/path/to/wheels -t shijhon .
@@ -148,7 +294,9 @@ cache), `shijhon_shijhon-data` (Shijhon's `state_dir`: its database, the snapsho
 before upgrades, backups made with `shijhon backup`, downloads under way, the cover cache
 and DASH songs) and `shijhon_usage-export`. `docker compose down` keeps them;
 `docker compose down -v` deletes them. A one-shot `data-owner` service gives new
-volumes to the user the containers run as at each start.
+volumes to the user the containers run as at each start. Shijhon builds its image with
+the project's name, `shijhon:local` by default, so that each installation on a machine
+has its own.
 
 To keep one in a folder instead, give its absolute path in `.env`: `NAVIDROME_DATA`,
 `SHIJHON_DATA` or `USAGE_EXPORT_DATA`. Not with Docker Desktop, where a database in a
@@ -225,12 +373,10 @@ restart_by_supervisor = true` under a service manager that restarts Shijhon afte
 - Shijhon's database migrates itself at startup, and an older Shijhon does not start on a
   database a newer one migrated. Before the first migration, the start writes a snapshot of
   the database (below), so you do not need to back it up by hand first.
-- Build the new image. The line in `.env` installs its adapters again; a folder of wheels
-  has to be given again.
+- Build the new image and start it: `docker compose up -d --build` in `packaging/`. The
+  line in `.env` installs its adapters again; a folder of wheels has to be given again.
 - Stay on the Navidrome version the Shijhon release is tested with.
-- Upgrading from 0.1.0b1: after the first start, sign in once to **Collection** on the
-  dashboard and wait until your music shows. Until this first library view is ready,
-  music apps get an error that asks for it. Apps then show each account's **All**
+- Upgrading from 0.1.0b1: apps show each account's **All**
   ([Your collection](collection.md)): catalog albums that 0.1.0b1 added only because a
   song was played or put in an app's playlist are in it again once the account plays
   them or acts on them, and **Add whole album** on the Collection page adds them.
@@ -249,7 +395,7 @@ database's.
 When the snapshot cannot be written, because there is not enough free space, the folder
 cannot be written or the database is damaged, Shijhon upgrades the database and starts
 without it, as versions before snapshots did. It removes no snapshot to make room, and it
-leaves nothing half written. Its log says why (`docker compose logs shijhon`), with how
+leaves nothing half written. Its log says why (`docker compose logs shijhon` in `packaging/`), with how
 much space the snapshot needed. Administrators see a line at the top of every dashboard
 page that says from which schema to which the database was upgraded, when, and why, until
 one of them dismisses it, and when notification addresses are set, it is reported once

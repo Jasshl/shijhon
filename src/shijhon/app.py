@@ -39,7 +39,7 @@ from shijhon.collection.history import History
 from shijhon.collection.native import NativeVisibility
 from shijhon.collection.origins import Origins
 from shijhon.collection.query_index import QueryIndex
-from shijhon.collection.reader import CallerLibrary, SourceRefresh
+from shijhon.collection.reader import CallerLibrary, ServiceLibrary, SourceRefresh
 from shijhon.collection.reasons import Reasons
 from shijhon.collection.service import Collection
 from shijhon.collection.visibility import Visibility
@@ -1116,8 +1116,19 @@ class ShijhonApp:
                 raise PlaylistError(str(exc)) from None
 
         playlists.library_context = library_context
+        # The library index is prepared and kept current with Shijhon's service account
+        # too, so that apps get their lists with nobody signing in (``SourceRefresh.run``).
         self.services.collection_refresh = SourceRefresh(
-            caller_library, collection.refresh, self.try_spawn
+            caller_library,
+            collection.refresh,
+            self.try_spawn,
+            service=ServiceLibrary(navidrome),
+            prepared=collection.prepared,
+            # Shijhon's own writes: placeholders join the lists from apps' requests, imports
+            # refresh the index themselves.
+            placeholder_folder=settings.placeholders.folder,
+            imports_folder=settings.music_imports.folder if settings.music_imports.enabled else "",
+            saved=settings.state_dir / "library-source.json",
         )
         query_index = QueryIndex(
             settings.state_dir / "collection-queries" / "native.sqlite3",
@@ -1140,7 +1151,7 @@ class ShijhonApp:
             complete_albums=settings.fill.complete_lists,
         )
         # Songs Shijhon wrote since the last full refresh join the library index from apps'
-        # own requests: apps never start that refresh (it needs a native sign-in).
+        # own requests, within a minute (a full refresh comes at most every five).
         written = Written(
             store,
             collection.index,
@@ -1156,9 +1167,10 @@ class ShijhonApp:
             await written.due(principal, call)
 
         visibility.learn = learn
+        source_refresh = self.services.collection_refresh
+        visibility.source_problem = lambda: source_refresh.problem
         visibility.attach(self.proxy)
         newest.selection = visibility.selection
-        source_refresh = self.services.collection_refresh
 
         async def native_verified(principal: Principal, token: str) -> None:
             """A verified native-website request: the library index's refresh when due,
@@ -1168,7 +1180,8 @@ class ShijhonApp:
             if caller_library.has_bearer(owner):
                 await reasons.due_with(owner, lambda: caller_library.starred(owner))
 
-        NativeVisibility(visibility, verified=native_verified).attach(self.proxy)
+        NativeVisibility(visibility, verified=native_verified, service=True).attach(self.proxy)
+        self.spawn(source_refresh.run)
         NativeCollectionRequests(collection_requests, caller_library).attach(self.proxy)
         self.proxy.music_gate = MusicGate(access, settings.navidrome.library_id)
         # Accounts that get real audio only (an analyzer's): last, around every handler.

@@ -397,3 +397,84 @@ def test_a_missing_account_without_its_password_file_says_so(
     assert said.startswith('Navidrome has no account "alex" yet')
     assert "(services.shijhon.account.passwordFile) cannot be read" in said
     assert navidrome.created == []
+
+
+def test_the_person_s_password_is_read_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A moment's trouble after the person's password was read: the next try uses the same
+    password, as one that came on a pipe (setup.sh's standard input) can be read only once."""
+    navidrome = Existing({"alex": ("an invented password", True)})
+    navidrome.fail_creation = 1
+    served(monkeypatch, navidrome)
+    own = tmp_path / "own"
+    own.write_text("an invented password")
+    reads = []
+    real = Path.read_text
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path == own:
+            reads.append(path)
+            if len(reads) > 1:
+                return ""  # (a pipe, read before)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    accounts.ensure(
+        "http://navidrome",
+        "shijhon",
+        tmp_path / "navidrome-password",
+        account="alex",
+        account_password_file=own,
+        wait=30,
+        say=lambda _: None,
+    )
+    assert len(reads) == 1
+    assert len(navidrome.created) == 1 and "shijhon" in navidrome.users
+
+
+def test_refused_logins_wait_out_navidrome_s_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Navidrome refuses logins for a moment: the next try comes after its 20 seconds, not
+    two, which would count as further attempts and keep the refusal going."""
+    calls = {"login": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/ping":
+            return httpx.Response(200)
+        if request.url.path == "/auth/login":
+            calls["login"] += 1
+            if calls["login"] == 1:
+                return httpx.Response(429)
+            return httpx.Response(200, json={"token": "t"})
+        if request.method == "GET":
+            return httpx.Response(200, json=[{"userName": "shijhon"}, {"userName": "Alex"}])
+        raise AssertionError(request.url)
+
+    served(monkeypatch, handler)
+    pauses: list[float] = []
+    monkeypatch.setattr(accounts.time, "sleep", pauses.append)
+    ensure(tmp_path, wait=60)
+    assert pauses == [accounts.LOGIN_WINDOW]
+
+
+def test_the_account_that_created_shijhon_s_is_not_reported_as_kept(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    navidrome = Existing({"alex": ("an invented password", True)})
+    served(monkeypatch, navidrome)
+    own = tmp_path / "own"
+    own.write_text("an invented password")
+    said: list[str] = []
+    accounts.ensure(
+        "http://navidrome",
+        "shijhon",
+        tmp_path / "navidrome-password",
+        account="alex",
+        account_password_file=own,
+        wait=0.2,
+        say=said.append,
+    )
+    assert any('created for Shijhon, an admin, by your account "alex"' in s for s in said)
+    assert not any("kept" in s for s in said)

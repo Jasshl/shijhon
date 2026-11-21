@@ -37,7 +37,8 @@ state_file = Path(os.environ["STUB_STATE"])
 state = json.loads(state_file.read_text())
 args = sys.argv[1:]
 reads_input = args[:4] == ["compose", "exec", "-T", "navidrome"] and "-K" in args
-stdin = sys.stdin.read() if reads_input else ""
+runs_accounts = args[:2] == ["compose", "run"] and "navidrome-accounts" in args
+stdin = sys.stdin.read() if reads_input or runs_accounts else ""
 state["calls"].append({"args": args, "stdin": stdin})
 
 
@@ -76,6 +77,8 @@ DATA = {"NAVIDROME_DATA": "navidrome-data", "SHIJHON_DATA": "shijhon-data",
 
 if args == ["compose", "version"]:
     finish()
+if args == ["compose", "version", "--short"]:
+    finish(0, state["compose_version"] + "\n")
 if args == ["info", "--format", "{{.OperatingSystem}}"]:
     finish(0 if state["daemon"] else 1, state["system"] + "\n")
 if args[:2] == ["ps", "-a"]:
@@ -83,6 +86,51 @@ if args[:2] == ["ps", "-a"]:
     finish(0, "".join(d + "\n" for d in state["projects"].get(project, [])))
 if args == ["volume", "ls", "-q"]:
     finish(0, "".join(v + "\n" for v in state["volumes"]))
+if args[:2] == ["volume", "inspect"]:
+    finish(0 if args[2] in state["volumes"] else 1)
+networks = state["networks"]
+if args == ["network", "ls", "-q"]:
+    finish(0, "".join(n + "\n" for n in networks))
+if args[:2] == ["network", "inspect"]:
+    names = args[4:]
+    if any(n not in networks for n in names):
+        sys.stderr.write("no such network\n")
+        finish(1)
+    if "println" in args[3]:
+        finish(0, "".join(networks[n] + "\n" for n in names))
+    finish(0, "".join(networks[n] + " " for n in names))
+if args[:2] == ["network", "create"]:
+    subnet, name = args[args.index("--subnet") + 1], args[-1]
+    assert args[args.index("--ip-range") + 1] == subnet.replace(".0/24", ".128/25")
+    if name in networks or state["network_fails"]:
+        sys.stderr.write("Pool overlaps with other one on this address space\n")
+        finish(1)
+    networks[name] = subnet
+    finish()
+if runs_accounts:
+    # Shijhon's own command, in front of a Navidrome that runs elsewhere (state "running").
+    running = state["running"]
+    if running.get("hangs"):
+        import time
+
+        time.sleep(60)
+    if not running["reachable"]:
+        sys.stderr.write("shijhon: Navidrome does not answer as it should after 30 seconds\n")
+        finish(1)
+    service = Path("config/navidrome-password").read_text().strip()
+    if running["users"].get("shijhon") == service:
+        finish()
+    if "shijhon" in running["users"]:
+        sys.stderr.write('shijhon: Navidrome has the account "shijhon", and the password ...\n')
+        finish(2)
+    account = args[args.index("--account") + 1]
+    own = stdin.rstrip("\r\n")
+    if running["users"].get(account) != own or account not in running["admins"]:
+        sys.stderr.write(f'shijhon: "{account}" does not sign in, or is not an admin\n')
+        finish(2)
+    running["users"]["shijhon"] = service
+    sys.stdout.write(f'Navidrome\'s account "shijhon" created for Shijhon, by "{account}"\n')
+    finish()
 if args == ["compose", "up", "-d", "navidrome"]:
     project = env("COMPOSE_PROJECT_NAME") or "shijhon"
     for name, volume in DATA.items():
@@ -179,7 +227,30 @@ class Setup:
             shijhon=False,
             build_fails=False,
             users={},
+            networks={},
+            network_fails=False,
+            routes=[],
+            running={"reachable": True, "users": {}, "admins": []},
+            compose_version="v2.38.2",
         )
+        # This machine's routes, as the script reads them, are the state's.
+        routes = (
+            "import json, os, sys\n"
+            "routes = json.load(open(os.environ['STUB_STATE']))['routes']\n"
+            "if sys.argv[1:] == ['-rn', '-f', 'inet']:\n"
+            "    print('Routing tables\\n\\nInternet:')\n"
+            "    print('Destination        Gateway            Flags  Netif Expire')\n"
+            "    print('default            192.0.2.1          UGScg    en0')\n"
+            "    for route in routes: print(route.ljust(19) + 'link#1  UCS  en0')\n"
+            "elif sys.argv[1:] == ['-4', 'route', 'show', 'table', 'all']:\n"
+            "    print('default via 192.0.2.1 dev eth0')\n"
+            "    for route in routes: print(route + ' dev eth0 scope link')\n"
+            "else:\n"
+            "    sys.exit(1)\n"
+        )
+        for tool in ("netstat", "ip"):
+            (self.bin / tool).write_text(f"#!{sys.executable}\n{routes}")
+            (self.bin / tool).chmod(0o755)
         self.password_file = tmp_path / "own-password"
         self.password_file.write_text(OWN_PASSWORD + "\n")
         self.port = free_port()
@@ -260,6 +331,7 @@ def test_a_run_without_questions_sets_everything_up(setup: Setup, shell: str) ->
         f"PUID={os.getuid()}",
         f"PGID={os.getgid()}",
         f"SHIJHON_PORT={setup.port}",
+        "SHIJHON_NETWORK=172.30.99",
     ]
     # The data is in the project's volumes, made by Navidrome's first start; on this
     # machine only the placeholder folder.
@@ -777,7 +849,7 @@ def test_no_command_is_given_a_secret_as_an_argument_or_in_its_environment(
     log = tmp_path / "started.log"
     names = (
         "dirname cat sed tr tail sort grep od id mkdir rm ln mv nc uname route ipconfig ip"
-        " sleep date"
+        " sleep date awk netstat"
     )
     real = {name: shutil.which(name) for name in names.split()}
     real["docker"] = str(setup.bin / "docker")
@@ -809,13 +881,15 @@ def test_no_command_is_given_a_secret_as_an_argument_or_in_its_environment(
 def test_adapters_go_into_the_env_file(setup: Setup) -> None:
     spec = "example @ https://example.invalid/a.tar.gz#sha256=0 other==1.0"
     assert setup.run(*setup.answers(), "--adapters", spec).returncode == 0
-    assert (setup.packaging / ".env").read_text().splitlines()[-1] == f"SHIJHON_ADAPTERS='{spec}'"
+    assert f"SHIJHON_ADAPTERS='{spec}'" in (setup.packaging / ".env").read_text().splitlines()
 
 
 def test_at_a_terminal_it_asks_and_never_shows_the_password(setup: Setup) -> None:
     """The questions, answered at a pseudo-terminal: a wrong folder is asked again, the
     password is typed twice and echoed nowhere."""
     answers = [
+        ("A new Navidrome, or one that is already running?", "maybe"),
+        ("A new Navidrome, or one that is already running?", ""),
         ("Where is your music?", str(setup.music / "nowhere")),
         ("Where is your music?", str(setup.music)),
         ("A username for your own account", "yourname"),
@@ -858,7 +932,7 @@ def test_at_a_terminal_it_asks_and_never_shows_the_password(setup: Setup) -> Non
             read_until(question, start)
             read_until(": ", seen.index(question.encode(), start))
             os.write(master, (reply + "\n").encode())
-        read_until("Sign in with your Navidrome account (yourname).", 0)
+        read_until("with the account you just created (yourname).", 0)
         assert process.wait(timeout=30) == 0, seen
     finally:
         process.kill()
@@ -892,6 +966,8 @@ def test_an_interrupt_at_the_password_question_leaves_nothing(setup: Setup) -> N
                 seen += os.read(master, 4096).decode(errors="replace")
 
     try:
+        read_until("(new/running) [new]: ")
+        os.write(master, b"\n")
         read_until("A username for your own account: ")
         os.write(master, b"yourname\n")
         read_until("A password for it (not shown): ")
@@ -1100,7 +1176,9 @@ def test_a_rerun_with_another_agent_address_says_where_to_change_it(
     assert setup.written() == before
 
 
-def converse(setup: Setup, answers: list[tuple[str, str]]) -> bytes:
+def converse(
+    setup: Setup, answers: list[tuple[str, str]], last: str = "Sign in, in apps and on the"
+) -> bytes:
     """Run the script at a pseudo-terminal, answering each question as it comes; what it
     showed."""
     master, slave = pty.openpty()
@@ -1134,7 +1212,7 @@ def converse(setup: Setup, answers: list[tuple[str, str]]) -> bytes:
             read_until(question, start)
             read_until(": ", seen.index(question.encode(), start))
             os.write(master, (reply + "\n").encode())
-        read_until("Sign in with your Navidrome account", 0)
+        read_until(last, 0)
         assert process.wait(timeout=30) == 0, seen
     finally:
         process.kill()
@@ -1148,6 +1226,7 @@ def test_at_a_terminal_a_home_network_address_is_asked_about_first(setup: Setup)
     seen = converse(
         setup,
         [
+            ("A new Navidrome, or one that is already running?", "new"),
             ("Where is your music?", str(setup.music)),
             ("A username for your own account", "yourname"),
             ("A password for it", OWN_PASSWORD),
@@ -1167,6 +1246,552 @@ def test_at_a_terminal_a_home_network_address_is_asked_about_first(setup: Setup)
         "public_url": "http://musicbox.lan:4533",
         "private_http": True,
     }
+
+
+# --- Shijhon's network ---------------------------------------------------------------------
+
+
+def config_text(setup: Setup) -> str:
+    return (setup.packaging / "config" / "shijhon.toml").read_text()
+
+
+@pytest.mark.parametrize(
+    ("networks", "routes", "chosen"),
+    [
+        ({}, [], "172.30.99"),
+        ({"another": "172.30.99.0/24"}, [], "172.30.100"),
+        ({"wide": "172.30.0.0/16"}, [], "172.31.100"),
+        ({}, ["172.30.99.0/24"] if sys.platform != "darwin" else ["172.30.99/24"], "172.30.100"),
+        ({}, ["172.30.99.7"] if sys.platform == "darwin" else ["172.30.99.7/32"], "172.30.100"),
+        ({"v6": "fd00::/64"}, ["10.0.0.0/8"], "172.30.99"),
+    ],
+)
+def test_a_new_installation_gets_a_free_network_range(
+    setup: Setup, networks: dict[str, str], routes: list[str], chosen: str
+) -> None:
+    """Another Docker network or a route of this machine in the range: the next free one is
+    written into .env, and the gateway into the configuration's reverse-proxy line."""
+    setup.set_state(networks=networks, routes=routes)
+    done = setup.run(*setup.answers())
+    assert done.returncode == 0, done.stderr
+    assert f"SHIJHON_NETWORK={chosen}" in (setup.packaging / ".env").read_text().splitlines()
+    assert f'# trusted_proxies = ["127.0.0.0/8", "::1/128", "{chosen}.1/32"]' in config_text(setup)
+
+
+def test_no_free_range_stops_the_run_first(setup: Setup) -> None:
+    setup.set_state(networks={"a": "172.30.0.0/15", "b": "10.231.0.0/16"})
+    stopped = setup.run(*setup.answers())
+    assert stopped.returncode == 1
+    assert "no free range for Shijhon's Docker network was found" in stopped.stderr
+    assert setup.written() == {}
+
+
+def test_an_existing_env_keeps_its_range_or_says_what_to_change(setup: Setup) -> None:
+    """An .env without SHIJHON_NETWORK has Compose's default range: taken by another network,
+    the run stops before anything is started; once the installation's own network has it,
+    it is the installation's."""
+    assert setup.run(*setup.answers()).returncode == 0
+    env = setup.packaging / ".env"
+    env.write_text(
+        "".join(
+            f"{line}\n"
+            for line in env.read_text().splitlines()
+            if not line.startswith("SHIJHON_NETWORK=")
+        )
+    )
+    setup.set_state(networks={"someone_default": "172.30.99.0/24"})
+    calls = len(setup.state["calls"])
+    stopped = setup.run()
+    assert stopped.returncode == 1
+    assert "overlaps a network on this machine. Set SHIJHON_NETWORK in packaging/.env" in (
+        stopped.stderr
+    )
+    assert [c for c in setup.state["calls"][calls:] if c["args"][:2] == ["compose", "up"]] == []
+
+    setup.set_state(networks={"shijhon_default": "172.30.99.0/24"})
+    again = setup.run()
+    assert again.returncode == 0, again.stderr
+
+
+def test_a_range_written_by_hand_is_checked(setup: Setup) -> None:
+    assert setup.run(*setup.answers()).returncode == 0
+    with (setup.packaging / ".env").open("a") as env:
+        env.write("SHIJHON_NETWORK=172.30.999\n")
+    stopped = setup.run()
+    assert stopped.returncode == 1
+    assert "SHIJHON_NETWORK in packaging/.env is 172.30.999" in stopped.stderr
+
+
+# --- in front of a Navidrome you already run ------------------------------------------------
+
+
+def a_running_navidrome(setup: Setup, password: str = OWN_PASSWORD) -> None:
+    """A Navidrome that runs already, with an admin account "mira" and a person "oren", and
+    on Shijhon's network, which an earlier run made."""
+    setup.set_state(
+        running={
+            "reachable": True,
+            "users": {"mira": password, "oren": "oren's password"},
+            "admins": ["mira"],
+        },
+        volumes=["navidrome_data"],
+        networks={"shijhon-navidrome": "172.30.99.0/24"},
+    )
+
+
+def running_answers(setup: Setup, *more: str) -> list[str]:
+    return [
+        *("--navidrome-url", "http://navidrome:4533/", "--music", str(setup.music)),
+        *("--user", "mira", "--password-file", str(setup.password_file)),
+        *("--port", str(setup.port), *more),
+    ]
+
+
+@pytest.mark.parametrize("shell", shells())
+def test_in_front_of_a_running_navidrome(setup: Setup, shell: str) -> None:
+    """No Navidrome of its own: the overlay in .env, the address in the configuration, the
+    network made for both, and Shijhon's account made through the admin account by Shijhon's
+    own command - with the password on its standard input only."""
+    a_running_navidrome(setup)
+    done = setup.run(*running_answers(setup, "--navidrome-data", "navidrome_data"), shell=shell)
+    assert done.returncode == 0, done.stderr
+    assert (setup.packaging / ".env").read_text().splitlines() == [
+        f"MUSIC_DIR='{setup.music.resolve()}'",
+        f"PUID={os.getuid()}",
+        f"PGID={os.getgid()}",
+        f"SHIJHON_PORT={setup.port}",
+        "SHIJHON_NETWORK=172.30.99",
+        "COMPOSE_FILE='compose.yaml:compose.existing-navidrome.yaml'",
+        "EXISTING_NAVIDROME_VOLUME='navidrome_data'",
+        "COMPOSE_PROFILES=usage-export",
+    ]
+    import tomllib
+
+    config = tomllib.loads(config_text(setup))
+    assert config["navidrome"]["url"] == "http://navidrome:4533"
+    assert config["navidrome"]["usage_export_path"] == "/usage/usage.sqlite3"
+    assert setup.state["networks"] == {"shijhon-navidrome": "172.30.99.0/24"}
+    assert (setup.music / "_shijhon").is_dir()
+
+    service_password = (setup.packaging / "config" / "navidrome-password").read_text().rstrip()
+    assert len(service_password) == 48
+    assert setup.state["running"]["users"] == {
+        "mira": OWN_PASSWORD,
+        "oren": "oren's password",
+        "shijhon": service_password,
+    }
+    calls = [c["args"] for c in setup.state["calls"]]
+    assert ["compose", "up", "-d", "navidrome"] not in calls
+    assert not any(c[:3] == ["compose", "exec", "-T"] and "navidrome" in c for c in calls)
+    (run,) = [c for c in setup.state["calls"] if c["args"][:2] == ["compose", "run"]]
+    assert run["stdin"] == OWN_PASSWORD + "\n"
+    assert "--account-password-file" in run["args"] and "/dev/stdin" in run["args"]
+    for call in setup.state["calls"]:
+        for secret in (OWN_PASSWORD, service_password):
+            assert all(secret not in arg for arg in call["args"])
+    assert OWN_PASSWORD not in done.stdout and service_password not in done.stdout
+    assert "its range, 172.30.99.0/24, is used" in done.stdout
+    assert "only" in done.stdout and "remove your Navidrome's published port" in done.stdout
+    assert "Everyone signs in, in apps and on the dashboard" in done.stdout
+    assert "usage export is off" not in done.stdout
+
+    # A second run asks nothing and changes nothing: the account is there.
+    before = setup.written()
+    count = len(setup.state["calls"])
+    again = setup.run()
+    assert again.returncode == 0, again.stderr
+    assert setup.written() == before
+    assert [c for c in setup.state["calls"][count:] if c["args"][:2] == ["compose", "run"]] == []
+    assert "Shijhon is running" in again.stdout
+
+
+def test_without_the_data_of_the_running_navidrome_the_usage_export_is_off(
+    setup: Setup,
+) -> None:
+    a_running_navidrome(setup)
+    done = setup.run(*running_answers(setup))
+    assert done.returncode == 0, done.stderr
+    env = (setup.packaging / ".env").read_text()
+    assert "COMPOSE_PROFILES" not in env and "NAVIDROME_" not in env
+    import tomllib
+
+    assert "usage_export_path" not in tomllib.loads(config_text(setup))["navidrome"]
+    assert "# usage_export_path = " in config_text(setup)
+    assert "the usage export is off, and with it the cleanup" in done.stdout
+
+
+def test_the_data_of_the_running_navidrome_in_a_folder(setup: Setup, tmp_path: Path) -> None:
+    a_running_navidrome(setup)
+    data = tmp_path / "nd data"
+    data.mkdir()
+    stopped = setup.run(*running_answers(setup, "--navidrome-data", str(data)))
+    assert stopped.returncode == 1
+    assert "there is no navidrome.db in" in stopped.stderr
+    (data / "navidrome.db").write_text("its database")
+    done = setup.run(*running_answers(setup, "--navidrome-data", str(data)))
+    assert done.returncode == 0, done.stderr
+    env = (setup.packaging / ".env").read_text().splitlines()
+    assert f"EXISTING_NAVIDROME_DATA='{data.resolve()}'" in env
+    assert "COMPOSE_PROFILES=usage-export" in env
+    assert (data / "navidrome.db").read_text() == "its database"
+    assert sorted(p.name for p in data.iterdir()) == ["navidrome.db"]  # nothing made there
+
+
+def test_a_wrong_admin_password_stops_the_run_and_the_next_one_goes_on(setup: Setup) -> None:
+    a_running_navidrome(setup, password="another password")
+    stopped = setup.run(*running_answers(setup))
+    assert stopped.returncode == 1
+    assert '"mira" does not sign in, or is not an admin' in stopped.stderr
+    assert "Shijhon's account could not be made in your Navidrome" in stopped.stderr
+    assert not (setup.packaging / "config" / "navidrome-password").exists()
+    assert "shijhon" not in setup.state["running"]["users"]
+
+    setup.password_file.write_text("another password\n")
+    again = setup.run("--user", "mira", "--password-file", str(setup.password_file))
+    assert again.returncode == 0, again.stderr
+    assert "shijhon" in setup.state["running"]["users"]
+
+
+def test_an_admin_account_is_needed(setup: Setup) -> None:
+    a_running_navidrome(setup)
+    stopped = setup.run(*[a for a in running_answers(setup) if a not in ("--user", "mira")])
+    assert stopped.returncode == 1
+    assert "an admin account of your Navidrome is needed" in stopped.stderr
+    assert setup.written() == {}
+
+
+def test_a_navidrome_shijhon_cannot_reach_says_how_to_join_its_network(setup: Setup) -> None:
+    a_running_navidrome(setup)
+    running = setup.state["running"]
+    setup.set_state(running={**running, "reachable": False})
+    stopped = setup.run(*running_answers(setup))
+    assert stopped.returncode == 1
+    assert "Shijhon did not get through to your Navidrome at http://navidrome:4533" in (
+        stopped.stdout
+    )
+    assert "          ND_EXTAUTH_TRUSTEDSOURCES: 172.30.99.10/32" in stopped.stdout
+    assert "        name: shijhon-navidrome" in stopped.stdout
+    assert not (setup.packaging / "config" / "navidrome-password").exists()
+    assert [c for c in setup.state["calls"] if c["args"] == ["compose", "up", "-d"]] == []
+
+
+def test_a_network_of_that_name_is_used_with_its_range(setup: Setup) -> None:
+    """Made by hand, or by a run whose .env is gone: its /24 range is taken over; another
+    shape stops the run."""
+    a_running_navidrome(setup)
+    setup.set_state(networks={"shijhon-navidrome": "10.9.9.0/24"})
+    done = setup.run(*running_answers(setup))
+    assert done.returncode == 0, done.stderr
+    assert "SHIJHON_NETWORK=10.9.9" in (setup.packaging / ".env").read_text().splitlines()
+    assert "its range, 10.9.9.0/24, is used" in done.stdout
+
+
+def test_a_network_of_that_name_with_another_shape_stops_the_run(setup: Setup) -> None:
+    a_running_navidrome(setup)
+    setup.set_state(networks={"shijhon-navidrome": "10.9.0.0/16"})
+    stopped = setup.run(*running_answers(setup))
+    assert stopped.returncode == 1
+    assert "Docker has a network shijhon-navidrome already, with 10.9.0.0/16" in stopped.stderr
+    assert setup.written() == {}
+
+
+def test_a_network_just_made_has_no_navidrome_yet(setup: Setup) -> None:
+    """Without a terminal: the changes, then a stop before any try; the next run tries."""
+    a_running_navidrome(setup)
+    setup.set_state(networks={})
+    stopped = setup.run(*running_answers(setup))
+    assert stopped.returncode == 1
+    assert "network shijhon-navidrome was just made, so your Navidrome is not on it yet" in (
+        stopped.stderr
+    )
+    assert "          ND_EXTAUTH_TRUSTEDSOURCES: 172.30.99.10/32" in stopped.stdout
+    assert "        name: shijhon-navidrome" in stopped.stdout
+    assert [c for c in setup.state["calls"] if c["args"][:2] == ["compose", "run"]] == []
+    assert not (setup.packaging / "config" / "navidrome-password").exists()
+    again = setup.run("--user", "mira", "--password-file", str(setup.password_file))
+    assert again.returncode == 0, again.stderr
+    assert "shijhon" in setup.state["running"]["users"]
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("navidrome:4533", "starts with http:// or https://"),
+        ("http://navidrome:4533/music", "no path"),
+        ("http://navi drome:4533", "no path"),
+        ("http://navidrome:99999", "no path"),
+        ('http://na"vidrome', "no path"),
+        ("http://localhost:4533", "is the container itself"),
+        ("http://127.0.0.1:4533", "is the container itself"),
+        ("http://[::1]:4533", "IPv4 addresses only"),
+        ("http://[fd12::5]:4533", "IPv4 addresses only"),
+    ],
+)
+def test_a_navidrome_address_that_cannot_work_is_refused_first(
+    setup: Setup, url: str, message: str
+) -> None:
+    a_running_navidrome(setup)
+    answers = running_answers(setup)
+    answers[1] = url
+    stopped = setup.run(*answers)
+    assert stopped.returncode == 1
+    assert message in stopped.stderr
+    assert setup.written() == {}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://navidrome:4533",
+        "http://host.docker.internal:4533",
+        "https://192.168.1.20",
+        "http://my_navidrome_1:4533",
+        "http://NAVIDROME:4533",
+    ],
+)
+def test_navidrome_addresses_that_are_taken(setup: Setup, url: str) -> None:
+    a_running_navidrome(setup)
+    answers = running_answers(setup)
+    answers[1] = url
+    done = setup.run(*answers)
+    assert done.returncode == 0, done.stderr
+    import tomllib
+
+    assert tomllib.loads(config_text(setup))["navidrome"]["url"] == url
+
+
+def test_an_interrupted_account_step_leaves_no_password_file(setup: Setup) -> None:
+    """Stopped while Shijhon's account is being made: its password file goes too, so that
+    the next run asks for the admin account again instead of starting without an account."""
+    a_running_navidrome(setup)
+    setup.set_state(running={**setup.state["running"], "hangs": True})
+    process = subprocess.Popen(
+        [shutil.which("sh") or "sh", str(setup.root / "setup.sh"), *running_answers(setup)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=setup.env(),
+        cwd=setup.root,
+        start_new_session=True,
+    )
+    password_file = setup.packaging / "config" / "navidrome-password"
+    deadline = time.monotonic() + 30
+    while not password_file.exists():
+        assert time.monotonic() < deadline and process.poll() is None
+        time.sleep(0.1)
+    time.sleep(0.5)
+    os.killpg(process.pid, signal.SIGINT)
+    assert process.wait(timeout=30) == 130
+    assert not password_file.exists()
+
+    setup.set_state(running={**setup.state["running"], "hangs": False})
+    again = setup.run("--user", "mira", "--password-file", str(setup.password_file))
+    assert again.returncode == 0, again.stderr
+    assert setup.state["running"]["users"]["shijhon"] == password_file.read_text().strip()
+
+
+def test_a_service_account_navidrome_has_already_is_explained(setup: Setup) -> None:
+    a_running_navidrome(setup)
+    running = setup.state["running"]
+    setup.set_state(running={**running, "users": {**running["users"], "shijhon": "earlier"}})
+    stopped = setup.run(*running_answers(setup))
+    assert stopped.returncode == 1
+    assert 'has an account "shijhon" already, from an earlier installation, delete it' in (
+        stopped.stderr
+    )
+    assert not (setup.packaging / "config" / "navidrome-password").exists()
+
+
+def test_compose_too_old_for_the_second_file_is_said_first(setup: Setup) -> None:
+    a_running_navidrome(setup)
+    setup.set_state(compose_version="v2.20.3")
+    stopped = setup.run(*running_answers(setup))
+    assert stopped.returncode == 1
+    assert "Docker Compose v2.20.3 is too old" in stopped.stderr and "2.24.4" in stopped.stderr
+    assert setup.written() == {}
+
+
+def test_navidrome_data_goes_with_its_address(setup: Setup) -> None:
+    stopped = setup.run(*setup.answers(), "--navidrome-data", "navidrome_data")
+    assert stopped.returncode == 1
+    assert "--navidrome-data goes with --navidrome-url" in stopped.stderr
+
+
+def test_at_a_terminal_the_running_navidrome_is_asked_for(setup: Setup) -> None:
+    """The questions of the other path: the address (a wrong one asked again), the admin
+    account, the data; an unreachable Navidrome is tried again when asked to, and a wrong
+    password asks for the account again."""
+    a_running_navidrome(setup)
+    running = setup.state["running"]
+    setup.set_state(running={**running, "reachable": False})
+    master, slave = pty.openpty()
+    process = subprocess.Popen(
+        [shutil.which("sh") or "sh", str(setup.root / "setup.sh")],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=setup.env(),
+        cwd=setup.root,
+        start_new_session=True,
+    )
+    os.close(slave)
+    seen = b""
+
+    def read_until(text: str) -> None:
+        nonlocal seen
+        deadline = time.monotonic() + 60
+        while text.encode() not in seen:
+            assert time.monotonic() < deadline, f"no {text!r} in {seen!r}"
+            if select.select([master], [], [], 0.2)[0]:
+                try:
+                    seen += os.read(master, 4096)
+                except OSError:
+                    assert text.encode() in seen, seen
+                    return
+
+    def reply(question: str, answer: str) -> None:
+        nonlocal seen
+        read_until(question)
+        seen = seen[seen.index(question.encode()) + len(question) :]
+        read_until(": ")
+        os.write(master, (answer + "\n").encode())
+
+    try:
+        reply("(new/running)", "running")
+        reply("Where is your music? (the folder your Navidrome scans)", str(setup.music))
+        reply("Your Navidrome's address", "http://localhost:4533")
+        reply("Your Navidrome's address", "http://navidrome:4533")
+        reply("An admin account of your Navidrome", "mira")
+        reply("Its password (not shown)", "a wrong password")
+        reply("Your Navidrome's data folder, or its Docker volume", "nowhere_volume")
+        reply("Your Navidrome's data folder, or its Docker volume", "navidrome_data")
+        reply("The port your apps connect to", str(setup.port))
+        reply("For example, the", "")  # (the adapter question follows the example)
+        reply("The address AI agents connect to", "")
+        read_until("Try again? (yes/no)")
+        setup.set_state(running={**setup.state["running"], "reachable": True})
+        os.write(master, b"\n")
+        reply("Try another admin account, or this one again?", "")
+        reply("An admin account of your Navidrome", "mira")
+        reply("Its password (not shown)", OWN_PASSWORD)
+        read_until("Everyone signs in")
+        assert process.wait(timeout=30) == 0, seen
+    finally:
+        process.kill()
+        os.close(master)
+    assert setup.state["running"]["users"]["shijhon"]
+    assert "EXISTING_NAVIDROME_VOLUME='navidrome_data'" in (setup.packaging / ".env").read_text()
+
+
+# --- a second installation: the project's name -----------------------------------------------
+
+
+def test_a_project_name_from_the_shell_is_saved_in_env(setup: Setup) -> None:
+    """COMPOSE_PROJECT_NAME=name ./setup.sh: the name goes into .env, so that Compose in
+    another terminal finds this installation, not the default project's."""
+    done = setup.run(*setup.answers(), more={"COMPOSE_PROJECT_NAME": "second"})
+    assert done.returncode == 0, done.stderr
+    env = (setup.packaging / ".env").read_text().splitlines()
+    assert env[0] == "COMPOSE_PROJECT_NAME='second'"
+    assert "COMPOSE_PROJECT_NAME=second is saved in packaging/.env" in done.stdout
+    assert setup.state["volumes"] == [
+        "second_navidrome-data",
+        "second_shijhon-data",
+        "second_usage-export",
+    ]
+    again = setup.run()  # (a new terminal: the name comes from .env)
+    assert again.returncode == 0, again.stderr
+    assert "is saved in packaging/.env" not in again.stdout
+    assert (setup.packaging / ".env").read_text().splitlines() == env
+
+
+def test_the_default_project_name_is_not_written(setup: Setup) -> None:
+    done = setup.run(*setup.answers(), more={"COMPOSE_PROJECT_NAME": "shijhon"})
+    assert done.returncode == 0, done.stderr
+    assert "COMPOSE_PROJECT_NAME" not in (setup.packaging / ".env").read_text()
+
+
+def test_an_env_with_only_the_project_name_is_filled_in(setup: Setup) -> None:
+    (setup.packaging / ".env").write_text("# the second one\nCOMPOSE_PROJECT_NAME=mine")
+    done = setup.run(*setup.answers())
+    assert done.returncode == 0, done.stderr
+    env = (setup.packaging / ".env").read_text().splitlines()
+    assert env[:3] == [
+        "# the second one",
+        "COMPOSE_PROJECT_NAME=mine",
+        f"MUSIC_DIR='{setup.music.resolve()}'",
+    ]
+    assert setup.state["volumes"][0] == "mine_navidrome-data"
+
+
+def test_an_env_without_answers_but_with_other_lines_is_refused(setup: Setup) -> None:
+    (setup.packaging / ".env").write_text("COMPOSE_PROJECT_NAME=mine\nSHIJHON_PORT=5000\n")
+    stopped = setup.run(*setup.answers())
+    assert stopped.returncode == 1
+    assert "packaging/.env has no MUSIC_DIR" in stopped.stderr
+    assert (
+        setup.packaging / ".env"
+    ).read_text() == "COMPOSE_PROJECT_NAME=mine\nSHIJHON_PORT=5000\n"
+
+
+def test_an_empty_music_dir_is_said_to_be_missing(setup: Setup) -> None:
+    (setup.packaging / ".env").write_text("MUSIC_DIR=\n")
+    stopped = setup.run()
+    assert stopped.returncode == 1
+    assert "packaging/.env has no value for MUSIC_DIR" in stopped.stderr
+
+
+def test_two_project_names_are_refused(setup: Setup) -> None:
+    (setup.packaging / ".env").write_text("COMPOSE_PROJECT_NAME=mine\n")
+    stopped = setup.run(*setup.answers(), more={"COMPOSE_PROJECT_NAME": "other"})
+    assert stopped.returncode == 1
+    assert "COMPOSE_PROJECT_NAME is other in this shell and mine in packaging/.env" in (
+        stopped.stderr
+    )
+
+
+def test_a_project_name_given_on_a_later_run_is_added(setup: Setup) -> None:
+    """An installation whose .env lacks the name it was made with (an earlier setup.sh): a
+    later run with the name in the shell adds it."""
+    second = {"COMPOSE_PROJECT_NAME": "second"}
+    assert setup.run(*setup.answers(), more=second).returncode == 0
+    env = setup.packaging / ".env"
+    env.write_text("".join(f"{line}\n" for line in env.read_text().splitlines()[1:]))
+    again = setup.run(more=second)
+    assert again.returncode == 0, again.stderr
+    assert env.read_text().splitlines()[-1] == "COMPOSE_PROJECT_NAME='second'"
+    assert "COMPOSE_PROJECT_NAME=second is saved in packaging/.env" in again.stdout
+
+
+def test_a_later_run_names_the_account_of_the_first_setup(setup: Setup) -> None:
+    assert setup.run(*setup.answers()).returncode == 0
+    again = setup.run()
+    assert "with the account you created at the first setup." in again.stdout
+
+
+def test_at_a_terminal_a_new_network_waits_for_the_navidrome(setup: Setup) -> None:
+    a_running_navidrome(setup)
+    setup.set_state(networks={})
+    seen = converse(
+        setup,
+        [
+            ("(new/running)", "running"),
+            ("Where is your music?", str(setup.music)),
+            ("Your Navidrome's address", "http://navidrome:4533"),
+            ("An admin account of your Navidrome", "mira"),
+            ("Its password (not shown)", OWN_PASSWORD),
+            ("Your Navidrome's data folder, or its Docker volume", ""),
+            ("The port your apps connect to", str(setup.port)),
+            ("Catalog adapters to install", ""),
+            ("The address AI agents connect to", ""),
+            ("Press Enter once your Navidrome has joined shijhon-navidrome", ""),
+        ],
+        last="Everyone signs in",
+    )
+    assert b"ND_EXTAUTH_TRUSTEDSOURCES: 172.30.99.10/32" in seen
+    assert seen.index(b"Press Enter once") < seen.index(b"Creating Shijhon's account")
+    assert b"Try again?" not in seen
+    assert "shijhon" in setup.state["running"]["users"]
 
 
 def test_the_script_is_clean_under_shellcheck() -> None:

@@ -20,7 +20,14 @@ from shijhon.config import DeliverySettings
 from shijhon.delivery.addon import Addon, AddonError
 from shijhon.delivery.bulk import BulkAcquisition, effective_capacity
 from shijhon.delivery.pacing import Limits, Paces
-from shijhon.delivery.playback import Deliverer, NoSource, PlaybackSettings, Track
+from shijhon.delivery.playback import (
+    Deliverer,
+    Departure,
+    NoSource,
+    PlaybackSettings,
+    Track,
+    file_plays,
+)
 from shijhon.delivery.sources import Source, SourceRegistry
 from shijhon.store import Store
 from tests.harness.library import tone
@@ -825,3 +832,32 @@ async def test_a_continued_routing_asks_every_add_on_the_wait_cap_cut_short_firs
         plan, _ = await d._left_plan(left)
         ids = [s.id for s in plan]
         assert sorted(ids[:2]) == [sources[0].id, sources[1].id] and ids[2:] == [sources[2].id]
+
+
+# --- Diagnostics: a song whose own file plays -------------------------------------------------
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("servers", [[], [Server(stream_status=404)]])
+async def test_no_audio_at_the_add_ons_for_a_song_whose_file_plays_is_noted_so(
+    tmp_path: Path, servers: list[Server]
+) -> None:
+    """A song whose file in the library is below the listener's minimum is asked for at the
+    add-ons first; with none set up, or none that has it, its file plays: Diagnostics notes
+    that play as one of its file, with why, never as one without audio. Without a file to
+    fall back to it stays a play without audio."""
+    async with world(tmp_path, servers) as (d, _):
+        with file_plays(), anyio.fail_after(10), pytest.raises(NoSource):
+            await d.open(track(1), None)
+        [noted] = d.recent
+        assert noted.file and noted.served == "" and noted.ended
+        assert noted.purpose == "play" and noted.title == "Song 1"
+        with anyio.fail_after(10), pytest.raises(NoSource):
+            await d.open(track(2), None)
+        assert not d.recent[-1].file and d.recent[-1].ended
+        # A client that left meanwhile got no file either: no audio, as before.
+        departure = Departure()
+        departure.at = d.clock()
+        with file_plays(), anyio.fail_after(10), pytest.raises(NoSource):
+            await d.open(track(3), None, departure=departure)
+        assert not d.recent[-1].file and "the client left" in d.recent[-1].ended

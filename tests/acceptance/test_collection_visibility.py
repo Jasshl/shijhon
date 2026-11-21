@@ -14,6 +14,7 @@ import httpx
 import pytest
 from defusedxml import ElementTree
 
+import shijhon.collection.native as native_module
 from shijhon.collection.policy import default_profile_id
 from shijhon.collection.visibility import Visibility
 from shijhon.proxy.params import RestCall
@@ -279,6 +280,126 @@ def test_two_physical_libraries_keep_foreign_music_before_exact_pages(
             )
             is None
         )
+
+
+@pytest.mark.parametrize("service", [False, True])
+def test_an_app_alone_gets_the_music_of_both_its_libraries(
+    navidrome_factory: NavidromeFactory,
+    tmp_path: Any,
+    service: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An account that may read another library besides Shijhon's, using only an app (no
+    native sign-in ever): that library's structure is read with the service account, only
+    for the libraries Navidrome grants the account; without the service account, the
+    answer says what is missing."""
+    nd = navidrome_factory()
+    write_album(nd.music, simple_album("Shared Fixture Artist", "Configured album", 3))
+    foreign_path = nd.root / "foreign-music"
+    foreign_path.mkdir()
+    write_album(foreign_path, simple_album("Shared Fixture Artist", "Foreign album", 2))
+    foreign_id = int(
+        nd.native(
+            "POST", "library", json={"name": "Independent music", "path": str(foreign_path)}
+        ).json()["id"]
+    )
+    hidden_path = nd.root / "hidden-music"
+    hidden_path.mkdir()
+    write_album(hidden_path, simple_album("Shared Fixture Artist", "Hidden album", 2))
+    nd.native("POST", "library", json={"name": "Not granted", "path": str(hidden_path)})
+    nd.scan(full=True)
+    songs = nd.native("GET", "song", params={"_sort": "id", "_end": 500}).json()
+    configured = [s for s in songs if s["libraryId"] == 1]
+    foreign = [s for s in songs if s["libraryId"] == foreign_id]
+    owner = nd.create_user("app-only", "fixture-password")
+    nd.native("PUT", "user/" + owner + "/library", json={"libraryIds": [1, foreign_id]})
+    app = CollectionApp(
+        nd, tmp_path / "app-only", configured, wait=8, removed=True, service=service
+    )
+    with running(app) as proxy:
+        rest = nd.client("app-only", "fixture-password").with_base(proxy.base_url)
+        params = {"query": "", "songCount": 500, "artistCount": 0, "albumCount": 0}
+        answer = rest.request("search3", params)
+        if not service:
+            assert answer.status_code == 503
+            assert "x-shijhon-view-state" not in answer.headers
+            return
+        deadline = time.monotonic() + 30
+        while answer.status_code == 503 and time.monotonic() < deadline:
+            assert answer.headers.get("x-shijhon-view-state") == "indexing", answer.text
+            time.sleep(0.2)
+            answer = rest.request("search3", params)
+        assert answer.status_code == 200, answer.text
+        found = {s["id"] for s in answer.json()["subsonic-response"]["searchResult3"]["song"]}
+        expected = set(app.originals) | {s["id"] for s in foreign}
+        assert found == expected
+
+        def ready() -> int:
+            async def count() -> int:
+                with app.index._reader() as conn:
+                    return int(conn.execute("SELECT count(*) FROM foreign_ready").fetchone()[0])
+
+            return proxy.call(count)
+
+        # Another account that reads the same libraries uses the same facts, at once.
+        other = nd.create_user("app-other", "fixture-password")
+        nd.native("PUT", "user/" + other + "/library", json={"libraryIds": [1, foreign_id]})
+        rest_other = nd.client("app-other", "fixture-password").with_base(proxy.base_url)
+        assert rest_other.request("search3", params).status_code == 200
+        assert ready() == 1
+        # A new snapshot of the configured library: answered at once from the last complete
+        # facts while the new ones are written.
+        proxy.call(
+            lambda: app.store.execute(
+                "UPDATE collection_index SET generation='fixture-2',updated_at=2"
+                " WHERE library_id='1'"
+            )
+        )
+        libraries = frozenset({"1", str(foreign_id)})
+        assert (
+            proxy.call(lambda: app.index.usable_foreign_generation(libraries, "1", "fixture-2"))
+            == "fixture"
+        )
+        answer = rest.request("search3", params)
+        assert answer.status_code == 200, answer.text
+        found = {s["id"] for s in answer.json()["subsonic-response"]["searchResult3"]["song"]}
+        assert found == expected
+        deadline = time.monotonic() + 30
+        while (
+            proxy.call(lambda: app.index.usable_foreign_generation(libraries, "1", "fixture-2"))
+            != "fixture-2"
+        ):
+            assert time.monotonic() < deadline, "the new snapshot's facts were not written"
+            time.sleep(0.2)
+            answer = rest.request("search3", params)
+            assert answer.status_code == 200, answer.text
+        # Once they are, the lists built before answer at once from them (no "indexing").
+        for client in (rest, rest_other):
+            answer = client.request("search3", params)
+            assert answer.status_code == 200, answer.text
+            found = {s["id"] for s in answer.json()["subsonic-response"]["searchResult3"]["song"]}
+            # (The other account kept no fixture choices: its All holds the whole library.)
+            assert found == expected if client is rest else {s["id"] for s in foreign} <= found
+        # Music added to the other library joins once its facts are read again (by age).
+        write_album(foreign_path, simple_album("Shared Fixture Artist", "Later album", 1))
+        nd.scan(full=True)
+        added = {
+            s["id"]
+            for s in nd.native("GET", "song", params={"_sort": "id", "_end": 500}).json()
+            if s["libraryId"] == foreign_id
+        } - {s["id"] for s in foreign}
+        assert len(added) == 1
+        monkeypatch.setattr(native_module, "FOREIGN_SECONDS", 0.0)
+        app.index.budgets = replace(app.index.budgets, fresh_seconds=0.5)
+        deadline = time.monotonic() + 30
+        while True:
+            answer = rest.request("search3", params)
+            assert answer.status_code == 200, answer.text
+            found = {s["id"] for s in answer.json()["subsonic-response"]["searchResult3"]["song"]}
+            if added <= found:
+                break
+            assert time.monotonic() < deadline, "the other library's new album did not join"
+            time.sleep(0.3)
 
 
 def test_rest_missing_source_reports_setup_instead_of_retry_forever(world: World) -> None:

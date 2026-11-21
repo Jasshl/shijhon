@@ -66,9 +66,14 @@ class _SelectionBehind(Exception):
 
 
 class SetupRequired(Exception):
-    def __init__(self) -> None:
+    """The library view cannot be prepared: ``message`` says why. Without one, it waits for
+    a caller's own native sign-in (no automatic preparation: ``Visibility.source_problem``
+    unset)."""
+
+    def __init__(self, message: str = "") -> None:
         super().__init__(
-            "Sign in once at /shijhon/sign-in?next=/shijhon/collection to prepare "
+            message
+            or "Sign in once at /shijhon/sign-in?next=/shijhon/collection to prepare "
             "your library view. Your existing music and playlists are preserved."
         )
 
@@ -82,14 +87,14 @@ class Binding:
 
     @property
     def facts(self) -> str:
-        """Whose structural facts these are. Those of the configured library come from its
-        snapshot alone, whoever asks, and accounts share them; a caller's own answers about
-        other libraries (``foreign``) stay that caller's."""
+        """Which structural facts these are. Those of the configured library come from its
+        snapshot alone, whoever asks, and accounts share them. Those of other libraries
+        (``foreign``) are their songs' structural relations, which Navidrome lists alike to
+        every account that may read them: accounts that read the same libraries share them
+        too (each request intersects them with its caller's current grants)."""
         if not self.foreign:
             return digest((sorted(self.libraries), self.generations))[:24]
-        return digest((self.owner_id, self.authority, sorted(self.libraries), self.generations))[
-            :24
-        ]
+        return digest(("foreign", sorted(self.libraries), self.generations))[:24]
 
     @property
     def scope(self) -> str:
@@ -102,17 +107,12 @@ class Binding:
 
     def key(self, query: object) -> str:
         """A list's identity. Over a new snapshot of the configured library it stays the
-        same list: only its candidates can be out of date, and the current facts and
-        selection decide what of them is shown (``QueryIndex.ensure`` refreshes it first)."""
+        same list, also beside other libraries: only its candidates can be out of date, and
+        the current facts and selection decide what of them is shown (``QueryIndex.ensure``
+        refreshes it in the background, answering meanwhile)."""
+        # (The shape of the configured library's keys is unchanged: existing lists stay.)
         return digest(
-            (
-                QUERY_REVISION,
-                self.owner_id,
-                self.authority,
-                sorted(self.libraries),
-                self.generations if self.foreign else (),
-                query,
-            )
+            (QUERY_REVISION, self.owner_id, self.authority, sorted(self.libraries), (), query)
         )
 
 
@@ -299,6 +299,8 @@ class QueryIndex:
         # facts -> the event of their writing; library -> the snapshot its facts are ready for
         self.writing_facts: dict[str, anyio.Event] = {}
         self.prepared: dict[str, str] = {}
+        # (other libraries, the configured one) -> the snapshot their facts are complete for
+        self.prepared_foreign: dict[tuple[frozenset[str], str], str] = {}
         self.progress: dict[str, str] = {}
         self.attempted: dict[str, float] = {}
         self.failed: dict[str, float] = {}
@@ -436,6 +438,53 @@ class QueryIndex:
                 return (
                     IndexState(**dict(row)) if row else IndexState(library, "", "missing", 0, 0, "")
                 )
+
+        return await anyio.to_thread.run_sync(read)
+
+    async def usable_foreign_generation(
+        self, libraries: frozenset[str], library: str, generation: str
+    ) -> str:
+        """For reads of the configured library together with other libraries: the snapshot
+        whose facts of those libraries are complete, ``generation`` being the current one.
+        While a new snapshot's are written (``NativeVisibility.prepare_foreign``), reads go
+        on with the last complete ones, as reads of the configured library alone do
+        (``usable_generation``). Only without any do they wait."""
+        await self.open()
+
+        def ready() -> list[str]:
+            with self._reader() as conn:
+                rows = conn.execute(
+                    "SELECT f.facts,f.generation FROM fact_libraries f JOIN foreign_ready r"
+                    " ON r.facts=f.facts WHERE f.library_id=? ORDER BY f.rowid DESC",
+                    (library,),
+                ).fetchall()
+            return [
+                str(row[1])
+                for row in rows
+                if row[0] == Binding("", libraries, ((library, str(row[1])),)).facts
+            ]
+
+        if self.prepared_foreign.get((libraries, library)) == generation:
+            return generation
+        complete = await anyio.to_thread.run_sync(ready)
+        if generation in complete:
+            self.prepared_foreign[(libraries, library)] = generation
+            if len(self.prepared_foreign) > self.budgets.queries:
+                self.prepared_foreign.pop(next(iter(self.prepared_foreign)))
+            return generation
+        return complete[0] if complete else generation
+
+    async def foreign_updated(self, binding: Binding) -> float | None:
+        """When the facts of ``binding``'s other libraries were last written (None: they
+        are not complete)."""
+        await self.open()
+
+        def read() -> float | None:
+            with self._reader() as conn:
+                row = conn.execute(
+                    "SELECT updated FROM foreign_ready WHERE facts=?", (binding.facts,)
+                ).fetchone()
+            return float(row[0]) if row is not None else None
 
         return await anyio.to_thread.run_sync(read)
 

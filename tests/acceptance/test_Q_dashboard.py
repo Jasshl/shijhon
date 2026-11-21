@@ -329,7 +329,7 @@ def test_every_page_names_its_author_its_license_and_its_source(
         f' AGPL-3.0-or-later \u00b7 <a href="{PROJECT_URL}" rel="noreferrer">Source</a></p>'
     )
     assert PROJECT_URL == "https://github.com/Jasshl/shijhon" and PROJECT_URL in USER_AGENT
-    assert importlib.metadata.version("shijhon") == __version__ == "0.9.0"
+    assert importlib.metadata.version("shijhon") == __version__ == "0.10.0"
     for page in PAGES:
         assert admin.get(page).text.count(legal) == 1, page
 
@@ -1861,8 +1861,25 @@ def test_diagnostics_shows_recent_starts(world: DeliveryWorld, admin: Browser) -
                 ("Starter: not found",), "no add-on had it",
             )
         )  # fmt: skip
+        # A song whose file is below the listener's minimum, which no add-on had: its file
+        # played - no failure.
+        recent.append(
+            Routing(
+                time.time(), "Own Song", "Somebody", "play", "", 0.0, (), "no source to try",
+                file=True,
+            )
+        )  # fmt: skip
         page = admin.get("diagnostics").text
         shown = starts(page)
+        begin = shown.rindex('<li class="start', 0, shown.index("Own Song"))
+        own = shown[begin : shown.index('<li class="start', begin + 1)]
+        assert '<li class="start">' in own and "start-failed" not in own
+        assert "From its file after 0 s" in own and "No audio" not in own
+        assert "status-error" not in own
+        assert (
+            "<li>The add-ons had no audio for it (no source to try), so its file in the"
+            " library played.</li>"
+        ) in own
         assert '<ol class="starts">' in shown and "No song has started" not in shown
         # Newest first: the failed one, then the song played.
         assert shown.index("Lost Song") < shown.index("Title dash-starts")

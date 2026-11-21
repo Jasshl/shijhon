@@ -15,7 +15,9 @@ from __future__ import annotations
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 import pytest
 
@@ -70,20 +72,6 @@ def a(world: DeliveryWorld) -> Iterator[FakeAddon]:
     world.clear_sources()
 
 
-def first_audio(client: Any, song: str, params: dict[str, str]) -> float:
-    started = time.monotonic()
-    answer = client.request(
-        "stream", {"id": song, **params}, headers={"range": "bytes=0-"}, stream=True
-    )
-    try:
-        for chunk in answer.iter_bytes():
-            if chunk:
-                return time.monotonic() - started
-        raise AssertionError("no audio")
-    finally:
-        answer.close()
-
-
 def chosen_time(world: DeliveryWorld, a: FakeAddon, key: str, order: str) -> float:
     """The chosen song's time to its first audio bytes: alone, or asked for together with
     the next song (``order``: whose request comes first)."""
@@ -91,25 +79,45 @@ def chosen_time(world: DeliveryWorld, a: FakeAddon, key: str, order: str) -> flo
     time.sleep(0.6)  # past the moment around the songs before
     chosen, _, _ = world.placeholder_track(f"{key}-chosen", [a], seconds=20, **track)
     other, _, _ = world.placeholder_track(f"{key}-next", [a], seconds=20, **track)
-    clients = [world.client(client="two-elements") for _ in range(2)]
-    for client in clients:  # their connections open, as an app's are
-        client.ok("ping")
+    client = world.client(client="two-elements")
+    address = urlsplit(client.base_url)
+    # Their connections open, as an app's are. The requests are sent from one thread, the
+    # second 0.01 s after the first (so that the first comes first): two threads' requests
+    # can come apart by more than "together" (0.05 s) on a busy machine.
+    connections = [HTTPConnection(address.netloc, timeout=60) for _ in range(2)]
+    for connection in connections:
+        connection.connect()
+
+    def send(connection: HTTPConnection, song: str) -> float:
+        items = [*client.auth_params(), ("f", "json"), ("id", song), *params.items()]
+        started = time.monotonic()
+        connection.request("GET", f"/rest/stream?{urlencode(items)}", headers={"range": "bytes=0-"})
+        return started
+
+    def first_audio(connection: HTTPConnection, started: float) -> float:
+        answer = connection.getresponse()
+        assert answer.status in (200, 206) and answer.read(1), answer.status
+        return time.monotonic() - started
+
     try:
+        asked = [(connections[0], chosen), (connections[1], other)]
         if order == "alone":
-            return first_audio(clients[0], chosen, params)
-        asked = [(clients[0], chosen), (clients[1], other)]
-        if order == "next first":
+            asked = asked[:1]
+        elif order == "next first":
             asked.reverse()
+        sent = []
+        for connection, song in asked:
+            sent.append((connection, song, send(connection, song)))
+            time.sleep(0.01)
         with ThreadPoolExecutor(2) as pool:
-            futures = {}
-            for client, song in asked:
-                futures[song] = pool.submit(first_audio, client, song, params)
-                time.sleep(0.01)
-            futures[other].result()
-            return futures[chosen].result()
+            took = {song: pool.submit(first_audio, c, started) for c, song, started in sent}
+            if other in took:
+                took[other].result()
+            return took[chosen].result()
     finally:
-        for client in clients:
-            client.close()
+        for connection in connections:
+            connection.close()
+        client.close()
 
 
 def test_the_chosen_song_is_not_slowed_by_the_next_one_asked_for_with_it(

@@ -1,5 +1,6 @@
 # ruff: noqa: S608 -- SQL identifiers are constants or validated; values are bound.
-"""Bounded caller-authenticated scans with an atomic last-complete snapshot."""
+"""Bounded scans - as a verified caller, or as Shijhon's service account - with an atomic
+last-complete snapshot."""
 
 from __future__ import annotations
 
@@ -57,9 +58,14 @@ class Index:
         self.asset_lookup = asset_lookup
         self.lock = anyio.Lock()
 
-    async def scan(self, owner_id: str, library_id: str) -> None:
+    async def scan(self, owner_id: str, library_id: str, *, access: Access | None = None) -> None:
+        """A complete snapshot of the library's songs, read as ``owner_id`` through
+        ``access`` (the caller's own reads; Shijhon's service account's with
+        ``reader.ServiceLibrary``): structural fields only, so whoever may read the library
+        reads the same snapshot."""
+        source = access or self.access
         async with self.lock:
-            await self._authorize(owner_id, library_id)
+            await self._authorize(owner_id, library_id, source)
             generation = secrets.token_hex(16)
             await self.store.execute(
                 "INSERT INTO collection_index(library_id,state) VALUES (?,'indexing')"
@@ -72,7 +78,7 @@ class Index:
                     # Each source page authenticates as the original caller. Current
                     # immutable identity/grants are also checked at scan boundaries,
                     # including immediately before the atomic publish below.
-                    songs = await self.access.songs(owner_id, library_id, offset, 500)
+                    songs = await source.songs(owner_id, library_id, offset, 500)
                     if len(songs) > 500:
                         raise CollectionError("The library index returned an oversized page.")
                     if not songs:
@@ -105,7 +111,7 @@ class Index:
                     if len(songs) < 500:
                         break
                     await anyio.lowlevel.checkpoint()
-                await self._authorize(owner_id, library_id)
+                await self._authorize(owner_id, library_id, source)
                 # Comparing passes over the whole library: on a connection of its own,
                 # so that nothing else asking the store waits for it.
                 async with self.store.snapshot() as reader:
@@ -326,8 +332,8 @@ class Index:
                 )
             return generation, [str(row[2]) for row in rows]
 
-    async def _authorize(self, owner: str, library: str) -> None:
-        actor = await self.access.authorize(owner)
+    async def _authorize(self, owner: str, library: str, source: Access) -> None:
+        actor = await source.authorize(owner)
         if actor.owner_id != owner or library not in actor.library_ids:
             raise CollectionError("Your access to this music library could not be verified.")
 

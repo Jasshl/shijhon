@@ -225,6 +225,11 @@ class Visibility:
         # A verified account reads its library: its favorites are read when due, with
         # its request's credentials (``collection.reasons.Reasons.due``).
         self.learn: Callable[[Principal, RestCall], Awaitable[None]] | None = None
+        # Set where the library is prepared without anyone signing in (with Shijhon's
+        # service account, ``reader.SourceRefresh.run``): why it cannot be ("" while
+        # nothing is known against it). A library without a snapshot then answers that it
+        # is being prepared, or that reason - never to sign in.
+        self.source_problem: Callable[[], str] | None = None
 
     def attach(self, proxy: ProxyApp) -> None:
         """Call after existing catalog/audio handlers have been installed."""
@@ -277,13 +282,20 @@ class Visibility:
             if not state.generation or state.updated_at <= 0:
                 if state.state == "indexing":
                     raise IndexPending(state.indexed)
-                raise SetupRequired
+                if self.source_problem is None:
+                    raise SetupRequired
+                problem = self.source_problem()
+                if problem:
+                    raise SetupRequired(problem)
+                raise IndexPending()  # (its first preparation is about to begin, or again)
             generations.append(
                 (
                     library,
                     await self.index.usable_generation(library, state.generation)
                     if libraries == {configured}
-                    else state.generation,
+                    else await self.index.usable_foreign_generation(
+                        libraries, library, state.generation
+                    ),
                 )
             )
         authority = digest(
@@ -371,7 +383,11 @@ class Visibility:
                     str(i) for i in principal.library_ids
                 ):
                     raise AccessDenied
-                if await self.binding(current, frozenset(folders) if folders else None) != binding:
+                # A new snapshot of the library meanwhile is no reason to throw the list
+                # away: it is published over the facts it was built with, which stay, and is
+                # refreshed beside its next request, answering meanwhile (``ensure``).
+                found = await self.binding(current, frozenset(folders) if folders else None)
+                if found.scope != binding.scope:
                     raise IndexPending()
 
             if call.name == "getScanStatus":

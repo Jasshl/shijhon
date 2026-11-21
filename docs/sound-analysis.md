@@ -71,11 +71,7 @@ playlists are made without it.
    AudioMuse-AI may analyze silent placeholders and spend its time on them; Shijhon
    ignores such analysis, but cannot stop AudioMuse-AI from doing the work. The setting
    is in the [settings reference](reference/settings.md#top-level-server-navidrome-placeholders).
-5. **Sign in once as that account** at Shijhon's dashboard, `/shijhon/sign-in` (at the
-   address your apps use), so that Shijhon prepares its library view. Until you do,
-   Shijhon answers the account's listings with "Sign in once…" and AudioMuse-AI cannot read
-   the library.
-6. **Point AudioMuse-AI at Shijhon**, not at Navidrome: in AudioMuse-AI, add a Navidrome
+5. **Point AudioMuse-AI at Shijhon**, not at Navidrome: in AudioMuse-AI, add a Navidrome
    media server with Shijhon's address (the one your apps use) and the **user name and
    password** of the account. Do not use an API key: Navidrome does not accept one, so the
    account would not be recognized. Then start the analysis. Large libraries take a while,
@@ -98,7 +94,7 @@ its facts. Reading stops when Shijhon stops and goes on from where it was.
 Between Shijhon and AudioMuse-AI go Navidrome song IDs, the analysis, the words of a
 search by description, and the token (as a bearer token, only to the configured
 address; never shown or logged). Titles, listening history and accounts are not sent.
-AudioMuse-AI reads your library on its own from the address in step 6. When facts are
+AudioMuse-AI reads your library on its own from the address in step 5. When facts are
 used in a playlist request, they are part of what the request's AI service is shown about
 those songs, like their year or genre.
 
@@ -128,7 +124,8 @@ The **Sound analysis** page says why, in a few fixed sentences:
 - *does not offer what Shijhon asks*: AudioMuse-AI is older than 3.6.
 
 If AudioMuse-AI itself reports that it cannot read the library, or no song gets facts,
-check that the account signed in once (step 5) and is listed in `real_audio_accounts`
-(step 4), and that AudioMuse-AI uses its user name and password.
+check that the account is listed in `real_audio_accounts` (step 4), that AudioMuse-AI uses
+its user name and password, and that the dashboard's **Collection** page shows the library
+as ready (Shijhon prepares it by itself after a start; the page says when it cannot).
 
 The settings are in the [configuration guide](configuration.md#audiomuse).

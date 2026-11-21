@@ -74,9 +74,12 @@
 {% if op.state in ['review','done'] %}<p class="collection-muted">{% if profile.id==active.id %}This library is used in your apps.{% elif active.selection_id=='all' and profile.selection_id in ['original','shijhon'] %}Your apps use All, which holds {{ profile.name }} as you leave it.{% else %}Your apps use {{ active.name }}. Choose Use in my apps to use {{ profile.name }}.{% endif %}</p>{% endif %}
 <a class="collection-back" href="{{ browse_url }}">Back to browsing</a></section>
 {% endif %}
+{% if source_problem and index_state and index_state.generation %}
+<div class="notice notice-warn" role="status"><p>{{ source_problem }} Until then, your apps and this page use the library as it was last read.</p></div>
+{% endif %}
 {% if index_state and index_state.state!='ready' %}
-<div class="notice notice-info collection-source" role="status" aria-live="polite"{% if index_state.state=='indexing' %} data-source-progress data-url="{{ prefix }}/collection/source-progress"{% endif %}>
-  <p>{% if index_state.state=='indexing' %}<span data-source-text>Preparing your library… · {{ '{:,}'.format(index_state.indexed) }} songs read. You can leave this page.</span>{% elif index_state.error %}Couldn’t refresh your music. Try Refresh music again.{% else %}Choose Refresh music to prepare your library.{% endif %}{% if index_state.generation %} Your previous complete library is still available.{% endif %}</p>
+<div class="notice notice-info collection-source" role="status" aria-live="polite"{% if index_state.state=='indexing' or (source_automatic and not source_problem and not index_state.generation) %} data-source-progress data-url="{{ prefix }}/collection/source-progress"{% endif %}>
+  <p>{% if index_state.state=='indexing' %}<span data-source-text>Preparing your library… · {{ '{:,}'.format(index_state.indexed) }} songs read. You can leave this page.</span>{% elif source_problem and not index_state.generation %}{{ source_problem }}{% elif source_automatic and not index_state.generation %}<span data-source-text>Preparing your library. Your music appears here and in your apps when it is ready; you can leave this page.</span>{% elif index_state.error %}Couldn’t refresh your music. Try Refresh music again.{% else %}Choose Refresh music to prepare your library.{% endif %}{% if index_state.generation %} Your previous complete library is still available.{% endif %}</p>
 {% if index_state.state!='indexing' %}
   <form class="actions" method="post" action="{{ prefix }}/collection">{{ fields() }}<button class="btn-small" name="action" value="refresh">Refresh music</button></form>
 {% endif %}

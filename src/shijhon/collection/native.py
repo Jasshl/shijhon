@@ -29,6 +29,7 @@ from shijhon.collection.query_index import (
     SourcePage,
 )
 from shijhon.collection.visibility import Visibility, number, query_pairs
+from shijhon.navidrome.client import NavidromeError
 from shijhon.proxy.app import ProxyApp
 from shijhon.proxy.params import header, parse_pairs, unreadable
 from shijhon.proxy.responses import music_send
@@ -52,15 +53,55 @@ def bearer(headers: list[tuple[bytes, bytes]], query: list[tuple[str, str]]) -> 
     return next((v for k, v in query if k == "jwt"), "")
 
 
+FOREIGN_SECONDS = 300.0  # how old other libraries' facts may get before they are read again
+# What the facts of other libraries are made of (``QueryIndex._foreign_facts``): their
+# source pages keep only that - no annotations of the account that read them.
+_STRUCTURAL = (
+    "id",
+    "libraryId",
+    "albumId",
+    "artistId",
+    "albumArtistId",
+    "participants",
+    "tags",
+    "genres",
+    "duration",
+    "size",
+    "year",
+)
+
+
+def structural(rows: list[Any]) -> list[Any]:
+    """Native songs as the facts of other libraries use them (``_STRUCTURAL``)."""
+    return [
+        {k: row[k] for k in _STRUCTURAL if k in row} if isinstance(row, dict) else row
+        for row in rows
+    ]
+
+
+def _shared(binding: Binding) -> Binding:
+    """The binding a build of other libraries' facts runs under: those facts are shared
+    by every account that reads the same libraries (``Binding.facts``), so the build is
+    one for all of them, whichever account's request began it."""
+    return Binding("", binding.libraries, binding.generations)
+
+
 class NativeVisibility:
     def __init__(
         self,
         visibility: Visibility,
         *,
         verified: Callable[[Principal, str], Awaitable[None]] | None = None,
+        service: bool = False,
     ) -> None:
+        """``service``: a caller without its own native sign-in at hand has its other
+        libraries' structure read with Shijhon's service account (``prepare_foreign``)."""
         self.visibility = visibility
         self.verified = verified
+        self.service = service
+        self._writing: set[str] = set()  # facts of other libraries written in the background
+        # facts -> (not again before, failures in a row) of their background writing
+        self._retry: dict[str, tuple[float, int]] = {}
         self.warmed: dict[str, float] = {}
         self.index, self.access, self.upstream = (
             visibility.index,
@@ -192,9 +233,10 @@ class NativeVisibility:
 
             async def validate() -> None:
                 current = await self.access.verify_native(token)
+                # (A new snapshot of the library meanwhile is no refusal: see ``Visibility``.)
                 if (
                     current != principal
-                    or await self.visibility.binding(current, requested) != binding
+                    or (await self.visibility.binding(current, requested)).scope != binding.scope
                 ):
                     raise AccessDenied
 
@@ -352,13 +394,95 @@ class NativeVisibility:
     async def prepare_foreign(
         self, binding: Binding, principal: Principal, token: str | None
     ) -> None:
-        """Index only caller-authorized foreign structure; never touch the music source."""
+        """Index only caller-authorized foreign structure; never touch the music source.
+
+        Complete facts of these libraries answer at once (also those of the configured
+        library's last snapshot, ``QueryIndex.usable_foreign_generation``); they are written
+        again in the background for the current snapshot, and once they are older than
+        ``FOREIGN_SECONDS`` (what changed in the other libraries). Only without any does the
+        request wait for them."""
         if not binding.foreign:
             return
+        updated = await self.index.foreign_updated(binding)
+        if updated is None:
+            await self._foreign(binding, principal, token)
+            return
+        await self._foreign_later(binding, principal, token, time.time() - updated)
+
+    async def _foreign_later(
+        self, binding: Binding, principal: Principal, token: str | None, age: float
+    ) -> None:
+        """The facts of these libraries written again in the background - for the current
+        snapshot when ``binding`` reads an earlier one, or because they are ``age`` seconds
+        old: once at a time per set of facts until that build ends, and after a failure
+        not again for a while (one minute, doubling up to ten)."""
+        configured = str(self.access.navidrome.library_id)
+        state = await self.index.source_state(configured)
+        snapshot = dict(binding.generations).get(configured)
+        current = binding
+        if state.generation and snapshot is not None and snapshot != state.generation:
+            current = Binding(
+                binding.owner_id,
+                binding.libraries,
+                tuple(
+                    (library, state.generation if library == configured else generation)
+                    for library, generation in binding.generations
+                ),
+                binding.authority,
+            )
+        elif age < FOREIGN_SECONDS:
+            return
+        facts = current.facts
+        now = time.monotonic()
+        if (
+            facts in self._writing
+            or now < self._retry.get(facts, (0.0, 0))[0]
+            or (not token and not self.service)
+        ):
+            return
+        self._writing.add(facts)
+
+        async def write() -> None:
+            try:
+                await self._foreign(current, principal, token, patience=self.index.budgets.seconds)
+                self._retry.pop(facts, None)
+            except (
+                IndexPending,
+                IndexFailed,
+                SetupRequired,
+                AccessDenied,
+                AccessUnavailable,
+                httpx.HTTPError,
+                sqlite3.Error,
+                OSError,
+            ):
+                failures = self._retry.get(facts, (0.0, 0))[1]
+                wait = min(600.0, 60.0 * 2**failures)
+                self._retry[facts] = (time.monotonic() + wait, failures + 1)
+                while len(self._retry) > 256:
+                    self._retry.pop(next(iter(self._retry)))
+            finally:
+                self._writing.discard(facts)
+
+        self.index.spawn(write)
+
+    async def _foreign(
+        self,
+        binding: Binding,
+        principal: Principal,
+        token: str | None,
+        *,
+        patience: float | None = None,
+    ) -> None:
+        """Write the facts of ``binding``'s other libraries, read with the caller's own
+        native sign-in, else with Shijhon's service account (``_foreign_as_service``) -
+        once for every account that reads the same libraries (``_shared``). ``patience``:
+        how long to wait for the build (``QueryIndex.ensure``)."""
         if not token:
-            if await self.index.foreign_ready(binding):
-                return
-            raise SetupRequired
+            if not self.service:
+                raise SetupRequired
+            await self._foreign_as_service(binding, principal, patience=patience)
+            return
         if await self.access.verify_native(token) != principal:
             raise AccessDenied
         params = [
@@ -381,23 +505,89 @@ class NativeVisibility:
                 total = int(header(returned, b"x-total-count"))
             except ValueError:
                 raise IndexFailed("The native source has no trustworthy total.") from None
-            return SourcePage(data, total)
+            return SourcePage(structural(data), total)
 
         async def validate() -> None:
             current = await self.access.verify_native(token)
-            if (
-                current != principal
-                or await self.visibility.binding(current, binding.libraries) != binding
-            ):
+            if current != principal:
                 raise AccessDenied
+            await self._same_binding(current, binding)
 
         await self.index.ensure(
-            binding,
+            _shared(binding),
             ("native-foreign-source", sorted(binding.foreign)),
             fetch,
             validate,
             structural=True,
             page_size=self.index.budgets.native_page_size,
+            patience=patience,
+        )
+
+    async def _same_binding(self, current: Principal, binding: Binding) -> None:
+        """Whether ``binding`` still holds: the caller's grants as they were (``current``
+        is the same principal), and the configured library's snapshot it is written for
+        still the current one. A new snapshot meanwhile is no refusal: its facts are
+        written next."""
+        configured = str(self.access.navidrome.library_id)
+        if dict(binding.generations).get(configured) is None:
+            return
+        state = await self.index.source_state(configured)
+        if dict(binding.generations)[configured] != state.generation:
+            raise IndexPending()
+
+    async def _foreign_as_service(
+        self, binding: Binding, principal: Principal, *, patience: float | None = None
+    ) -> None:
+        """The caller's other libraries' structure, read with Shijhon's service account
+        when the caller's own native sign-in is not at hand (an app's request): only the
+        libraries Navidrome grants the caller now (``binding.foreign``), each song checked
+        to be of one of them. Only structural relations are kept
+        (``QueryIndex._foreign_facts``), shared with accounts that read the same libraries:
+        Navidrome lists a library's songs alike to every account that may read it."""
+        navidrome = self.access.navidrome
+        params = [
+            ("_sort", "id"),
+            ("_order", "ASC"),
+            ("missing", "false"),
+            *(("library_id", library) for library in sorted(binding.foreign)),
+        ]
+
+        async def fetch(offset: int, limit: int) -> SourcePage:
+            try:
+                reply = await navidrome.native(
+                    "GET",
+                    "song",
+                    params=[*params, ("_start", str(offset)), ("_end", str(offset + limit))],
+                )
+            except NavidromeError:
+                raise IndexFailed("The native source could not be read.") from None
+            if len(reply.content) > _BODY_BYTES:
+                raise IndexFailed("The native library page exceeds its response budget.")
+            try:
+                data = reply.json()
+                total = int(reply.headers.get("x-total-count", ""))
+            except ValueError:
+                raise IndexFailed("The native source has no trustworthy total.") from None
+            if not isinstance(data, list):
+                raise IndexFailed("The native source is invalid.")
+            return SourcePage(structural(data), total)
+
+        async def validate() -> None:
+            current = await self.access.verify(
+                principal.username, expected_user_id=principal.user_id
+            )
+            if current != principal:
+                raise AccessDenied
+            await self._same_binding(current, binding)
+
+        await self.index.ensure(
+            _shared(binding),
+            ("native-foreign-source", sorted(binding.foreign)),
+            fetch,
+            validate,
+            structural=True,
+            page_size=self.index.budgets.native_page_size,
+            patience=patience,
         )
 
     async def _json(

@@ -50,8 +50,41 @@ fails records nothing.) `stream`, transcode decisions, play queues, fetching ahe
 browsing, searching and album pages record nothing. A hand choice on the Collection page
 is kept as a choice, never as activity.
 
-The library index is refreshed in full only with a caller's native bearer (Refresh music,
-a dashboard sign-in, the native website). Placeholders Shijhon writes later (commits,
+The library index is prepared and refreshed in full with Shijhon's service account
+(`[navidrome] user`, `collection/reader.py` `ServiceLibrary` and `SourceRefresh.run`), so
+that apps get their lists with nobody signing in. Every 30 seconds Shijhon reads
+Navidrome's scan status and the configured library's record (its last scan and counts).
+A library without a complete snapshot (a first start, a new library, a Navidrome taken
+over) is prepared at once, also while Navidrome's first scan runs (tried again at that
+pace while the growing library refuses a read), and again as soon as that scan ends.
+Once a scan has ended and the record changed, the library's songs changed since the last
+refresh began are read, newest first by `updatedAt` (at most 10,000): a change only inside
+the placeholder folder, or imports added or changed in the music-import folder (when
+music imports are set up; both at the library's root), is Shijhon's own (placeholders
+join the lists from apps' requests, below; imports refresh the index themselves) and
+waits up to an hour; any other change - a song added, changed or gone missing elsewhere,
+an import deleted, or counts that changed with no song changed - is read once a look saw
+no new change, at least 60 seconds after the last read ended (or twice as long as that
+read took, whichever is longer), and at least every five minutes while changes go on:
+usually about a minute after Navidrome's scan. Each read logs its reason and duration.
+Telling them apart by where the songs are, rather than by which scan found them, cannot
+take a scan of someone else's music for Shijhon's; a file someone puts into Shijhon's own
+folders waits for the hour. What was last seen is kept in `library-source.json` in the
+state folder (for that library ID and the library's creation time), so a start reads the
+library again only when it changed meanwhile (once, 30 seconds after the start, when
+nothing was kept). The native website's requests only remember the caller's native
+bearer, for its own reads; a dashboard sign-in and **Refresh music** refresh at once with
+the service account (one asked for while a refresh runs begins right after it). A
+failed preparation is tried again after 30 seconds, doubling up to ten minutes, and at
+once when Navidrome answers again or a scan ends. When Navidrome refuses the service
+account's credentials or its admin rights later, the last snapshot keeps answering and
+the Collection page says so. The index holds structural fields only, read in pages of the configured library,
+so whose reads fill it changes nothing in it: what each account sees stays decided per
+request, by its own current grants and library choice. A refresh that finds nothing
+changed keeps its snapshot, and no list is prepared again. After a new snapshot, lists
+keep answering from the facts they were built with while their refresh runs; a list being
+built when it arrives is published all the same and refreshed next.
+Placeholders Shijhon writes later (commits,
 fills, imports, restores) join it from apps' own requests (`collection/written.py`): a
 verified library read looks, at most every ten seconds and two seconds after it is
 answered, for placeholders the index lacks (one local query); when there are some, those songs are read with that request's
@@ -199,13 +232,15 @@ and unrelated failures are never retried. Common native browsing queries prewarm
 a verified caller becomes available. A first native deep link can register that
 caller's transient bearer and start a missing source index without a second account.
 
-On a fresh installation or upgrade, sign in once at
-`/shijhon/sign-in?next=/shijhon/collection`, or sign in to the native website, to
-prepare the initial source index using your own native bearer. An existing complete
-source survives restarts. A REST-only client without an initial source receives an
-explicit setup-required HTTP 503 with that address; it is not marked as indexing.
-Only a source or query scan that is actually running gets the indexing retry marker.
-No service-account scan or fabricated REST file path supplies import provenance.
+On a fresh installation or upgrade, Shijhon prepares the initial source index with its
+service account as it starts; nobody needs to sign in. An existing complete source
+survives restarts. Until the first one is complete, library lists answer HTTP 503 with
+the indexing marker ("indexing, retry shortly"). Only when the service account cannot
+prepare it - Navidrome refuses its sign-in, it is no admin, or it may not read the
+configured library - does a library list answer HTTP 503 without the marker, with a
+message that says which, and the Collection page says the same. Album and artist pages
+answer from Navidrome meanwhile. Import provenance comes from Shijhon's own records,
+never from the account that read the index or from REST file paths.
 
 For a caller with several physical-library grants, collection policy applies only to
 the configured Shijhon library. Other authorized music remains in combined totals and
@@ -216,4 +251,12 @@ lists, shuffle, genre songs, favorites, artist indexes and searches - and as Nav
 reads it, as a number ("01" is library 1; a value that is no number names none).
 Streams, downloads and pages ignore it, as Navidrome does: a placeholder's stream with
 another library's folder is still a placeholder's stream. REST combined browsing can reuse that private complete scan;
-if it is missing, a transient verified native connection must prepare it first.
+if it is missing and the caller's native bearer is not at hand (an app's request), it is
+read with the service account: only the other libraries Navidrome grants that caller now,
+each song checked to be in one of them. Those structural relations are shared by the
+accounts that read the same libraries, each request intersecting them with its caller's
+current grants. They are read again in the background after a new snapshot of the
+configured library and once they are five minutes old, by one build for all those
+accounts (after a failure not again for a minute, doubling up to ten); reads go on with
+the last complete ones meanwhile, and lists keep their identity across snapshots. Their
+source pages keep only the structural fields the relations use.

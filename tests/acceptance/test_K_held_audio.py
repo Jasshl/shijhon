@@ -29,6 +29,9 @@ from tests.harness.delivery import DeliveryWorld, delivery_world
 from tests.harness.fake_addon import FakeAddon, FakeTrack
 
 SECONDS = 60  # pink noise: a FLAC of several megabytes, more than a connection buffers
+# A FLAC of over 30 MB: more than the app's and the add-on's connections buffer together on
+# any system (Linux grows a loopback socket's buffers to 6 MiB read and 4 MiB write).
+LONG_SECONDS = 300
 
 
 @pytest.fixture(scope="module")
@@ -54,26 +57,30 @@ def a(world: DeliveryWorld) -> Iterator[FakeAddon]:
     world.services.deliverer.settings.pin_ttl_seconds = 1800.0
 
 
-def noise(world: DeliveryWorld, key: str, seed: int = 1) -> Path:
+def noise(world: DeliveryWorld, key: str, seed: int = 1, seconds: int = SECONDS) -> Path:
     path = world.tmp / f"{key}-{seed}.flac"
     subprocess.run(
         ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-         f"anoisesrc=d={SECONDS}:c=pink:a=0.3:r=44100:seed={seed}", "-ac", "2", "-c:a", "flac",
+         f"anoisesrc=d={seconds}:c=pink:a=0.3:r=44100:seed={seed}", "-ac", "2", "-c:a", "flac",
          str(path)],
         check=True,
     )  # fmt: skip
     return path
 
 
-def song(world: DeliveryWorld, a: FakeAddon, key: str, **track: Any) -> tuple[str, FakeTrack]:
-    found, _, _ = world.placeholder_track(key, [], seconds=SECONDS)
+def song(
+    world: DeliveryWorld, a: FakeAddon, key: str, seconds: int = SECONDS, **track: Any
+) -> tuple[str, FakeTrack]:
+    found, _, _ = world.placeholder_track(key, [], seconds=seconds)
     row = world.server.call(
         lambda: world.services.store.fetchone(
             "SELECT isrc FROM placeholders WHERE song_id = ?", [found]
         )
     )
     assert row is not None
-    fake = a.add(FakeTrack(isrc=str(row["isrc"]), audio=noise(world, key), **track))
+    fake = a.add(
+        FakeTrack(isrc=str(row["isrc"]), audio=noise(world, key, seconds=seconds), **track)
+    )
     return found, fake
 
 
@@ -330,12 +337,19 @@ def test_an_add_on_that_asks_not_to_be_used_for_downloads_is_not_read_on(
     addon.manifest_extra = {"allowDownloads": False}
     world.add_source(addon)
     try:
-        song_id, fake = song(world, addon, "held-no-downloads", chunk_delay=0.001)
+        song_id, fake = song(
+            world, addon, "held-no-downloads", seconds=LONG_SECONDS, chunk_delay=0.001
+        )
         data = fake.audio.read_bytes()
         paused = Paused(world, song_id)
-        time.sleep(1.5)
-        sent = addon.bytes_sent[fake.isrc]
-        assert sent < len(data) // 2, (sent, len(data))  # what the app read, and a buffer
+        # The add-on stops once the connections' buffers are full (an answer read on would
+        # go on to the file's end): what the app read, and those buffers - their size is
+        # the system's, at most about two thirds of this file.
+        sent, deadline = -1, time.monotonic() + 30
+        while sent != (sent := addon.bytes_sent.get(fake.isrc, 0)):
+            assert time.monotonic() < deadline, "the add-on kept sending"
+            time.sleep(1.0)
+        assert sent < len(data) * 2 // 3, (sent, len(data))
         assert paused.rest() == data
     finally:
         world.clear_sources()

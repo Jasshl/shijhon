@@ -13,6 +13,8 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sqlite3
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -585,3 +587,66 @@ def test_the_jukebox_is_off_for_the_account(library: Library) -> None:
     finally:
         interceptor._jukebox = None
     assert library.addon.requests() == []
+
+
+def test_lists_keep_answering_across_a_new_snapshot(library: Library) -> None:
+    """A full refresh that brings a new snapshot (a song's title changed at Navidrome),
+    its facts written slowly as under load: the analyzer's lists built before and new ones
+    answer throughout - never "being prepared" for a library prepared long ago."""
+    world = library.world
+    client = library.analyzer()
+    built = {"query": "", "songCount": 50, "musicFolderId": "1"}
+    ok(client, "search3", built)
+    ok(client, "getAlbumList2", {"type": "newest", "size": 500})
+    query_index = world.services.collection.query_index
+    assert query_index is not None
+    original = query_index._write_facts
+
+    def slowly(binding: Any) -> None:
+        time.sleep(3)
+        original(binding)
+
+    refresher = world.services.collection_refresh
+    assert refresher is not None and refresher.service is not None
+
+    async def generation() -> str:
+        row = await world.services.store.fetchone("SELECT generation FROM collection_index")
+        return str(row["generation"])
+
+    async def refresh() -> None:
+        assert refresher is not None and refresher.service is not None
+        principal = await refresher.service.principal()
+        await world.services.collection.refresh(principal.user_id, "1", access=refresher.service)
+
+    before = world.server.call(generation)
+    with sqlite3.connect(world.nd.data / "navidrome.db") as conn:
+        conn.execute("UPDATE media_file SET title=title||' (Live)' WHERE id=?", (library.owned[0],))
+    answers: list[tuple[str, Any]] = []
+    stop = threading.Event()
+
+    def ask() -> None:
+        asker = library.analyzer()
+        n = 0
+        while not stop.is_set():
+            n += 1
+            for method, params in (
+                ("search3", built),
+                ("getAlbumList2", {"type": "newest", "size": 500}),
+                ("search3", {"query": "", "songCount": 50, "musicFolderId": "0" * n + "1"}),
+            ):
+                body = asker.request(method, params).json()["subsonic-response"]
+                answers.append((method, body.get("error")))
+            time.sleep(0.2)
+
+    query_index._write_facts = slowly  # type: ignore[method-assign]
+    asking = threading.Thread(target=ask)
+    asking.start()
+    try:
+        world.server.call(refresh, timeout=120)
+        time.sleep(1)
+    finally:
+        stop.set()
+        asking.join()
+        query_index._write_facts = original  # type: ignore[method-assign]
+    assert world.server.call(generation) != before
+    assert answers and all(error is None for _, error in answers), answers

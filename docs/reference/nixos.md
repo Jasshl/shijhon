@@ -28,7 +28,7 @@ All options are under `services.shijhon`.
 | `usageExport.directory` | `/var/lib/shijhon-usage` | Where the export is written. |
 | `usageExport.everySeconds` | `900` | How often the export is written. Shijhon can also ask for one. |
 | `aiRunner.packages`, `aiRunner.home` | none | [Local AI runners](#local-ai-runners) for playlists, and the folder for their sign-in. |
-| `libraryWritable` | `false` | Binds `libraryPath` read-write into Shijhon's service, for **Also fix files in your music folder** ([how it works](../how-it-works.md#each-artist-of-a-joined-credit)). Only files owned by Shijhon's user are changed. |
+| `libraryWritable` | `false` | Binds `libraryPath` read-write into Shijhon's service, for **Also fix files in your music folder** ([how it works](../how-it-works.md#each-artist-of-a-joined-credit)). Only files owned by Shijhon's user are changed. If the library is a union of folders (such as mergerfs) without hard links, changing an album's files needs room for a whole copy of each while it runs. |
 | `placeholderFolder` | `"_shijhon"` | The placeholder folder's name in the library. |
 | `placeholderPath` | inside the library | Where that folder really is, when `libraryPath` is a read-only union you set up that shows it. |
 | `importsPath`, `importsFolder` | none, `"_imports"` | [Music imports](#music-imports). |
@@ -275,7 +275,10 @@ users, IDs, playlists and favorites, and the music folder can be at a different 
 
 3. Replace the new data with the Compose installation's: Navidrome's volume
    (`shijhon_navidrome-data`, or your `NAVIDROME_DATA` folder), Shijhon's
-   (`shijhon_shijhon-data`) and Shijhon's Navidrome password:
+   (`shijhon_shijhon-data`) and Shijhon's Navidrome password. The volumes are named for the
+   Compose project: with another `COMPOSE_PROJECT_NAME`, they start with that name
+   (`docker volume ls` lists them). Run this in the checkout of the Compose installation,
+   on the same machine:
 
    ```sh
    sudo find /var/lib/navidrome /var/lib/shijhon -mindepth 1 -delete
@@ -319,7 +322,7 @@ back the same way.
 ## The package alone
 
 ```sh
-nix build github:Jasshl/shijhon/v0.9.0
+nix build github:Jasshl/shijhon/v0.10.0
 ./result/bin/shijhon version
 ```
 

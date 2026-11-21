@@ -29,19 +29,20 @@ def test_password_sign_in_scans_as_caller_and_keeps_catalog_disabled(navidrome_f
             assert browser.sign_in("listener", password).status_code == 303
             collection = world.services.collection
             assert collection is not None
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
+            # The sign-in reads the library again (with Shijhon's service account): the
+            # catalog song written after the start joins the index.
+            deadline = time.monotonic() + 30
+            while True:
                 state = world.server.call(lambda: collection.index_state(owner, "1"))
-                if state.state == "ready":
-                    break
-                time.sleep(0.05)
-            assert state.state == "ready", state
-            rows = world.server.call(
-                lambda: world.services.store.fetchall(
-                    "SELECT * FROM collection_tracks WHERE present=1"
+                rows = world.server.call(
+                    lambda: world.services.store.fetchall(
+                        "SELECT * FROM collection_tracks WHERE present=1"
+                    )
                 )
-            )
-            assert len(rows) == 2
+                if state.state == "ready" and len(rows) == 2:
+                    break
+                assert time.monotonic() < deadline, (state, len(rows))
+                time.sleep(0.05)
             original = next(r for r in rows if r["song_id"] != catalog_id)
             catalog = next(r for r in rows if r["song_id"] == catalog_id)
             assert original["original"] == 1 and catalog["original"] == 0

@@ -135,11 +135,31 @@ class Collection:
         if not state.generation or not state.updated_at:
             raise CollectionError("Your library is still being prepared. Try again shortly.")
 
-    async def refresh(self, owner_id: str, library_id: str) -> None:
-        await self.index.scan(owner_id, library_id)
+    async def prepared(self, library_id: str) -> bool:
+        """Whether the library has a complete snapshot (no account's access is checked:
+        this tells nothing of the library's music)."""
+        row = await self.store.fetchone(
+            "SELECT generation,updated_at FROM collection_index WHERE library_id=?", [library_id]
+        )
+        return bool(row and row["generation"] and row["updated_at"])
+
+    async def refresh(
+        self, owner_id: str, library_id: str, *, access: Access | None = None
+    ) -> None:
+        """A full refresh of the library index, read as ``owner_id`` (with ``access``:
+        through it - Shijhon's service account's reads, ``reader.ServiceLibrary``)."""
+        await self.index.scan(owner_id, library_id, access=access)
         if self.query_index is None:
             return
-        state = await self.index_state(owner_id, library_id)
+        if access is None:
+            state = await self.index_state(owner_id, library_id)
+        else:  # (the scan checked the service account's access)
+            row = await self.store.fetchone(
+                "SELECT * FROM collection_index WHERE library_id=?", [library_id]
+            )
+            state = (
+                IndexState(**dict(row)) if row else IndexState(library_id, "", "empty", 0, 0, "")
+            )
         if state.generation:
             with suppress(IndexPending, sqlite3.Error, OSError):
                 await self.query_index.prepare(library_id, state.generation)

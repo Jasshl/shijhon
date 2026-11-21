@@ -1,5 +1,6 @@
 # Shijhon in front of its own stock Navidrome. docs/quick-start.md has the steps: the .env
-# file, the configuration in config/ and the accounts.
+# file, the configuration in config/ and the accounts. For a Navidrome you already run,
+# compose.existing-navidrome.yaml goes with this file (docs/deployment.md).
 #
 # The databases and caches are kept in Docker volumes. To keep one in a folder instead, give
 # the folder's absolute path in .env: NAVIDROME_DATA, SHIJHON_DATA, USAGE_EXPORT_DATA. On
@@ -54,7 +55,7 @@ services:
       ND_LOGLEVEL: info
       # Navidrome takes the client's address from Shijhon. Trust only Shijhon's fixed
       # address, written as a network ("/32"), without spaces.
-      ND_EXTAUTH_TRUSTEDSOURCES: 172.30.99.10/32
+      ND_EXTAUTH_TRUSTEDSOURCES: ${SHIJHON_NETWORK:-172.30.99}.10/32
     depends_on:
       data-owner: {condition: service_completed_successfully}
     volumes:
@@ -69,7 +70,8 @@ services:
         # Catalog adapters to install into the image (docs/catalogs.md):
         # SHIJHON_ADAPTERS in .env, then build again: docker compose up -d --build
         ADAPTERS: ${SHIJHON_ADAPTERS:-}
-    image: shijhon:local
+    # Named for the Compose project, so that each installation on this machine has its own.
+    image: ${COMPOSE_PROJECT_NAME:-shijhon}:local
     user: "${PUID:-1000}:${PGID:-1000}"
     read_only: true
     tmpfs: [/tmp]
@@ -80,7 +82,7 @@ services:
     stop_grace_period: 30s
     networks:
       default:
-        ipv4_address: 172.30.99.10  # the address Navidrome trusts (above)
+        ipv4_address: ${SHIJHON_NETWORK:-172.30.99}.10  # the address Navidrome trusts
     # http://host.docker.internal:<port> reaches this machine, on Linux too.
     extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
@@ -104,7 +106,7 @@ services:
   usage-export:
     <<: *hardening
     # The image the shijhon service builds.
-    image: shijhon:local
+    image: ${COMPOSE_PROJECT_NAME:-shijhon}:local
     pull_policy: never
     user: "${PUID:-1000}:${PGID:-1000}"
     read_only: true
@@ -119,14 +121,14 @@ services:
       - ${NAVIDROME_DATA:-navidrome-data}:/navidrome-data:ro
       - ${USAGE_EXPORT_DATA:-usage-export}:/usage
 
-# A fixed range, so that Navidrome knows Shijhon's address. If it is taken on this
-# machine, change it here, in the two addresses above and in trusted_proxies (the gateway,
-# .1, is where a reverse proxy on this host arrives from).
+# A fixed range, so that Navidrome knows Shijhon's address (.10). SHIJHON_NETWORK in .env
+# gives its first three numbers when 172.30.99 is taken on this machine; setup.sh picks a
+# free one. A reverse proxy on this host arrives from the gateway, .1 (trusted_proxies).
 networks:
   default:
     ipam:
       config:
-        - subnet: 172.30.99.0/24
+        - subnet: ${SHIJHON_NETWORK:-172.30.99}.0/24
 
 # Used unless .env names a folder in their place.
 volumes:

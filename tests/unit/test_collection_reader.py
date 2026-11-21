@@ -225,6 +225,27 @@ async def test_source_refresh_coalesces_and_retries_after_spawn_refusal():
         await source.aclose()
 
 
+async def test_source_refresh_starts_at_a_sign_in_soon_after_the_machine_started(monkeypatch):
+    """The monotonic clock counts from the machine's start: a sign-in in its first minutes
+    refreshes the library as later ones do."""
+    now = [12.0]
+    monkeypatch.setattr(reader_module, "time", SimpleNamespace(monotonic=lambda: now[0]))
+    source = reader()
+    queued = []
+    refresh = AsyncMock()
+    callback = SourceRefresh(source, refresh, lambda work: queued.append(work) or True)
+    try:
+        await callback.signed_in(OWNER, "caller")  # (a dashboard sign-in)
+        assert len(queued) == 1
+        await queued.pop()()
+        refresh.assert_awaited_once_with("owner-a", "1")
+        native = SourceRefresh(source, refresh, lambda work: queued.append(work) or True)
+        await native.verified(OWNER, "caller")  # (a native-website request)
+        assert len(queued) == 1
+    finally:
+        await source.aclose()
+
+
 async def test_import_lookup_uses_exact_caller_evidence_and_rechecks_grants():
     source = reader()
     path = "_imports/0123456789abcdef.flac"

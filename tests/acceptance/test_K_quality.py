@@ -277,6 +277,9 @@ def test_the_file_plays_when_the_addons_have_nothing_better(gated: Gated) -> Non
     lone = client.request("stream", {"id": gated.songs["Lone Ember"]})
     assert lone.status_code == 200
     assert digest(lone.content) == digest(file_of(gated, "Lone Ember"))
+    # Diagnostics notes that start as a play of its file, with why - not as no audio.
+    [noted] = [r for r in gated.world.services.deliverer.recent if r.title == "Lone Ember"]
+    assert noted.file and noted.served == "" and noted.ended and noted.purpose == "play"
     # Each add-on's "Worn Ember" is a 128 kbit/s MP3 too: below the minimum - the first's
     # is passed over for the second's, then the file plays.
     worn = client.request("stream", {"id": gated.songs["Worn Ember"]})

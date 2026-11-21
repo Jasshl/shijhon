@@ -20,8 +20,9 @@ keeps its accounts, playlists and favorites.
 
 If you run Navidrome another way on this machine, for example in a container or with a
 unit of your own, follow the steps together with
-[an existing Navidrome](#an-existing-navidrome). This has only been tried on one server,
-with Navidrome in a container.
+[an existing Navidrome](#an-existing-navidrome). This has been tried on one server with
+Navidrome in a container, and in test virtual machines with Navidrome as a systemd unit of
+its own.
 
 If you are moving from Shijhon's Docker setup, see
 [moving from the Docker setup](reference/nixos.md#moving-from-the-docker-setup). If you
@@ -35,7 +36,7 @@ been tried yet.
    ```nix
    {
      inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
-     inputs.shijhon.url = "github:Jasshl/shijhon/v0.9.0"; # a release tag
+     inputs.shijhon.url = "github:Jasshl/shijhon/v0.10.0"; # a release tag
 
      outputs = { nixpkgs, shijhon, ... }: {
        nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
@@ -81,15 +82,20 @@ been tried yet.
    read by every user. The file is only read at the first start, and can be deleted once
    the accounts exist. A decrypted secret from agenix or sops-nix works too.
 
-4. **Switch** and check that everything started:
+4. **Switch** and check that everything started. Run these on that machine, in the folder
+   with your system's `flake.nix`:
 
    ```sh
    sudo nixos-rebuild switch --flake .#yourhost
    systemctl status navidrome shijhon-prepare shijhon-accounts shijhon shijhon-usage-export
    ```
 
-   The first start creates your account as an admin, and an account for Shijhon itself,
-   `shijhon`. If something needs fixing first, such as a wrong password,
+   `systemctl status` shows Shijhon as active a little before it answers. If the dashboard
+   doesn't open yet, wait until `journalctl -u shijhon` says "Application startup
+   complete". The first start creates your account as an admin, and an account for Shijhon
+   itself, `shijhon`. Navidrome's log (`journalctl -u navidrome`) then shows one
+   "Unsuccessful login" warning, from the first try to sign in as `shijhon` before that
+   account exists, which is expected. If something needs fixing first, such as a wrong password,
    `journalctl -u shijhon-accounts` says what, and Shijhon doesn't start. After fixing it,
    run:
 
@@ -103,10 +109,9 @@ been tried yet.
    first.
 
 5. **Open the dashboard** at `http://127.0.0.1:4533/shijhon/` on that machine. From
-   another computer, run `ssh -L 4533:127.0.0.1:4533 yourhost` first and open the same
-   address. Sign in with your account, then sign in to **Collection** once to prepare your
-   library ([connecting](quick-start.md#connecting)). Add add-ons and choose a catalog
-   there too ([add-ons](add-ons.md), [catalogs](catalogs.md)).
+   another computer, run `ssh -L 4533:127.0.0.1:4533 yourhost` on that computer first and
+   open the same address there. Sign in with your account. Add add-ons and choose a
+   catalog there too ([add-ons](add-ons.md), [catalogs](catalogs.md)).
 
 6. **Let your apps reach it.** Add Shijhon in your apps as a **Subsonic** (or
    OpenSubsonic) server. On a network you trust, apps can connect directly, without
@@ -148,11 +153,15 @@ been tried yet.
 
 `libraryPath` is the folder your music is in now. Shijhon doesn't move, rename or retag
 anything in it, and doesn't change its permissions. It only adds the `_shijhon`
-placeholder folder, and you keep adding music as before. The one exception is opt-in:
+placeholder folder, and you keep adding music as before. Music you add appears in apps by
+itself, usually within a minute or two and at most about five minutes after Navidrome has
+scanned it, and **Collection → More → Refresh music** on the dashboard shows it at once.
+The one exception to leaving the folder alone is opt-in:
 with `libraryWritable = true;` the folder is writable for Shijhon, and **Also fix files in
 your music folder** on the dashboard may then add lists of artists to files whose one
-artist text names several ([how it works](how-it-works.md#each-artist-of-a-joined-credit));
-A file is changed only when it is owned by Shijhon's user; Diagnostics says when files are left as they are. While an album's files are being changed, a union without hard links needs room for a whole copy of each.
+artist text names several ([how it works](how-it-works.md#each-artist-of-a-joined-credit)).
+A file is changed only when it is owned by Shijhon's user, and Diagnostics says when files
+are left as they are.
 
 The folder has to be outside `/home`, `/root` and `/run/user`, because the services can't
 see those. If your music is in your home folder, move it, for example to `/srv/music`, or
@@ -213,8 +222,10 @@ sudo mv /var/lib/navidrome/music /srv/music && sudo chmod 755 /srv/music
 2. **Remove the settings Shijhon now sets** from your `services.navidrome`: `openFirewall`,
    and in `settings` the `MusicFolder` (that folder becomes `libraryPath`), `Address`,
    `Port`, `UnixSocketPerm`, `BaseUrl`, `ExtAuth.TrustedSources`, `ReverseProxyWhitelist`
-   and `ReverseProxyUserHeader`. The build stops with a message if one of them still
-   conflicts. If you use an `environmentFile`, remove the same settings from it as well
+   and `ReverseProxyUserHeader`. If you leave in one that conflicts with what Shijhon sets,
+   the build stops with a message. The others don't stop the build and are ignored, but
+   remove them anyway.
+   If you use an `environmentFile`, remove the same settings from it as well
    (`ND_ADDRESS`, `ND_PORT`, `ND_MUSICFOLDER`, `ND_BASEURL`, `ND_UNIXSOCKETPERM`,
    `ND_EXTAUTH_TRUSTEDSOURCES`, `ND_EXTAUTH_USERHEADER`, `ND_REVERSEPROXYWHITELIST` and
    `ND_REVERSEPROXYUSERHEADER`), because the build can't see that file. Keep everything
@@ -228,9 +239,10 @@ sudo mv /var/lib/navidrome/music /srv/music && sudo chmod 755 /srv/music
    isn't changed.
 
 4. **Point your apps at Shijhon.** Shijhon listens on port 4533, Navidrome's default, so a
-   reverse proxy pointing at `127.0.0.1:4533` keeps working. If apps connected to
-   Navidrome directly, let them reach Shijhon as in step 6 and change their server type to
-   Subsonic. They sign in with the same accounts.
+   reverse proxy pointing at `127.0.0.1:4533` keeps working. Shijhon listens only on this
+   machine by default, so if apps connected to Navidrome directly over the network, add
+   step 6's two lines, or they can't connect. Change their server type to Subsonic. They
+   sign in with the same accounts.
 
 5. **Switch** and check as in step 4, then open the dashboard as in step 5.
 
@@ -257,9 +269,17 @@ services.shijhon = {
 ```
 
 At the first start Shijhon uses your account once to create its own admin account in
-Navidrome. To create that account yourself instead, follow
-[step 3 here](quick-start.md#by-hand) and set `navidrome.passwordFile` to its password
-file in place of `account`.
+Navidrome. To create that account yourself instead, create it in Navidrome's web interface
+under **Users**, as an admin with a long random password, and write that password to a file
+only root can read:
+
+```sh
+sudo install -d -m 700 /etc/shijhon
+sudo sh -c 'umask 077; IFS= read -rsp "Password: " pw && echo && printf "%s\n" "$pw" > /etc/shijhon/navidrome-password'
+```
+
+Then set `navidrome.passwordFile = "/etc/shijhon/navidrome-password";` in place of
+`account`.
 
 Your Navidrome has to meet [what Shijhon needs](deployment.md#what-shijhon-needs-from-navidrome).
 Only Shijhon should reach it, so it should listen on `127.0.0.1` or a Unix socket, not on
@@ -270,7 +290,20 @@ Navidrome has to see the same music files as Shijhon, including the `_shijhon` f
 it can see them at a different path. If its library isn't the first one, set
 `settings.navidrome.library_id`. For the usage export
 ([what it is](deployment.md#the-usage-export)), also set `usageExport.enable = true`,
-`usageExport.navidromeDataDirectory` and `usageExport.user`.
+`usageExport.navidromeDataDirectory` and `usageExport.user`. Without it, the cleanup
+doesn't run, and when an album is filled from another release, the earlier release's
+songs stay in the library.
+
+Steps 4 and 5 then differ a little. There is no `navidrome` unit of Shijhon's, and
+`shijhon-usage-export` only with the usage export, so check with:
+
+```sh
+systemctl status shijhon-prepare shijhon-accounts shijhon
+```
+
+Add `shijhon-usage-export` if you turned it on. The dashboard and your apps use Shijhon's
+`port`, so with the example the dashboard is at `http://127.0.0.1:8765/shijhon/`, and the
+`ssh -L` of step 5 is `ssh -L 8765:127.0.0.1:8765 yourhost`.
 
 The reference covers [connecting over a Unix socket and Navidrome's login limits](reference/nixos.md#an-existing-navidrome-in-detail).
 

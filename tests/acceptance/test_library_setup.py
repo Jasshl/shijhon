@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import hashlib
+import math
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -208,6 +210,15 @@ def test_setup_requires_prepared_source_and_fresh_exact_target_grants(world):
     try:
         assert browser.sign_in("owner", PASSWORD).status_code == 303
         world.server.call(lambda: world.services.collection.refresh(users["owner"], "1"))
+        # The library prepared by itself meanwhile is taken away below: the refresh the
+        # sign-in started has ended, and none begins by itself while this test runs.
+        refresher = world.services.collection_refresh
+        assert refresher is not None
+        deadline = time.monotonic() + 30
+        while refresher.running:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        refresher._retry_at = math.inf
         world.server.call(
             lambda: world.services.store.execute(
                 "UPDATE collection_index SET generation='',updated_at=0 WHERE library_id='1'"
@@ -248,4 +259,7 @@ def test_setup_requires_prepared_source_and_fresh_exact_target_grants(world):
             lambda: world.services.store.fetchone("SELECT 1 FROM collection_originals")
         )
     finally:
+        refresher = world.services.collection_refresh
+        if refresher is not None:
+            refresher._retry_at = -math.inf
         browser.close()

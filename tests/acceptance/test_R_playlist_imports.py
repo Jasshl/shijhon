@@ -581,6 +581,7 @@ def crowded(
     for n in range(FILLERS):
         filler(nd.music, RELEASE.artist, f"Aa Filler {n:03d}", RELEASE.artist, f"f/{n}")
     nd.scan()
+    nd.wait_artwork()  # (its covers settle after the scan: the album is compared later)
     listed = nd.client().ok("getAlbumList2", {"type": "alphabeticalByName", "size": "500"})
     album_id = next(a["id"] for a in listed["albumList2"]["album"] if a["name"] == RELEASE.title)
     catalog = Replay().catalog()

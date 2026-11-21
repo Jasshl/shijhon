@@ -71,6 +71,10 @@ Windows, run it inside WSL (untested). Then add add-ons ([add-ons](docs/add-ons.
 choose a catalog ([catalogs](docs/catalogs.md)); without an add-on, catalog tracks show
 but do not play.
 
+Already running Navidrome? The script can put Shijhon in front of it instead, and your
+Navidrome keeps its accounts, playlists and favorites
+([in front of a Navidrome you already run](docs/deployment.md#in-front-of-a-navidrome-you-already-run)).
+
 On NixOS, the flake's service sets up Navidrome, Shijhon and the accounts from a music
 folder and an account. An existing Navidrome keeps its accounts and favorites
 ([NixOS](docs/nixos.md)).
@@ -110,7 +114,7 @@ what it shows, and that API shows your library without the catalog.
 
 ## Status
 
-Shijhon is in beta (0.9.0), tested with Navidrome 0.64.2. The configuration and the
+Shijhon is in beta (0.10.0), tested with Navidrome 0.64.2. The configuration and the
 database can change between beta versions; the database migrates itself at startup and
 keeps a snapshot from before the upgrade. What changed is in [CHANGELOG.md](CHANGELOG.md).
 

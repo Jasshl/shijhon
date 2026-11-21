@@ -13,8 +13,9 @@ port = 8765
 # restart_by_supervisor = true
 # With a reverse proxy in front (docs/deployment.md, "Network and reverse proxy"): the
 # proxy's address, nothing else. With compose.yaml a proxy on this host arrives from the
-# Compose network's gateway: uncomment the line, and set SHIJHON_BIND=127.0.0.1 in .env.
-# Never list an address apps connect from directly.
+# Compose network's gateway (.1 of SHIJHON_NETWORK in .env; setup.sh writes it here):
+# uncomment the line, and set SHIJHON_BIND=127.0.0.1 in .env. Never list an address apps
+# connect from directly.
 # trusted_proxies = ["127.0.0.0/8", "::1/128", "172.30.99.1/32"]
 # A proxy in front that signs users in and names them in a header
 # (docs/reference/advanced-deployment.md, "Sign-in by the reverse proxy"):
@@ -26,7 +27,7 @@ port = 8765
 # public_url = "https://music.example.invalid"  # origin only; no path
 
 [navidrome]
-url = "http://navidrome:4533"
+url = "http://navidrome:4533"  # the Compose file's Navidrome, or the address of yours
 # A Navidrome admin account for Shijhon alone, not a person's.
 user = "shijhon"
 password_file = "/config/navidrome-password"

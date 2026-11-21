@@ -60,7 +60,8 @@ Fixtures that compare native metadata across requests call `nd.wait_artwork()` a
 `nd.scan()`: scan completion does not include Navidrome's background artwork queue.
 Fixtures that enumerate the selected library use `prepare_collection` (or
 `refresh_collection` after their own sign-in) to await its complete source snapshot;
-signing in starts that work in the background.
+the application also prepares it in the background with its service account as it
+starts (`SourceRefresh.run`).
 
 When matching or title normalization changes can turn a negative album match into a
 match, increment `MATCH_REVISION` in `matching/matcher.py`. This lets existing negative

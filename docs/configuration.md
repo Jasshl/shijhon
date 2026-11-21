@@ -44,7 +44,7 @@ dashboard ([agent access](agent-access.md)).
 
 | Setting | What it sets |
 |---|---|
-| `[navidrome] url` | Navidrome's address, as Shijhon reaches it |
+| `[navidrome] url` | Navidrome's address, as Shijhon reaches it: the Compose file's Navidrome, or one you run ([deployment.md](deployment.md#in-front-of-a-navidrome-you-already-run)) |
 | `[navidrome] socket` | Navidrome's Unix socket (its `Address = "unix:<path>"`), an absolute path, when Shijhon reaches it there. `url` must then be an `http://` address that names no machine to reach, such as `"http://navidrome.invalid"`: it gives the `Host` header of Shijhon's own requests (apps' requests keep theirs). With `ExtAuth.TrustedSources = "@"`, Navidrome trusts only that socket |
 | `[navidrome] user`, `password` or `password_file` | The service account: a Navidrome admin account used only by Shijhon |
 | `[navidrome] library_id` (1), `library_path` | The library that holds your music (ID at least 1), and where Shijhon sees it on disk |
@@ -250,7 +250,7 @@ address.
 
 ## The command line
 
-`--config <file>` goes before the command. In the running container:
+`--config <file>` goes before the command. In the running container, from `packaging/`:
 `docker compose exec shijhon shijhon --config /config/shijhon.toml matches`.
 
 - `shijhon serve`: runs Shijhon.

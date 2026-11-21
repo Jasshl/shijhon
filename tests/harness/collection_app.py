@@ -49,13 +49,18 @@ class CollectionApp:
         wait: float = DEFAULT_BUDGETS.wait_seconds,
         artist_participations: bool = False,
         removed: bool = False,
+        service: bool = False,
     ) -> None:
         """``removed``: each account removed the songs that are not originals by hand from
         its All and its Original imported library - where the albums of its originals would
-        bring them in - so that both hold the originals alone."""
+        bring them in - so that both hold the originals alone. ``service``: the library is
+        prepared with the service account, as in the application (a caller without its own
+        native sign-in has its other libraries read so; no missing source asks anyone to
+        sign in)."""
         self.nd, self.state, self.songs, self.wait = nd, state, songs, wait
         self.artist_participations = artist_participations
         self.removed = removed
+        self.service = service
         self.originals = {s["id"] for i, s in enumerate(songs) if i % 3 == 0}
         self.proxy: ProxyApp
         self.store: Store
@@ -150,8 +155,10 @@ class CollectionApp:
                 self.index,
                 artist_participations=self.artist_participations,
             )
+            if self.service:
+                visibility.source_problem = lambda: ""
             visibility.attach(self.proxy)
-            self.native = NativeVisibility(visibility)
+            self.native = NativeVisibility(visibility, service=self.service)
             self.native.attach(self.proxy)
             await send({"type": "lifespan.startup.complete"})
             await receive()

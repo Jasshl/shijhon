@@ -235,6 +235,9 @@ def setup(
     if case == "larger":
         release = replace(release, title=release.title + " (Deluxe)")
     nd.scan(full=True)
+    # (Covers of the albums with their own picture gain a hash once Navidrome's artwork
+    # queue gets to them: the tests compare albums before and after.)
+    nd.wait_artwork()
     listed = nd.client().ok("getAlbumList2", {"type": "alphabeticalByName", "size": "500"})
     album_id = next(a["id"] for a in listed["albumList2"]["album"] if a["name"] == album.title)
     catalog = Replay().catalog()

@@ -19,7 +19,9 @@ import logging
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection
 from typing import Any
+from urllib.parse import urlencode, urlsplit
 
 import pytest
 
@@ -508,26 +510,39 @@ def test_two_songs_asked_for_together_both_start_at_once(
     for fakes in (played_fakes, following_fakes):
         fakes[sources["a"]].ready = False
         fakes[sources["b"]].ready = False
-    clients = [world.client(client="two-elements") for _ in range(2)]
-    for client in clients:  # their connections open, as an app's are
-        client.ok("ping")
+    client = world.client(client="two-elements")
+    address = urlsplit(client.base_url)
+    # Their connections open, as an app's are. The requests are sent from one thread, the
+    # played song's 0.01 s after the next song's (so that the next song's comes first): two
+    # threads' requests can come apart by more than "together" (0.05 s) on a busy machine.
+    connections = [HTTPConnection(address.netloc, timeout=60) for _ in range(2)]
+    for connection in connections:
+        connection.connect()
 
-    def timed(client: Any, song: str) -> tuple[float, bytes]:
-        started = time.monotonic()
-        answer = client.request("stream", {"id": song}, headers={"range": "bytes=0-"})
-        return time.monotonic() - started, answer.content
+    def send(connection: HTTPConnection, song: str) -> None:
+        items = [*client.auth_params(), ("f", "json"), ("id", song)]
+        connection.request("GET", f"/rest/stream?{urlencode(items)}", headers={"range": "bytes=0-"})
+
+    def body(connection: HTTPConnection) -> bytes:
+        answer = connection.getresponse()
+        assert answer.status == 206, answer.status
+        return answer.read()
 
     try:
         with collected("shijhon.access") as access, ThreadPoolExecutor(2) as pool:
-            ahead = pool.submit(timed, clients[0], following)
+            send(connections[0], following)
             time.sleep(0.01)
-            current = pool.submit(timed, clients[1], played)
-            took, content = current.result()
+            started = time.monotonic()
+            send(connections[1], played)
+            ahead = pool.submit(body, connections[0])
+            content = pool.submit(body, connections[1]).result()
+            took = time.monotonic() - started
             ahead.result()
     finally:
         gate.window = 0.0
-        for client in clients:
-            client.close()
+        for connection in connections:
+            connection.close()
+        client.close()
     assert content == played_audio.read_bytes()
     assert took < 1.5  # never behind the other song's 2 s routing
     assert not logged(playback_log, "fetched ahead 'Title p-together-")

@@ -1,11 +1,11 @@
 """Songs Shijhon wrote into the library, added to the library index from apps' requests.
 
-The library index (``index.py``) is refreshed in full only with a caller's native
-bearer: **Refresh music**, a dashboard sign-in, or the native website (``SourceRefresh``).
-Apps sign in with Subsonic credentials and never start that. So the placeholders that
-commits, fills, playlist imports and restores write - each one's ID is in Shijhon's
-own records (``placeholders``) once Navidrome lists it - would stay out of every
-library list until someone opened those pages.
+The library index (``index.py``) is refreshed in full by ``SourceRefresh``: with
+Shijhon's service account after a start and once Navidrome's library changed, at most
+every five minutes, and with a caller's native bearer (a dashboard sign-in, the native
+website). So the placeholders that commits, fills, playlist imports and restores write -
+each one's ID is in Shijhon's own records (``placeholders``) once Navidrome lists it -
+would stay out of every library list for minutes after Navidrome scanned them.
 
 A verified app request that reads the library (``Visibility.answer``) therefore has
 Shijhon look, at most every ``check_seconds`` and ``delay_seconds`` after the request
@@ -123,7 +123,7 @@ class Written:
             "SELECT generation FROM collection_index WHERE library_id=?", [self.library_id]
         )
         if not state or not state["generation"]:
-            return []  # no snapshot yet: the first one is prepared at a sign-in
+            return []  # no snapshot yet: the first full refresh brings them (SourceRefresh)
         now = time.monotonic()
         self._skipped = {s: t for s, t in self._skipped.items() if t > now}
         # This comes round with an app's requests and passes over all placeholders. Their
