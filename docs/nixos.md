@@ -8,9 +8,8 @@ You need NixOS with flakes, on Linux x86-64 or ARM64, with systemd 257 or newer.
 
 ## Set it up
 
-Your music stays where it is. Shijhon only adds a `_shijhon` folder to it (unless you let it fix artist credits in your files, below), and Navidrome
-and Shijhon both need to be able to read it. The section
-[on your music folder](#your-music-folder) below explains how to check that.
+Your music stays where it is, and Navidrome and Shijhon both need to be able to read it.
+The section [on your music folder](#your-music-folder) below explains how to check that.
 
 If you don't run Navidrome yet, follow the steps below.
 
@@ -27,8 +26,8 @@ its own.
 If you are moving from Shijhon's Docker setup, see
 [moving from the Docker setup](reference/nixos.md#moving-from-the-docker-setup). If you
 used Shijhon's NixOS service from 0.4.0 or earlier, see
-[from the earlier NixOS service](#from-the-earlier-nixos-service). Neither of these has
-been tried yet.
+[from the earlier NixOS service](reference/nixos.md#from-the-earlier-nixos-service).
+Neither of these has been tried yet.
 
 1. **Add the flake input** to your system's `flake.nix`, pinned to a release tag, and
    import the module:
@@ -90,14 +89,14 @@ been tried yet.
    systemctl status navidrome shijhon-prepare shijhon-accounts shijhon shijhon-usage-export
    ```
 
-   `systemctl status` shows Shijhon as active a little before it answers. If the dashboard
-   doesn't open yet, wait until `journalctl -u shijhon` says "Application startup
+   `systemctl status` shows Shijhon as active a little before it answers, so if the
+   dashboard doesn't open yet, wait until `journalctl -u shijhon` says "Application startup
    complete". The first start creates your account as an admin, and an account for Shijhon
-   itself, `shijhon`. Navidrome's log (`journalctl -u navidrome`) then shows one
-   "Unsuccessful login" warning, from the first try to sign in as `shijhon` before that
-   account exists, which is expected. If something needs fixing first, such as a wrong password,
-   `journalctl -u shijhon-accounts` says what, and Shijhon doesn't start. After fixing it,
-   run:
+   itself, `shijhon`. One "Unsuccessful login" warning in Navidrome's log
+   (`journalctl -u navidrome`) is expected: it comes from the first try to sign in as
+   `shijhon` before that account exists. If something needs fixing first, such as a wrong
+   password, `journalctl -u shijhon-accounts` says what, and Shijhon doesn't start. After
+   fixing it, run:
 
    ```sh
    sudo systemctl restart shijhon-prepare shijhon-accounts
@@ -156,12 +155,12 @@ anything in it, and doesn't change its permissions. It only adds the `_shijhon`
 placeholder folder, and you keep adding music as before. Music you add appears in apps by
 itself, usually within a minute or two and at most about five minutes after Navidrome has
 scanned it, and **Collection → More → Refresh music** on the dashboard shows it at once.
-The one exception to leaving the folder alone is opt-in:
-with `libraryWritable = true;` the folder is writable for Shijhon, and **Also fix files in
-your music folder** on the dashboard may then add lists of artists to files whose one
-artist text names several ([how it works](how-it-works.md#each-artist-of-a-joined-credit)).
-A file is changed only when it is owned by Shijhon's user, and Diagnostics says when files
-are left as they are.
+
+The one exception to leaving the folder alone is opt-in. With `libraryWritable = true;`
+the folder is writable for Shijhon, and **Also fix files in your music folder** on the
+dashboard may then add lists of artists to files whose one artist text names several
+([how it works](how-it-works.md#each-artist-of-a-joined-credit)). A file is changed only
+when it is owned by Shijhon's user, and Diagnostics says when files are left as they are.
 
 The folder has to be outside `/home`, `/root` and `/run/user`, because the services can't
 see those. If your music is in your home folder, move it, for example to `/srv/music`, or
@@ -314,17 +313,11 @@ The reference covers [connecting over a Unix socket and Navidrome's login limits
 
 Shijhon updates its database at the first start, and an older version won't start on the
 updated one. Before it changes the database, that start writes a checked snapshot of it
-into `/var/lib/shijhon/snapshots`, named for the schema it holds. Once that snapshot is
-complete, it keeps the newest snapshot of this schema and of the highest other schema
-([in detail](deployment.md#upgrades)). If the snapshot can't be written, Shijhon updates
-the database and starts without it, as versions before snapshots did, and removes no
-snapshot to make room. `journalctl -u shijhon` says why, administrators see it at the top
-of the dashboard until one of them dismisses it, and it is reported once when notification
-addresses are set. Then free some space or fix the folder so that the next update can take
-its snapshot, and make a backup now with `shijhon backup` ([below](#backups)). Setting
-`services.shijhon.settings.upgrade_snapshots = false` updates without a snapshot, and then
-nothing is shown or reported. With music
-imports, back up the imports folder before you switch.
+into `/var/lib/shijhon/snapshots`, as the [deployment guide](deployment.md#upgrades)
+describes, also for when the snapshot can't be written. `journalctl -u shijhon` then says
+why; make a backup with `shijhon backup` ([below](#backups)). Setting
+`services.shijhon.settings.upgrade_snapshots = false` updates without a snapshot. With
+music imports, back up the imports folder before you switch.
 
 To go back, stop Shijhon and copy the snapshot beside the database under a temporary name.
 Once the copy is complete, remove the database's `-wal` and `-shm` files, which belong to
@@ -351,58 +344,19 @@ and says so. To try that version anyway, set
 warn that it hasn't been tested. For a Navidrome you run yourself, the build can't check
 the version, so only the log warns.
 
-### From the earlier NixOS service
-
-The service in Shijhon 0.4.0 and earlier ran only Shijhon, with its own configuration
-file. To move to this one:
-
-- `configDirectory` is gone. Put the settings from its `shijhon.toml` into `settings`, its
-  secrets into `environmentFile`, and the service account's password file into
-  `navidrome.passwordFile`.
-- `usageDirectory` is now `usageExport.directory`. Set it to the folder you had.
-- `placeholderPath` is now only needed for a placeholder folder outside the library.
-- The default `port` is now 4533. Set `port = 8765;` to keep your reverse proxy's target.
-- For a Navidrome you run yourself, set `navidrome.manage = false`, `navidrome.url`,
-  `navidrome.passwordFile` and `navidrome.group`, and for the usage export
-  `usageExport.enable = true`, `usageExport.navidromeDataDirectory` and
-  `usageExport.user`.
-- If that Navidrome is a `services.navidrome`, the module can set it up instead
-  ([you already run `services.navidrome`](#you-already-run-servicesnavidrome)). Leave out
-  `navidrome.passwordFile`, and before the first switch copy the service account's
-  password to where the module keeps it:
-
-  ```sh
-  sudo install -m 600 -o shijhon -g shijhon /path/to/navidrome-password /var/lib/shijhon/navidrome-password
-  ```
-
-The earlier service wrote files that only its own user could read, and the export now runs
-as Navidrome's user. Before the first switch, stop both services, make the placeholder
-folder readable and remove the old export files:
-
-```sh
-sudo systemctl stop shijhon shijhon-usage-export
-sudo chown -R shijhon:navidrome /srv/music/_shijhon
-sudo find /srv/music/_shijhon -type d -exec chmod 2755 {} + -o -type f -exec chmod 644 {} +
-sudo rm -f /var/lib/shijhon-usage/usage.sqlite3*
-```
-
-Replace `shijhon`, `navidrome`, `/srv/music/_shijhon` and `/var/lib/shijhon-usage` with
-your service's user, Navidrome's group, your placeholder folder and your usage folder.
-
 ## Backups
 
-`shijhon backup` copies Shijhon's database while Shijhon runs, with SQLite's online backup,
-and checks the copy. Add `config.services.shijhon.package` to `environment.systemPackages`
-to get the command, and run it as the service's user:
+`shijhon backup` copies Shijhon's database while Shijhon runs, and checks the copy. Add
+`config.services.shijhon.package` to `environment.systemPackages` to get the command, and
+run it as the service's user, which it needs
+([in detail](reference/advanced-deployment.md#backups-in-detail)):
 
 ```sh
 sudo -u shijhon shijhon backup --database /var/lib/shijhon/shijhon.sqlite3
 ```
 
 It writes a folder into `/var/lib/shijhon/backups` with the copy and a `README.txt`, and
-prints what it holds. Run it as the service's user: it needs to write to the database's
-folder, because SQLite makes the files it needs to read a database in WAL mode
-consistently beside it. Run this way it holds neither your settings, which are in your NixOS
+prints what it holds. Run this way, it holds neither your settings, which are in your NixOS
 configuration, nor the service account's password file. The database holds the settings
 saved on the dashboard, secrets included, so the folder is readable by the service's user
 only. Copy it somewhere safe and remove it from the state folder.
@@ -436,4 +390,5 @@ The other way is to save `/var/lib/navidrome` with Navidrome stopped.
 
 [The NixOS reference](reference/nixos.md) has every option and what the service sets up,
 and covers local AI runners for playlists, catalog adapters, music imports, repairing
-Shijhon's Navidrome account and moving from the Docker setup.
+Shijhon's Navidrome account, moving from the Docker setup and from the earlier NixOS
+service.

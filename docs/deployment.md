@@ -1,14 +1,15 @@
 # Deployment
 
-Shijhon runs in front of a stock Navidrome that only Shijhon reaches.
-[quick-start.md](quick-start.md) sets up a new one with the Compose file and the example
-configuration in [`packaging/`](../packaging), and
-[below](#in-front-of-a-navidrome-you-already-run) Shijhon goes in front of a Navidrome you
-already run. [Advanced deployment](reference/advanced-deployment.md) has the rarer setups.
+Shijhon runs in front of a stock Navidrome that only Shijhon reaches. For a new
+installation, follow the [quick start](quick-start.md), which uses the Compose file and the
+example configuration in [`packaging/`](../packaging). To put Shijhon in front of a
+Navidrome you already run, read
+[the next section](#in-front-of-a-navidrome-you-already-run). The rarer setups are in
+[advanced deployment](reference/advanced-deployment.md).
 
-On NixOS, [the NixOS service](nixos.md) sets up Navidrome and Shijhon together, also with
-a Navidrome you already run. [Its reference](reference/nixos.md) covers catalog adapters
-and moving from the Docker setup.
+On NixOS, use the [NixOS service](nixos.md) instead. It sets up Navidrome and Shijhon
+together, also with a Navidrome you already run. Catalog adapters and moving from the
+Docker setup are in [its reference](reference/nixos.md).
 
 ## In front of a Navidrome you already run
 
@@ -18,23 +19,24 @@ your Navidrome over the network, Compose starts no Navidrome of its own, and you
 settings of yours.
 
 This needs Docker Compose 2.24.4 or newer (`docker compose version`). Run `./setup.sh` in
-the checkout and answer `running` to its first question. It then asks
-for the music folder your Navidrome scans, your Navidrome's address, an admin account of
-yours, your Navidrome's data for the usage export, and the port your apps connect to. The
-admin account is used once, to create Shijhon's own admin account, `shijhon`. Its password
-is not saved. The script makes Shijhon's Docker network, `<project>-navidrome`: that is
-`shijhon-navidrome`, or `<name>-navidrome` with another `COMPOSE_PROJECT_NAME`. Its range is
-one that nothing on the machine uses (`SHIJHON_NETWORK` in `packaging/.env`), and Shijhon's
-address there is always `.10`, for example `172.30.99.10`. Once the image is built, the
-script prints the changes your Navidrome needs, with the network's name and Shijhon's
-address, and at a terminal waits until you press Enter once your Navidrome has joined.
-Without a terminal it stops there, and the next run goes on. If Shijhon still can't reach
+the checkout and answer `running` to its first question. It then asks for the music folder
+your Navidrome scans, your Navidrome's address, an admin account of yours, your Navidrome's
+data for the usage export, and the port your apps connect to. The admin account is used
+once, to create Shijhon's own admin account, `shijhon`, and its password is not saved.
+
+The script also makes a Docker network for Shijhon and your Navidrome. It is named
+`shijhon-navidrome`, or `<name>-navidrome` with another `COMPOSE_PROJECT_NAME`. Its range
+is one that nothing on the machine uses (`SHIJHON_NETWORK` in `packaging/.env`), and
+Shijhon's address on it always ends in `.10`, for example `172.30.99.10`. Once the image
+is built, the script prints the changes your Navidrome needs, with the network's name and
+Shijhon's address. At a terminal it waits until you press Enter once your Navidrome has
+joined; without one it stops there, and the next run goes on. If Shijhon still can't reach
 your Navidrome, the script says so and offers to try again.
 
 The script writes `COMPOSE_FILE=compose.yaml:compose.existing-navidrome.yaml` into
-`packaging/.env`. The [second file](../packaging/compose.existing-navidrome.yaml) leaves out
-the Compose file's Navidrome and uses that network. Later Compose commands in `packaging/`
-use both files.
+`packaging/.env`, so later Compose commands in `packaging/` use both files. The
+[second file](../packaging/compose.existing-navidrome.yaml) leaves out the Compose file's
+Navidrome and uses that network.
 
 ### Your music folder
 
@@ -52,14 +54,14 @@ If your Navidrome has more than one library, Shijhon uses the first one. For ano
 
 ### Your Navidrome trusts Shijhon
 
-Navidrome limits failed logins per client address. It learns each app's address from
-Shijhon only when it trusts the address it sees Shijhon at, its `ExtAuth.TrustedSources`
-(`ND_EXTAUTH_TRUSTEDSOURCES` in its environment). Without that, all apps count as one, and
-a device with an old password locks that person out on every other device for a while
-([client addresses](reference/advanced-deployment.md#client-addresses)). Trust only
-Shijhon's address, written as a network (`/32`) without spaces, and make sure apps can no
-longer reach Navidrome directly. Which address that is depends on where your Navidrome
-runs.
+Navidrome limits failed logins per app address, and it learns each app's address from
+Shijhon only when it trusts the address it sees Shijhon at. That is its
+`ExtAuth.TrustedSources` (`ND_EXTAUTH_TRUSTEDSOURCES` in its environment). Without it, all
+apps count as one, and a device with an old password locks that person out on every other
+device for a while ([client addresses](reference/advanced-deployment.md#client-addresses)).
+Trust only Shijhon's address, written as a network (`/32`) without spaces, and make sure
+apps can no longer reach Navidrome directly. Which address that is depends on where your
+Navidrome runs.
 
 **A Navidrome in a container on this machine**, in a Compose project of its own or started
 with `docker run`, joins Shijhon's network. There it sees Shijhon at Shijhon's own address,
@@ -81,7 +83,7 @@ networks:
 ```
 
 Then run `docker compose up -d` in your Navidrome's folder. A container started with
-`docker run` joins with `docker network connect <project>-navidrome <its name>`, which lasts
+`docker run` joins with `docker network connect <name>-navidrome <its name>`, which lasts
 until the container is created again, and gets the setting with
 `-e ND_EXTAUTH_TRUSTEDSOURCES=172.30.99.10/32` when you create it.
 
@@ -123,10 +125,13 @@ proxy that sent people to Navidrome now sends them to Shijhon instead
 ### Taking Shijhon out again
 
 Stop Shijhon with `docker compose down` in `packaging/`. Your Navidrome still lists the
-songs Shijhon wrote into `_shijhon`, as silent files: delete that folder, let Navidrome
-scan, and remove the missing files in its web interface. Then take the network and
+songs Shijhon wrote into `_shijhon`. Most are silent placeholders, but the folder also
+holds audio Shijhon saved (downloads, kept streams) and the audio of catalog songs that
+music imports gave real files to. Back up Navidrome's database and copy out any audio you
+want to keep into a folder Navidrome scans, then delete `_shijhon`, let Navidrome scan,
+check the result, and remove the missing files in its web interface. Then take the network and
 `ND_EXTAUTH_TRUSTEDSOURCES` out of your Navidrome's settings and restart it, remove the
-network with `docker network rm <project>-navidrome`, and delete the `shijhon` account under
+network with `docker network rm <name>-navidrome`, and delete the `shijhon` account under
 **Users**.
 
 ### The usage export with your Navidrome
@@ -186,25 +191,26 @@ The same, from `packaging/`:
 
 - **Version 0.64.2**, unmodified, **not reachable from outside**, at the root of its
   address (no `BaseURL`).
-- **A service account**: a Navidrome admin account used only by Shijhon, not a person's.
-- **The same library files** in Shijhon's container (at `/music` there, whatever path
-  Navidrome has them at), read-only, with only the placeholder folder writable - unless you turn on **Also fix files in your music folder**
-  ([how it works](how-it-works.md#each-artist-of-a-joined-credit)): then mount the library
-  writable for Shijhon (in `compose.yaml`, drop `:ro` from the `/music` line); only files owned by
-  Shijhon's user are changed.
-- **`Scanner.PurgeMissing = never`**, its default. With another value a placeholder that
+- **A service account**, a Navidrome admin account used only by Shijhon, not a person's.
+- **The same library files** in Shijhon's container, at `/music` there whatever path
+  Navidrome has them at. They are mounted read-only, with only the placeholder folder
+  writable. If you turn on **Also fix files in your music folder**
+  ([how it works](how-it-works.md#each-artist-of-a-joined-credit)), mount the library
+  writable for Shijhon instead (in `compose.yaml`, drop `:ro` from the `/music` line). Only
+  files owned by Shijhon's user are changed.
+- **`Scanner.PurgeMissing = never`**, its default. With another value, a placeholder that
   is gone for a moment would lose every user's favorites and playlist entries of it, so
-  Shijhon then writes nothing into the library: such actions are answered with the reason,
+  Shijhon then writes nothing into the library. Such actions are answered with the reason,
   and downloads get the add-on's own format. Shijhon reads the value from Navidrome's
-  configuration, which Navidrome shows its admins while `DevUIShowConfig` is on (its
-  default). With that off, set `[navidrome] purge_missing = "never"` yourself.
+  configuration while Navidrome's `DevUIShowConfig` is on (its default). With that off,
+  set `[navidrome] purge_missing = "never"` yourself.
 
 ## Music imports
 
-Optional [personal music-file imports](music-imports.md) need an additional
-dedicated writable directory. In Compose, provision `MUSIC_IMPORTS_DIR`, give
-`PUID:PGID` access and add it to `packaging/.env`. Keep the
-[`compose.imports.yaml`](../packaging/compose.imports.yaml) overlay enabled by adding:
+Optional [music imports](music-imports.md), where people upload their own music files,
+need a dedicated writable folder of their own. Create it, give `PUID:PGID` access to it,
+set `MUSIC_IMPORTS_DIR` to it in `packaging/.env`, and add the
+[`compose.imports.yaml`](../packaging/compose.imports.yaml) overlay there too:
 
 ```dotenv
 COMPOSE_FILE=compose.yaml:compose.imports.yaml
@@ -219,24 +225,15 @@ docker compose up -d --build
 With Shijhon [in front of a Navidrome you already run](#in-front-of-a-navidrome-you-already-run),
 keep its second file in the list,
 `COMPOSE_FILE=compose.yaml:compose.existing-navidrome.yaml:compose.imports.yaml`, and mount
-the same directory into your Navidrome as `_imports` inside its music folder, read-only.
+the same folder into your Navidrome as `_imports` inside its music folder, read-only.
 
-Compose and `./setup.sh` use this file set on later runs. If an existing project was
-started with `-f` instead, setup reads its containers' Compose file set and saves it in
-`packaging/.env` when no `COMPOSE_FILE` is specified. An explicit `COMPOSE_FILE` in the
-shell or `.env` takes precedence; keep the intended set in `.env` for future commands.
-The overlay refuses a missing host directory, exposes published originals read-only to
-Navidrome and enables imports in Shijhon. Include this entire directory and Shijhon's
-state in backups; it must
-not be treated as disposable catalog audio. Complete the reviewed administrator
-setup from **Collection → Import music** before accepting uploads.
+Compose and `./setup.sh` use the file set in `.env` on later runs, so keep the one you want
+there ([in detail](reference/advanced-deployment.md#music-imports-in-detail)). Back up
+the whole imports folder together with Shijhon's state: it holds people's original music,
+not disposable catalog audio. Complete the administrator setup under **Collection → Import
+music** before accepting uploads.
 
 ## Network and reverse proxy
-
-For agents connecting from elsewhere, set the agent address on the dashboard
-([agent access](agent-access.md#turn-on-agent-access)) and forward the [agent endpoint and discovery paths](agent-access.md#with-a-reverse-proxy),
-including the well-known paths at the origin root. Preserve the public Host header.
-This optional interface does not support URL path prefixes.
 
 The Compose file publishes Shijhon's port on every address of the machine, unencrypted,
 for a network you trust. For access from outside, put a TLS reverse proxy in front:
@@ -252,15 +249,25 @@ for a network you trust. For access from outside, put a TLS reverse proxy in fro
 4. Keep credentials out of the proxy's access log: apps send them in the query string
    (`p`, `t`, `s`), and Navidrome's web interface in the `X-ND-Authorization` header.
 
-Navidrome limits failed logins per client address, so it has to learn each client's
-address ([how](reference/advanced-deployment.md#client-addresses)).
+Steps 2 and 3 pass each app's address on to Navidrome, whose login limits count by it
+([client addresses](reference/advanced-deployment.md#client-addresses)).
+
+For agents connecting from elsewhere, set the agent address on the dashboard
+([agent access](agent-access.md#turn-on-agent-access)) and have the proxy keep the `Host`
+header and forward [the paths agents use](agent-access.md#with-a-reverse-proxy), two of
+them at the root of the address. Agent access does not work under a path prefix.
 
 ## Catalog adapters
 
-An adapter is installed into the image when it is built: a published one by a line in
-`packaging/.env` and a rebuild ([catalogs.md](catalogs.md#installing-an-adapter)), one
-that is not published from its wheel (`uv build --wheel` in the adapter's project), with
-this command in the checkout:
+Catalog adapters are the legacy way to get a catalog; an add-on's catalog needs nothing
+installed ([catalogs](catalogs.md)). An adapter is installed into the image when it is
+built. A published one takes a line in `packaging/.env` and a rebuild
+([installing an adapter](catalogs.md#installing-an-adapter)). One that is not published is
+installed from its wheel (`uv build --wheel` in the adapter's project): with Compose, add
+the folder of wheels to the `shijhon` service's build
+([as shown](reference/advanced-deployment.md#catalog-adapters-in-detail)) and run
+`docker compose up -d --build` in `packaging/`. Without Compose, build the image in the
+checkout with:
 
 ```sh
 docker build --build-context adapters=/path/to/wheels -t shijhon .
@@ -274,10 +281,10 @@ the dependencies it brings, before you install it
 
 The cleanup has to know whether any user ever used a release. That is in Navidrome's
 database, alongside its secrets and its users' passwords, so Shijhon's container does not
-mount it: the `usage-export` service, which has no network access, writes a small file
-with only what the cleanup reads
+mount it. Instead the `usage-export` service, which has no network access, writes a small
+file with only what the cleanup reads
 ([what it holds](privacy-and-security.md#what-the-cleanup-reads)). The Compose file sets
-it up; `[navidrome] usage_export_path` names the export.
+it up, and `[navidrome] usage_export_path` names the export.
 
 To switch the cleanup on ([what it does](how-it-works.md#the-cleanup)), have the usage
 export running early, since every daily check notes the uses it sees, even while the
@@ -292,34 +299,28 @@ The Compose file keeps the data in three Docker volumes, named with the Compose 
 name in front (`docker volume ls`): `shijhon_navidrome-data` (Navidrome's database and
 cache), `shijhon_shijhon-data` (Shijhon's `state_dir`: its database, the snapshots taken
 before upgrades, backups made with `shijhon backup`, downloads under way, the cover cache
-and DASH songs) and `shijhon_usage-export`. `docker compose down` keeps them;
-`docker compose down -v` deletes them. A one-shot `data-owner` service gives new
-volumes to the user the containers run as at each start. Shijhon builds its image with
-the project's name, `shijhon:local` by default, so that each installation on a machine
-has its own.
+and DASH songs) and `shijhon_usage-export`. `docker compose down` keeps them, and
+`docker compose down -v` deletes them.
 
-To keep one in a folder instead, give its absolute path in `.env`: `NAVIDROME_DATA`,
-`SHIJHON_DATA` or `USAGE_EXPORT_DATA`. Not with Docker Desktop, where a database in a
-folder can be corrupted
+To keep one in a folder instead, give its absolute path in `.env` as `NAVIDROME_DATA`,
+`SHIJHON_DATA` or `USAGE_EXPORT_DATA`. Don't do this with Docker Desktop, where a database
+in a folder can be corrupted
 ([moving data into a volume](reference/advanced-deployment.md#moving-data-into-a-volume)).
 
 ### Backups
 
-`shijhon backup` makes a backup of Shijhon's own state, also while Shijhon runs or after it
-stopped. It writes
-a folder named `shijhon-backup-` and the date and time (in UTC) into `backups` in
-Shijhon's volume. The folder holds a copy of the database, made with SQLite's online
-backup so that it is consistent even while Shijhon writes, and checked with SQLite's
-integrity check. Beside it are the configuration file, the service account's password
-file and a `README.txt` that says what the backup holds, what it leaves out and with which
-version it was made. The command prints the same. When the configuration file or the
-password file cannot be read, it makes no backup and says which file. The database holds
-the settings saved on the dashboard, secrets included, so the folder and its files are
-readable by their owner only. Keep the backup private, outside the checkout.
+`shijhon backup` makes a backup of Shijhon's own state, while Shijhon runs or after it
+stopped. It writes a folder named `shijhon-backup-` and the date and time (in UTC) into
+`backups` in Shijhon's volume. The folder holds a checked copy of the database, the
+configuration file, the service account's password file and a `README.txt` that says what
+the backup holds, what it leaves out and with which version it was made. The command
+prints the same. When the configuration file or the password file cannot be read, it makes
+no backup and says which file.
 
-Run the command as the user Shijhon runs as (in the container it is). That user must be
-able to write to the database's folder, also when the backup goes elsewhere: SQLite makes
-the files it needs to read a database in WAL mode consistently beside the database.
+The database holds the settings saved on the dashboard, secrets included, so the folder
+and its files are readable by their owner only. Keep the backup private, outside the
+checkout. The command has to run as the user Shijhon runs as, which it does in the
+container ([in detail](reference/advanced-deployment.md#backups-in-detail)).
 
 From `packaging/`, make a backup and copy it out of the volume, with the folder name the
 command printed:
@@ -341,11 +342,9 @@ The backup is not a copy of the whole installation. Back these up as well:
   `ND_BACKUP_PATH=/backups`, `ND_BACKUP_SCHEDULE="30 0 * * *"` and `ND_BACKUP_COUNT=14`, on
   backed-up storage.
 - Your music, as you already back it up, and the placeholder folder in it.
-- With music imports enabled, the entire dedicated imports directory, including hidden
-  staging and retained hardlinks. Removed import batches still contain original music and
-  are not disposable cache. Recover into the existing dedicated root so its device/inode
-  binding stays intact; a replacement root must be reviewed rather than rewriting its
-  marker or bypassing the guard.
+- With music imports enabled, the whole imports folder, hidden files included. It holds
+  original music, also of removed imports. Restore it into the same folder, not a new one
+  ([storage and recovery](music-imports.md#storage-and-recovery)).
 - `.env`, and any other place where settings come from the environment.
 
 Shijhon's records must match the placeholder folder, Navidrome's database and, with **Also
@@ -359,7 +358,7 @@ again ([restoring](reference/advanced-deployment.md#restoring-a-backup)).
 **Restart Shijhon**, on the Diagnostics page and wherever a saved setting waits for a
 restart, shuts Shijhon down cleanly, and Docker or your service manager starts it again.
 It stops nothing if the configuration file has an error or names another address or port.
-Requests still open get 5 seconds: a song that is playing may have to be started again.
+A song that is playing may have to be started again.
 
 The Compose file's `restart: unless-stopped` starts it again; **a container run without a
 restart policy stays stopped after you press it.** Outside a container, set `[server]
@@ -370,101 +369,34 @@ restart_by_supervisor = true` under a service manager that restarts Shijhon afte
 
 - Read [CHANGELOG.md](../CHANGELOG.md) first. Between beta versions the configuration can
   change.
-- Shijhon's database migrates itself at startup, and an older Shijhon does not start on a
-  database a newer one migrated. Before the first migration, the start writes a snapshot of
-  the database (below), so you do not need to back it up by hand first.
+- Update the checkout to the new release: `git pull`, or `git fetch --tags` and
+  `git checkout` of the release's tag.
 - Build the new image and start it: `docker compose up -d --build` in `packaging/`. The
   line in `.env` installs its adapters again; a folder of wheels has to be given again.
 - Stay on the Navidrome version the Shijhon release is tested with.
-- Upgrading from 0.1.0b1: apps show each account's **All**
-  ([Your collection](collection.md)): catalog albums that 0.1.0b1 added only because a
-  song was played or put in an app's playlist are in it again once the account plays
-  them or acts on them, and **Add whole album** on the Collection page adds them.
+- With music imports enabled, back up the whole imports folder before upgrading.
 
-Before a new version migrates the database, its first start writes a copy of it into
-`snapshots` in Shijhon's volume, checked like a backup. Its name gives the schema it
-holds, the time (in UTC) and a number that counts snapshots up, for example
-`shijhon-schema37-20261112T153000Z-4.sqlite3`. A new installation needs none. Only once
-the new snapshot is complete are older ones removed: Shijhon keeps the newest snapshot of
-the schema it upgrades from and the newest of the highest other schema, which is normally
-the one the previous upgrade took. A start that is tried again on the same schema replaces
-that schema's snapshot with a newer one, never the previous upgrade's. After a restore of
-an older snapshot, the highest other schema can be a newer one than the restored
-database's.
+Shijhon's database migrates itself at startup, and an older Shijhon does not start on a
+database a newer one migrated. Before it migrates, the first start writes a checked
+snapshot of Shijhon's database into `snapshots` in Shijhon's volume. To be able to roll
+back completely, also back up Navidrome's data and the placeholder folder from the same
+time.
 
-When the snapshot cannot be written, because there is not enough free space, the folder
-cannot be written or the database is damaged, Shijhon upgrades the database and starts
-without it, as versions before snapshots did. It removes no snapshot to make room, and it
-leaves nothing half written. Its log says why (`docker compose logs shijhon` in `packaging/`), with how
-much space the snapshot needed. Administrators see a line at the top of every dashboard
-page that says from which schema to which the database was upgraded, when, and why, until
-one of them dismisses it, and when notification addresses are set, it is reported once
-([notifications](configuration.md#notifications)). Free some space, or make the folder
-writable, so that the next upgrade can take its snapshot, and make a backup now with
-`shijhon backup` ([backups](#backups)). When the reason is a
-database that did not pass SQLite's integrity check, the line says so first: the database
-may be damaged, and `shijhon backup` refuses to copy it until it passes, so restore an
-earlier backup if you have one. `upgrade_snapshots = false` in the configuration (or
-`SHIJHON_UPGRADE_SNAPSHOTS=false`) migrates without a snapshot, and then nothing is shown or
-reported.
+When the snapshot cannot be written (not enough free space, a folder it cannot write, or
+a damaged database), Shijhon upgrades and starts without it. Its log says why
+(`docker compose logs shijhon` in `packaging/`), administrators see a line at the top of
+every dashboard page until one of them dismisses it, and it is reported once when
+[notification](configuration.md#notifications) addresses are set. Free some space or fix
+the folder, so that the next upgrade can take its snapshot, and make a backup now with
+`shijhon backup` ([backups](#backups)). `upgrade_snapshots = false` (or
+`SHIJHON_UPGRADE_SNAPSHOTS=false`) migrates without a snapshot. The
+[details](reference/advanced-deployment.md#upgrades-in-detail) cover the snapshots' names,
+a damaged database, and what each schema changed.
 
 To go back, stop Shijhon, restore the snapshot and what changed with it, and only then
-start the earlier version ([restoring](reference/advanced-deployment.md#restoring-a-backup)). Work done after the
-upgrade is lost then. The snapshot holds only Shijhon's database: keep the earlier
-configuration if you change it for the new version, and with music imports enabled back up
-the imports directory before upgrading.
-
-The first start at schema 24 also lists the catalog albums already in the library that no
-account's records explain (many were added before Shijhon recorded who caused them); they
-are in no account's library. To give them to one account's Shijhon library (and so its
-**All**), run `shijhon carry-over --account <name>` once after that start, with the
-account's Navidrome user name. It can run while Shijhon runs; other accounts never get them
-(`--replace` gives them to another account instead), and `shijhon carry-over` alone shows
-them and who has them.
-
-Schema 33 adds `collection_revisions`, counters kept by triggers on the tables that decide
-what a library selection holds, and an index for checking covers. The first start applies
-it in a moment even on a large library. Older versions refuse this schema, so going back
-means the coordinated recovery below. `collection-queries/` beside the database is a cache:
-its old lists are replaced as they are used.
-
-This release's database is at schema 45. Up to schema 31, playlists, collections, music
-imports and agent access add tables, discovery mixes remember their creation requests,
-agents' playlist requests keep the permissions they were made with, discarded import
-uploads are deleted through recorded steps, placeholders and track links gain release
-indexes, and cached album matches gain a matching revision and an owned-metadata
-fingerprint, so existing negative matches are checked again when an album is next
-considered by a view or the library pass. Schema 32 stores each add-on's fixed key, so
-that renaming an add-on keeps its catalog. Schema 33 is described above. Schemas 34 and
-35 turn the add-ons' routing modes into the add-on plan, with its steps and step times.
-Schema 36 records the artist pictures Shijhon sets, schema 37 the artist lists it
-finds and writes, with what undoes them, schema 38 which agent started a discovery mix
-or a playlist import, so that revoking the agent stops that work. Schemas 39 to 45 add
-the states that notifications report, the artists and releases of the accounts that follow
-new releases, when each added release's track list was last read, the additions a daily
-cap counts, the albums filled from another release with the song IDs of the release they
-had, the albums agents were asked to add, and the record of an upgrade that went on
-without its snapshot. The first start's
-snapshot keeps Shijhon's database from before the upgrade. Keep a backup of Navidrome's
-database from the same time and, with music imports enabled, the complete imports
-directory, including private retained originals. Older application versions refuse the
-newer schema; rollback requires coordinated recovery and review of activity since the
-backup ([restoring a backup](reference/advanced-deployment.md#restoring-a-backup)). To
-undo an import's removal, use its **Restore** instead. A pre-upgrade backup is a rollback
-option only before newer library, playlist, import or history activity; after that,
-reconcile the current data instead of restoring an older snapshot over it.
-
-On first start, import jobs are rebound using their verified library and imports root,
-including jobs blocked by earlier limit or local mount-path changes. Frozen reviews
-remain approvable. Migration `0029_import_received_cleanup.sql` records deletion of
-unpublished uploads; migrations 0030–0031 record cleanup refusals and visible destination
-names. Startup finishes pending deletions; the worker cleans other eligible stopped or
-finished jobs. Refused files retain their reservation and a recorded reason.
-
-Before upgrading, stop Shijhon and back up the entire imports root; the first start's
-snapshot holds the database that matches it. Deleted unpublished uploads require that
-backup to recover. To roll back before newer activity, restore the paired backup and its
-previous settings; older versions cannot use the converted bindings or newer schema.
+start the earlier version ([restoring](reference/advanced-deployment.md#restoring-a-backup)).
+Work done after the upgrade is lost then. The snapshot holds only Shijhon's database:
+keep the earlier configuration if you change it for the new version.
 
 ### Docker Desktop on macOS and Windows
 

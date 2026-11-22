@@ -1,40 +1,41 @@
 # Add-ons
 
-Shijhon gets audio from **add-ons**: small HTTP services that find a track and hand over
-a link to its audio: a file, or a DASH stream ([below](#dash-links)). HLS links do not
-play. Shijhon uses existing add-on protocols instead of a new one: the one
-[Eclipse Music](https://eclipsemusic.app/docs) uses, and [BitChord](https://bitchord.kushagrasingh.in/docs)'s
+Add-ons are small web services that supply the music outside the library. An add-on can
+supply audio, a catalog (a search, albums and artists), or both. An add-on's catalog can
+be the one apps show ([catalogs](catalogs.md#the-catalog-of-an-add-on)). Shijhon
+includes no add-ons, so what shows and plays depends on the ones you add. Several can be
+used together, and [the plan](#the-plan) sets how they are asked. Shijhon uses existing
+add-on protocols instead of a new one: the one [Eclipse Music](https://eclipsemusic.app/docs) uses, and [BitChord](https://bitchord.kushagrasingh.in/docs)'s
 close variant of it. Shijhon is an independent project, not affiliated with or endorsed by
 Eclipse Music or BitChord.
 
 ## Adding an add-on
 
+On the dashboard's **Add-ons** page, you add an add-on by its URL. There you can also
+reorder, enable, disable or remove it, and fill in the settings its manifest declares. An
+enabled add-on with a catalog of its own is also searched by [playlist
+imports](playlist-imports.md#add-on-catalogs).
+
 The separate [Shijhon Mornye extension bridge](https://github.com/Jasshl/shijhon-mornye-bridge)
 makes Mornye extensions usable as add-ons for audio, catalog data or both. It is not
 affiliated with Mornye; follow its setup guide to obtain the add-on links.
-
-On the dashboard's **Add-ons** page: add one by its URL, order, enable, disable or remove
-it, and fill in the settings its manifest declares. An enabled add-on with a catalog of
-its own is also searched by [playlist imports](playlist-imports.md#add-on-catalogs).
 
 To change the order, drag an add-on by its number or use its arrows. **All on** and
 **All off** switch the whole list.
 
 To rename an add-on, change its **Name** under **Settings** and save. Only the name you
-see changes: the add-on keeps its catalog, its songs and its place, and the settings that
-name it (the catalog's add-on, the primary add-on, the preferred fallback) change with it.
-Names are unique. When an environment variable sets one of those settings to the add-on's
-name, the rename is refused: change the variable first.
+see changes. The add-on keeps its catalog, its songs and its place, and if it is the
+add-on chosen on the Catalog page, that choice follows the new name. Names are unique. If
+an environment variable names this add-on as the catalog's add-on, the rename is refused;
+change the variable first.
 
 Add-ons whose manifest declares no `stream` resource provide a catalog only. They are
-listed apart, under **Catalog only**: they have no place in the order, and their
-**Settings** leave out what only matters for audio. They keep the name, the add-on's own
-settings, the network, the address, the request limits, and **Time for catalog answers**:
-how long playlist imports wait for a slow add-on's catalog (`budget_seconds` in the
-file). An add-on whose manifest can't be read stays in the main list and shows the
-problem.
+listed apart, under **Catalog only**, and have no place in the order. Their **Settings**
+leave out what only matters for audio. Their **Time for catalog answers** (`budget_seconds`
+in the file) is how long playlist imports wait for a slow add-on's catalog. An add-on
+whose manifest can't be read stays in the main list and shows the problem.
 
-Or in the configuration file, in your order:
+Add-ons can also be listed in the configuration file, in the order you want:
 
 ```toml
 [[addons]]
@@ -62,62 +63,55 @@ settings = {}           # the add-on's own settings, if it has any: single value
 
 ## The plan
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/dashboard-plan-dark.gif">
+  <img width="100%" src="images/dashboard-plan-light.gif" alt="The add-ons' plan on the dashboard: a preset arranges the add-ons in steps on a timeline, an add-on is pulled into another step, a step's time is pulled out, and a run shows which add-on usually plays">
+</picture>
+
 The add-ons are asked for a song in steps, shown as a timeline on the dashboard's Add-ons
 page. Add-ons in the same step start together when someone plays a song, and the first to
-send audio plays. Each step has a time: when it has passed without audio, the next step's
-add-ons join, and the add-ons already asked keep trying. When every add-on in the step has
-failed or lacks the song, the next step joins at once. Whichever add-on's audio comes first plays,
-and the others are stopped. Apps stop waiting at `[delivery] max_wait_seconds`, so steps
-that would begin after that are never reached; the page lists their add-ons under the
+send audio plays. Each step has a time. When that time passes without audio, the next
+step's add-ons join, and the add-ons already asked keep trying. When every add-on in the
+step has failed or lacks the song, the next step joins at once. Once one add-on's audio
+plays, the others are stopped. Apps stop waiting after `[delivery] max_wait_seconds`.
+Steps that would begin later are never reached, and the page lists their add-ons under the
 timeline. The last step has no time of its own: its add-ons try until apps stop waiting.
 
-Pull an add-on's bar sideways into another step's column to start with it, or onto the line
-between two columns to make a step of its own, and pull a step's edge to change its time.
-After its step, each bar fades on to the apps' limit, where it keeps trying. An add-on in
-the list under the timeline is pulled up into a column, or up and down in that list. The
-presets arrange them for you: Fastest (all in one step), Fastest three (the three quickest
-right now, then the rest one at a time), Main with backups (the first alone, then the rest
-together), One at a time, and Ready first. The page shows each add-on's recent speed, and
-Diagnostics lists the latest starts with every add-on asked, when each later step joined,
-what each answered and how long it took. In Shijhon's log, each request's line gives its
-whole time - for a song, as long as the app kept reading - and when Shijhon sent the
-answer's start and its first body bytes (`start sent`, `first body sent`), and when it saw
-the app disconnect (`disconnect seen`). "Sent" means handed to the web server: an app that
-already closed the connection does not get it, and Shijhon notices a disconnect only when
-it looks, so an app can be gone before the line says so.
+To move an add-on into another step, pull its bar sideways into that step's column. To
+give it a step of its own, pull it onto the line between two columns. To change a step's
+time, pull the step's edge. After its step, each bar continues faded up to the apps'
+limit, since the add-on keeps trying until then. An add-on in the list under the timeline
+can be pulled up into a column, or up and down within that list. The presets arrange them
+for you: Fastest (all in one step), Fastest three (the three quickest right now, then the
+rest one at a time), Main with backups (the first alone, then the rest together), One at a
+time, and Ready first. The page shows each add-on's recent speed. For the latest song
+starts, Diagnostics lists every add-on asked, when each later step joined, what each
+add-on answered and how long it took.
 
-An add-on still trying when another's audio comes counts a timeout toward its cooldown
-only when it was slow for itself: past its step's time and past `[delivery] slow_after`
-times (2) its usual time to first audio. An add-on that has no usual time yet counts once
-it is past its step's time. The last step has no time of its own: there the default step
-time (`[delivery] budget_seconds`) counts as its time, from when it joined. Waits at the
-add-on's own request limits are not its slowness. Give one that is often a little late but
-works a higher **Slow after** of its own in its settings. When apps stop waiting with no
-audio at all, every add-on still trying counts a timeout.
+An add-on that times out twice in a row is passed over for 30 seconds. One that said it
+doesn't have a song is not asked for that song again for a day. When another add-on's
+audio comes first, an add-on still trying counts a timeout only if it was slow by its own
+standard: past its step's time and past twice its usual time to first audio. When apps
+stop waiting with no audio at all, every add-on still trying counts a timeout. An add-on
+that is often a little late but works can get a higher **Slow after** of its own in its
+settings. The [detailed rules](reference/add-on-protocol.md#the-plan-in-detail) cover
+what counts as a timeout and the timings in Shijhon's log.
 
-A play's audio is held while it goes on: Shijhon reads the add-on's answer on to the
-song's end while the app stays connected - also a song the app only loaded ahead - and
-feeds the app from it. The play's seeks, and an app reading on after a pause, are served
-from it at once, without asking the add-on again, also once the song's link expired and
-the add-on gives no new one. Only the play's own file is used: the same add-on track, size
-and ETag (without an ETag, the same link or the same first bytes); what is not held yet goes
-to the add-on as before, and a new link to a file the add-on gives no ETag for is accepted
-only when its first bytes are the play's. An add-on that asks not to be used for downloads
-(`allowDownloads`) is read only as the app reads. With **Keep streamed songs** on, a song
-held in full goes into your library.
+While the app stays connected, Shijhon goes on receiving a playing song to its end and
+keeps what it received. Seeks, and playing on after a pause, are then served at once,
+without asking the add-on again. With **Keep streamed songs** on, a song received in full
+goes into your library.
 
-Requests that nobody waits on never race. An app's fetch ahead goes to the plan's first
-add-on alone, and warm-ahead and downloads ask one add-on at a time in the plan's order, so
-several add-ons are not asked for the same song. Each add-on then has its **Time for a
-download** (`budget_seconds`, else `[delivery] budget_seconds`), not its step's time. An
-app's probe of a song just before it plays races like the play. When an app loads two songs
-at the same moment, as a player with two audio elements loads the song it plays and the
-next one, Shijhon cannot tell which one plays until the app reports it, so both race like
-plays.
+The steps are for songs played on demand. Other requests ask one add-on at a time. When an
+app loads a song ahead of time, only the plan's first add-on is asked. Preparing the next
+songs in the queue, and downloads, go through the add-ons in the plan's order. Each add-on
+then gets its **Time for a download** (`budget_seconds`, else `[delivery] budget_seconds`)
+instead of its step's time.
 
-With **Ask which add-ons have the song ready** on, the add-ons that can tell are asked when
-a song starts. One that says it has the song ready joins once a song has had no audio for
-the time you set (0: it goes first), and one that says it doesn't goes last.
+With **Ask which add-ons have the song ready** on, Shijhon asks the add-ons that can tell
+when a song starts. An add-on that says it has the song ready joins once the song has
+gone without audio for the time you set; with 0, it goes first. One that says it doesn't
+have the song ready goes last.
 
 In the file, an add-on's `step_seconds` is its step's time, `with_previous = true` puts it
 in the step of the add-on before it, `budget_seconds` is its time for a download and
@@ -135,90 +129,66 @@ base_url = "https://second.example/manifest.json"
 with_previous = true       # starts together with the first
 ```
 
-An add-on that times out `cooldown_timeouts` times in a row (2), slow or still trying when
-apps stop waiting, is passed over for
-`cooldown_seconds`, and one that said it doesn't have a song is not asked for it again
-for `miss_hours` (24).
-
 ## Limits
 
-An add-on gets at most 5 API requests a second, after 10 at once, and 4 audio requests
-being opened at once, from all users and Shijhon's background work together. Each user
-can look up 4 songs and fetch 4 whole songs at a time. The optional hourly download quota
-is off by default. Over a limit, a request waits its turn; the song being played goes
-first. An add-on you run yourself can have higher API limits of its own
-(`requests_per_second`, `request_burst`, `audio_openings`). Several add-ons served at one
-address count separately, by the `id` in each one's manifest; the same add-on added twice
-shares its limits ([every limit](reference/add-on-protocol.md#limits)).
+Shijhon sends each add-on at most 5 API requests a second, after a burst of 10, and opens
+at most 4 audio requests to it at once. These limits count all users and Shijhon's own
+background work together. Each user can look up 4 songs and fetch 4 whole songs at a time.
+Over a limit, a request waits its turn, and the song being played goes first. An add-on
+you run yourself can have higher API limits of its own (`requests_per_second`,
+`request_burst`, `audio_openings`). Several add-ons served at one address have separate
+limits, told apart by the `id` in each one's manifest. The same add-on added twice shares
+its limits. The add-on protocol reference lists [every
+limit](reference/add-on-protocol.md#limits).
 
 ### Downloads and playlist preparation
 
-An app's standard `download` request uses the download scheduler for each missing song.
-The dashboard's **Downloads** page also prepares a chosen native playlist's
-audio in the server library. Neither workflow needs a playlist batch detector or a
-special add-on. This prepares server files; the app still needs to save its own device
-copies. Showing catalog tracks and adding library placeholders do not download audio.
+An app's `download` request fetches each missing song whole into the server library, and
+the dashboard's **Downloads** page does the same for a chosen native playlist. These are
+files on the server; the app still saves its own copies on the device. Showing catalog
+tracks downloads nothing, and neither does adding them to the library as
+[placeholders](how-it-works.md#placeholders). Downloading a whole playlist as one archive
+does not prepare it, so prepare the playlist first when some of its songs are still
+placeholders.
 
 The defaults on **Playback → Downloads and playlist preparation** are 4 songs fetched
 at once for everyone together, and 2 per add-on. Under **Advanced settings**, new
 preparation is limited to 1 song per add-on and whole-song fetches to 4 per user. All of
-these limits are adjustable; 0 removes that cap. The hourly quota is optional and defaults
-to 0 (off).
+these limits are adjustable, and 0 removes a cap. The hourly quota is optional and
+defaults to 0 (off).
 
-For each song, Shijhon selects an enabled add-on that permits downloads and has a free
-slot. It keeps the slot until the transfer ends. A source that cannot report whether
-audio is cached remains usable: only the selected source gets the ordinary lookup and
-stream request. If it fails, another source is tried in turn. Playback has priority.
+Each add-on's own limits are under **Add-ons → Settings → Advanced settings**. A blank
+**Songs fetched at once** or **New preparations at once** inherits the default, a number
+overrides it, and 0 removes that add-on's cap. When add-ons use the same account or
+worker, at one address or at different ones, give them the same **Shared account or worker
+group** label. The group's strictest nonzero limit then applies to them together. The same
+add-on added twice always shares these limits, while add-ons served at one address share
+them only when you group them.
 
-Playlist preparation also works with slow add-ons. Its songs wait for a free slot, and
-the download timeout (`download_timeout_seconds`, 180 seconds) counts only from the
-moment a song gets its slot. When every add-on that could provide a song is paused
-(rate limited with HTTP 429 and `Retry-After`, cooling down after errors, or needing its
-operator to sign in again), the song waits for the pause to end instead of failing. Nothing is sent to a paused add-on until
-then; a 429 pauses only that add-on, not the others in its shared group, which still share
-its transfer slots. A song fails when no enabled add-on permits
-downloads or has it, or after waiting an hour in all for paused add-ons. A waiting song
-holds none of the user's download turns. When it gets a slot while the user's turns are
-busy, or while an app is fetching the same song, it gives the slot back and tries again
-shortly, so app requests go first. If an app puts the song in place meanwhile, the song
-counts as ready. A song your app reports as playing goes ahead of other waiting work.
-Cancel also stops waiting songs. An app's `download` request does not wait like this: it
-fails at once when its add-ons are paused, and its timeout includes its wait for a slot.
+The add-on protocol does not report an account's remaining credits or quota, so set limits
+that suit the account behind the add-on. Shijhon also honors HTTP 429 and `Retry-After`.
 
-The preparation limit bounds the requests Shijhon starts. An add-on can keep a remote
-job running after a request ends; the standard protocol cannot cancel or confirm that
-job. When readiness remains uncertain, Shijhon briefly pauses new preparation on that
-backend rather than assuming the remote work stopped.
-
-An optional [cached delivery check](reference/add-on-protocol.md#the-cached-delivery-extension)
-can select the exact cached variant of the correct recording, at any audio quality.
-Shijhon keeps that choice and uses local conversion when needed. A general readiness
-answer or quality label does not prove that a file is cached.
-
-On **Add-ons → Settings → Advanced settings**, blank **Songs fetched at once** and **New
-preparations at once** inherit the displayed defaults. A number sets an override; 0
-removes that add-on's cap. The same add-on added twice always shares transfer limits;
-add-ons served at one address do not, unless you group them. Give add-ons the same
-**Shared account or worker group** label when they use one account or worker, at one
-address or at different ones. A group's strictest nonzero limit applies; 0 does not
-cancel another member's cap. Different hostnames do not establish independent backends.
-API request pacing stays per add-on, independently of these groups.
-
-An account's remaining credits or quota are not part of the standard add-on protocol.
-Configure appropriate limits yourself; Shijhon also honors HTTP 429 and `Retry-After`.
-An offline save sent as an ordinary stream still uses playback rules because that
-request does not reveal offline intent. Native archive downloads are not playlist
-preparation jobs; prepare the playlist first when it contains placeholders.
+Playlist preparation also works with slow add-ons. Its songs wait for a free slot, and the
+download timeout (180 seconds) counts only from the moment a song gets one. When every
+add-on that could provide a song is paused (rate limited, cooling down after errors, or
+needing its operator to sign in again), the song waits up to an hour for the pause to end
+instead of failing. A song fails when no enabled add-on permits downloads or has it.
+**Cancel** also stops waiting songs. An app's `download` request does not wait like this:
+it fails at once when its add-ons are paused. The [detailed
+rules](reference/add-on-protocol.md#downloads-and-playlist-preparation) cover the waiting
+and cached copies.
 
 ## DASH links
 
+An add-on's audio link can be a file or a DASH stream. HLS links do not play.
+
 By default a DASH link plays from its first segments, served as one MP4 file. With
 `[delivery] dash_start = "complete"`, it plays once its segments are joined into a FLAC,
-M4A or MP3 file.
-Songs saved to the library are always such files. ffmpeg does the copying: the Docker
-image has it. Unsupported streams, and audio whose length differs from the song's
-([`length_tolerance_seconds`, `length_tolerance_percent`](reference/settings.md#delivery)),
-go to the next add-on ([details](reference/add-on-protocol.md#dash-links)).
+M4A or MP3 file. Songs saved to the library are always such files. ffmpeg does the
+joining, and the Docker image includes it. When a stream is unsupported, or its audio
+length differs from the song's ([`length_tolerance_seconds`,
+`length_tolerance_percent`](reference/settings.md#delivery)), the next add-on is asked
+([details](reference/add-on-protocol.md#dash-links)).
 
 ## `allowDownloads`
 
@@ -229,29 +199,51 @@ add-ons. Plays, and preparing the next songs in the queue, still use it.
 ## When an add-on fails
 
 - **It does not have the song** (HTTP 404): the next add-on is asked.
-- **"Too many requests"** (HTTP 429): nothing new is asked of it until its `Retry-After`,
-  an hour at most, or 30 seconds when it names none. Songs already playing keep playing,
-  and other add-ons at its address are asked as before.
+- **"Too many requests"** (HTTP 429): Shijhon asks it nothing new until its `Retry-After`
+  time has passed, an hour at most. When it names no time, the pause is 30 seconds. Songs
+  already playing keep playing, and other add-ons at its address are asked as before.
 - **"Not ready yet"** (HTTP 503 with `Retry-After`, while it prepares the song): Shijhon
-  asks for the song's link again after that time, within the add-on's time for the song:
-  in a play until apps stop waiting, for a download its time for a download. This is not
-  an error. When the song is not ready in time, a retry of the song asks this add-on again.
-  Give an add-on that prepares whole files a time for a download that covers a usual
-  preparation, and a step whose time lets it be asked first.
+  asks for the song's link again after that time. It keeps asking as long as the add-on's
+  time for the song lasts: in a play, until apps stop waiting, and in a download, for its
+  time for a download. This is not an error, and a retry of the song asks this add-on
+  again. An add-on that prepares whole files before sending
+  them needs a head start. Give it a time for a download that covers a usual preparation,
+  and put it in an early step of the plan.
 - **"Needs sign-in"** (an add-on that says its operator must sign in again): the Add-ons
-  page and Diagnostics show "Needs sign-in", with a link to the add-on's own page for it
+  page and Diagnostics show "Needs sign-in", with a link to the add-on's own sign-in page
   when it names one. This is not an error. Plays and downloads pass it over for 10
-  minutes at a time and ask it again after them, and playlist preparations wait for it.
-  It is shown so until it delivers audio again (an add-on with a catalog only: until its
-  catalog answers again). Once you've signed in, choose **Check again** beside it: it is
-  asked again at once. Saving its settings does the same.
+  minutes at a time and then ask it again, and playlist preparations wait for it. "Needs
+  sign-in" stays until the add-on delivers audio again, or for a catalog-only add-on,
+  until its catalog answers again. Once you've signed in, choose **Check again** beside it
+  to have it asked again at once. Saving its settings does the same.
 - **Three errors in a row** (HTTP 5xx, no connection, a broken answer), no more than ten
-  minutes apart: it is passed over for 30 seconds, and again after each further error
-  until it delivers audio.
+  minutes apart: it is passed over for 30 seconds. Until it delivers audio again, each
+  further error passes it over again.
 
 ## For add-on authors
 
-An add-on needs `/stream/{id}` and one way to find a song: by ISRC (`/resolve-isrc`), by
-title, artist and length (`/resolve`), or a search (`/search?q=`). An add-on whose
-manifest lists no `stream` serves only its catalog: Shijhon asks it for no audio.
+An add-on for audio needs `/stream/{id}` and one way to find a song: by ISRC
+(`/resolve-isrc`), by title, artist and length (`/resolve`), or a search (`/search?q=`).
+
+An add-on with a catalog lists the resources `search` and `catalog` in its manifest and
+answers `/search`, `/album/{id}` and `/artist/{id}`
+([the catalog endpoints](reference/add-on-protocol.md#the-catalog-endpoints)). One whose
+manifest lists no `stream` serves only its catalog: Shijhon asks it for no audio, and the
+Add-ons page lists it under **Catalog only**. A catalog-only add-on can serve as the
+catalog beside audio add-ons that only find songs.
+
+Shijhon's optional extensions let an add-on do more, and other apps that use add-ons can ignore them:
+
+- The [full-catalog extension](reference/add-on-protocol.md#the-full-catalog-extension)
+  adds disc and track numbers, release kinds, clean and explicit versions, song and ISRC
+  lookups, paged discographies and a declared catalog identity, so that partly owned
+  albums can be matched by their disc and track numbers.
+- The [availability extension](reference/add-on-protocol.md#the-availability-extension)
+  says which songs an add-on has ready, for **Ask which add-ons have the song ready**.
+- The [cached delivery extension](reference/add-on-protocol.md#the-cached-delivery-extension)
+  names the exact cached file of a recording, for downloads and playlist preparation.
+- An add-on can say that its operator needs to sign in again
+  ([answers and errors](reference/add-on-protocol.md#answers-and-errors)). It can also
+  answer "not ready yet" while it prepares a song ([above](#when-an-add-on-fails)).
+
 [The add-on protocol](reference/add-on-protocol.md) has the rest.

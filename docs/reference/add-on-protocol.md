@@ -61,10 +61,10 @@ limits. Of several tracks that match:
 - HTTP 503 with a valid `Retry-After` (seconds or an HTTP date; any body) means "not ready
   yet": the add-on is preparing the audio. At `/stream/{id}`, Shijhon asks again after
   that time (half a second at least), as often as the add-on's time for the song allows
-  (in a play the app's wait, `max_wait_seconds`; for a download its `budget_seconds` or
-  its share of the routing's time). When the time named is longer than what is left, it stops asking.
-  This is no error: it counts toward no cooldown, and a retry of the song, or a routing
-  that continues it, asks that add-on again. An attempt that waited until its time ran
+  (in a play the app's wait, `max_wait_seconds`; for a download its time for a download,
+  `budget_seconds`, else `[delivery] budget_seconds`). When the time named is longer than
+  what is left, it stops asking. This is no error: it counts toward no cooldown, and a
+  retry of the song asks that add-on again. An attempt that waited until its time ran
   out counts as a timeout; one whose first answer named more time than was left moves on
   at once and counts as none. Either way it is kept among the add-on's recent attempts
   as one without audio. At the add-on's other requests such an answer is not counted as
@@ -140,8 +140,8 @@ With `"allowDownloads": 0` ([add-ons.md](../add-ons.md#allowdownloads)), songs p
 for later (`prepare_when_not_ready`) also come from the other add-ons. When none has the
 song, a `download` fails, a conversion plays in the add-on's own format, and share links
 and the jukebox cannot play it. Readiness checks, and offline saves through ordinary
-streams (they look like plays), still use the add-on. The routing reads a changed manifest
-only at a restart or a change of the add-on list.
+streams (they look like plays), still use the add-on. Shijhon reads a changed manifest for
+this only at a restart or a change of the add-on list.
 
 ## The catalog endpoints
 
@@ -361,6 +361,51 @@ checks. A positive answer without a selector is unknown. The selector is treated
 opaque path segment and is not shown in logs or on the dashboard.
 Selectors must be nonempty, at most 512 characters, and neither `.` nor `..`.
 
+## The plan in detail
+
+The rules behind [the plan](../add-ons.md#the-plan) on the dashboard's Add-ons page.
+
+An add-on still trying when another's audio comes counts a timeout toward its cooldown
+only when it was slow for itself: past its step's time and past `[delivery] slow_after`
+times (2) its usual time to first audio. An add-on that has no usual time yet counts once
+it is past its step's time. The last step has no time of its own: there the default step
+time (`[delivery] budget_seconds`) counts as its time, from when it joined. Waits at the
+add-on's own request limits are not its slowness. Give one that is often a little late but
+works a higher **Slow after** of its own in its settings. When apps stop waiting with no
+audio at all, every add-on still trying counts a timeout.
+
+An add-on that times out `cooldown_timeouts` times in a row (2), slow or still trying when
+apps stop waiting, is passed over for `cooldown_seconds`, and one that said it doesn't
+have a song is not asked for it again for `miss_hours` (24).
+
+A play's audio is held while it goes on: Shijhon reads the add-on's answer on to the
+song's end while the app stays connected - also a song the app only loaded ahead - and
+feeds the app from it. The play's seeks, and an app reading on after a pause, are served
+from it at once, without asking the add-on again, also once the song's link expired and
+the add-on gives no new one. Only the play's own file is used: the same add-on track, size
+and ETag (without an ETag, the same link or the same first bytes); what is not held yet goes
+to the add-on as before, and a new link to a file the add-on gives no ETag for is accepted
+only when its first bytes are the play's. An add-on that asks not to be used for downloads
+(`allowDownloads`) is read only as the app reads. With **Keep streamed songs** on, a song
+held in full goes into your library; a play's start and its seeks count together when they
+are of the same file at the add-on.
+
+Requests that nobody waits on never race. An app's fetch ahead goes to the plan's first
+add-on alone, and warm-ahead and downloads ask one add-on at a time in the plan's order, so
+several add-ons are not asked for the same song. Each add-on then has its **Time for a
+download** (`budget_seconds`, else `[delivery] budget_seconds`), not its step's time. An
+app's probe of a song just before it plays races like the play. When an app loads two songs
+at the same moment, as a player with two audio elements loads the song it plays and the
+next one, Shijhon cannot tell which one plays until the app reports it, so both race like
+plays.
+
+In Shijhon's log, each request's line gives its whole time - for a song, as long as the
+app kept reading - and when Shijhon sent the answer's start and its first body bytes
+(`start sent`, `first body sent`), and when it saw the app disconnect (`disconnect seen`).
+"Sent" means handed to the web server: an app that already closed the connection does not
+get it, and Shijhon notices a disconnect only when it looks, so an app can be gone before
+the line says so.
+
 ## Limits
 
 | Limit | Default | Setting in `[delivery]` |
@@ -417,6 +462,42 @@ with two audio elements loads the song it plays and the next one at the same mom
 both are taken as the song being played, unless that app's own report names the other. So the limits per user slow down pre-loading, saving
 many songs at once, probes (`HEAD`) and `download` requests for songs not reported as
 playing, but not saves that come one by one as streams: those look like plays.
+
+## Downloads and playlist preparation
+
+The rules behind [downloads and playlist
+preparation](../add-ons.md#downloads-and-playlist-preparation). Neither an app's
+`download` request nor the Downloads page's playlist preparation needs a playlist batch
+detector or a special add-on.
+
+Playlist preparation also works with slow add-ons. Its songs wait for a free slot, and
+the download timeout (`download_timeout_seconds`, 180 seconds) counts only from the
+moment a song gets its slot. When every add-on that could provide a song is paused
+(rate limited with HTTP 429 and `Retry-After`, cooling down after errors, or needing its
+operator to sign in again), the song waits for the pause to end instead of failing.
+Nothing is sent to a paused add-on until then; a 429 pauses only that add-on, not the
+others in its shared group, which still share its transfer slots. A song fails when no
+enabled add-on permits downloads or has it, or after waiting an hour in all for paused
+add-ons. A waiting song holds none of the user's download turns. When it gets a slot while
+the user's turns are busy, or while an app is fetching the same song, it gives the slot
+back and tries again shortly, so app requests go first. If an app puts the song in place
+meanwhile, the song counts as ready. A song your app reports as playing goes ahead of
+other waiting work. Cancel also stops waiting songs. An app's `download` request does not
+wait like this: it fails at once when its add-ons are paused, and its timeout includes its
+wait for a slot.
+
+The preparation limit bounds the requests Shijhon starts. An add-on can keep a remote
+job running after a request ends; the standard protocol cannot cancel or confirm that
+job. When readiness remains uncertain, Shijhon briefly pauses new preparation on that
+backend rather than assuming the remote work stopped.
+
+The optional [cached delivery check](#the-cached-delivery-extension) can select the exact
+cached variant of the correct recording, at any audio quality. Shijhon keeps that choice
+and uses local conversion when needed. A general readiness answer or quality label does
+not prove that a file is cached.
+
+An offline save sent as an ordinary stream still uses playback rules because that
+request does not reveal offline intent.
 
 ## What a song costs an add-on
 

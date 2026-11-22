@@ -56,11 +56,61 @@
   probes and then plays can wait behind its own lookups.
 - Archive downloads that Navidrome does not start answering within 20 seconds fail with
   HTTP 502.
+- The minimum audio quality covers streams, downloads and direct play through the
+  transcoding extension. A song whose file is below the listener's minimum still plays
+  its file when the app asks for a conversion the add-ons' audio would need, and through
+  the OpenSubsonic transcoding extension when the app's decision has a bitrate limit or
+  converts, or its profile does not name the add-ons' format (an M4A's codec is not read:
+  the app must play AAC and ALAC). After a restart, until the app asks for a new decision,
+  its earlier direct-play decisions play the file
+  ([audio quality in detail](settings.md#audio-quality-in-detail)).
 - Shares: only the first 20 placeholders of a share get their audio when its link is
   opened. An archive still containing silent placeholders is refused with HTTP 503;
   a later request can prepare the next batch.
 
+## Music imports
+
+- An imported song is upgraded only after a plain play by its importer (a stream, or a
+  transcode stream at original quality). A play that needs a conversion, a download, the
+  jukebox or a share link, or a play by someone else, does not upgrade it. The add-ons'
+  audio replaces the file only when its format can carry the file's tags (any Shijhon
+  writes and Navidrome reads, not raw AAC), the imported file is not Matroska or Shorten,
+  and Navidrome keeps the song's identity and details for it (a recording date only an
+  MPEG-4 or WMA file cannot hold is such a detail); otherwise the file stays as it is.
+- A catalog song playing an import's audio whose file goes missing (a restore from a
+  backup that leaves the placeholder folder out) plays from the add-ons again until the
+  import's audio is put back: within a minute, or at the next import activity.
+- An import's audio goes into a catalog song only in the swap's formats. Imports in other
+  formats (WAVE, AIFF, WMA, APE and the like) linked to a catalog song stay plain links:
+  the song keeps playing from the add-ons.
+- A WAVE file's RIFF INFO tags are not read. The review reads its ID3 tags only; a WAVE
+  file tagged only in RIFF INFO counts as having no album name.
+
 ## Library writes and the cleanup
+
+- A catalog release can conflict with an existing album. Shijhon checks whether it can
+  safely add missing tracks to one existing album. Preparation stops when several albums
+  fit, when the one that fits - or your album of the same name that is the release's
+  album - is kept as it is, in the review list or already filled, when your album is
+  complete by its files' track totals and the release is an edition of another name, or
+  when it cannot take the release, when Navidrome would put the release's songs into
+  another of your albums (the same album artist and album title, apart from letter case
+  and the kind of quotation marks and dashes, and the same release date), when searching
+  your library for the artist and the title finds over 20,000 albums, or when neither can
+  be searched (one letter each).
+- A filled album keeps its release once anyone has used a song the fill added. A play, a
+  favorite, a rating, a playlist entry, a play queue, a bookmark, a share, a stream or
+  download Shijhon served, or downloaded audio in a song's place counts, also when it has
+  ended, as for the cleanup. The release is then changed for none of its songs. The
+  choice also needs Navidrome's usage records (the
+  [usage export](../deployment.md#the-usage-export)), as the cleanup does. The releases
+  offered are those the album's match considered.
+- After an album is filled from another release, starring, rating, queueing or reporting
+  a play of an old song that the new release does not have under the same number and
+  title answers "not found" until the app has loaded the album again, and "try again
+  later" while the replacement is not finished. A song both releases have under the same
+  number and title keeps its ID, also when the recordings differ
+  ([how it works](../how-it-works.md#matching-and-filling)).
 
 - The cleanup stops when one release is out of step: if Navidrome's records lack the songs
   of a release that looks unused (a placeholder deleted in Navidrome's interface, say),
@@ -114,6 +164,11 @@
   add-on's catalog that is not the catalog in use gets Navidrome's empty answer. A radio
   started from a song, an album or an artist in your library is Navidrome's own, with
   music from your library only.
+- At the daily cap on adding, a person still hears catalog songs that play as plain
+  streams; those plays are not recorded, because recording one would add its release.
+- Artists who share a name: if the catalog has several artists of the name of an artist
+  in your library, Shijhon looks at the first three and takes the one that shares the most
+  album titles with your library, or none if none shares any.
 - `unstar` with the catalog ID of an album not filled yet changes nothing and answers
   "ok". A library artist added to search results by name carries no favorite or rating.
 - The catalog of an add-on: albums are found by their titles alone. Adding a song
@@ -122,6 +177,9 @@
   an album is found by name. Under the same name, a service that keeps the manifest `id`
   of the one before is asked for the old track IDs.
 
+- New releases are added to the ID3 list of newest albums (`getAlbumList2` with
+  `type=newest`). An app that syncs the whole library through that list keeps the new
+  releases as albums until its next sync after they left.
 - New releases: "most played" counts all plays of the albums an account played in the
   last 90 days, since Navidrome keeps a play count and the last play of an album, not
   each play, and it reads the 500 albums played most recently. JSONP and `HEAD` requests
@@ -140,6 +198,12 @@
   of it) is added to its album beside the song it already is there.
 
 ## API parity and security
+
+- Catalog results appear in the API's ID3 methods (`search3`, `getArtist`, `getAlbum`,
+  `getAlbumList2`, `getStarred2`).
+- Music API answers, including catalog views, errors, covers and add-on audio, use
+  Navidrome's CORS policy. Browser apps on another origin can read them; preflight
+  requests are answered by Navidrome. Dashboard and sign-in origin checks remain separate.
 
 - JSONP answers and answers to `HEAD` apply personal library filtering, but omit catalog
   additions and complete counts before preparation

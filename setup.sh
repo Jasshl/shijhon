@@ -54,7 +54,8 @@ needs. Each answer can be given as an option instead:
   --navidrome-data DATA  that Navidrome's data, for the usage export: its folder, or its
                          Docker volume's name (optional; docs/deployment.md)
   --port N               the port your apps connect to (default: $default_port)
-  --adapters "SPEC ..."  catalog adapters to install (docs/catalogs.md)
+  --adapters "SPEC ..."  catalog adapters to install, the legacy way to get a catalog
+                         (optional; docs/catalogs.md)
   --agent-url URL        the address AI agents connect to over MCP: an HTTPS origin
                          such as https://music.example.com (optional; an http://
                          address on a home network turns on plain HTTP for it)
@@ -1135,8 +1136,8 @@ else
     fi
 
     if ! $adapters_given && $questions; then
-        say "Catalog adapters are optional (an add-on's catalog needs none). For example, the"
-        say "MusicBrainz adapter: https://github.com/Jasshl/shijhon-catalog-musicbrainz/archive/refs/tags/v0.1.0b1.tar.gz"
+        say "Catalog adapters are the legacy, optional way to get a catalog: an add-on's catalog,"
+        say "chosen later on the dashboard, needs none. To install one anyway, give its address."
         ask "Catalog adapters to install, if any (docs/catalogs.md; blank: none)" ""
         adapters=$answer
     fi
@@ -1609,4 +1610,5 @@ fi
 if [ -z "$navidrome_data$shijhon_data$usage_data" ]; then
     say "The databases are in Docker volumes. Backups: docs/deployment.md, \"Backups\"."
 fi
-say "Next: a catalog (docs/catalogs.md) and add-ons (docs/add-ons.md)."
+say "Next: add add-ons on the dashboard's Add-ons page and choose one's catalog on its"
+say "Catalog page (docs/add-ons.md, docs/catalogs.md)."

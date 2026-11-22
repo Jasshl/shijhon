@@ -10,7 +10,8 @@ docker buildx build --platform linux/amd64 --load -t shijhon:amd64 .   # for ano
 The image runs as a non-root user, needs no capabilities and works with a read-only root
 filesystem and a temporary `/tmp`. The Compose file builds it with the Compose project's
 name, as `shijhon:local` by default, or `<name>:local` with another `COMPOSE_PROJECT_NAME`,
-so that each installation on a machine has its own image.
+so that each installation on a machine has its own image. A one-shot `data-owner` service
+gives new volumes to the user the containers run as at each start.
 
 ## Catalog adapters in detail
 
@@ -130,6 +131,17 @@ secrets. With both settings set, the export is read, with a warning at startup. 
 way, giving Navidrome its own `ND_PASSWORDENCRYPTIONKEY` (kept safe: without it nobody can
 log in) means its database by itself does not give the passwords away.
 
+## Music imports in detail
+
+The overview is in [the deployment guide](../deployment.md#music-imports).
+
+Compose and `./setup.sh` use the file set in `COMPOSE_FILE` on later runs. If an existing
+project was started with `-f` instead, setup reads its containers' Compose file set and
+saves it in `packaging/.env` when no `COMPOSE_FILE` is specified. An explicit
+`COMPOSE_FILE` in the shell or `.env` takes precedence; keep the intended set in `.env` for
+future commands. The overlay refuses a missing host directory, exposes published originals
+read-only to Navidrome and enables imports in Shijhon.
+
 ## Restarting and stopping
 
 **Restart Shijhon** reads the configuration file as the next start will and stops nothing
@@ -171,6 +183,109 @@ docker compose up -d
 
 Put your volume's name in place of `shijhon_navidrome-data`, and the `PUID:PGID` of `.env`
 in place of `501:20`.
+
+## Upgrades in detail
+
+The overview is in [the deployment guide](../deployment.md#upgrades).
+
+### Snapshots before an upgrade
+
+Before a new version migrates the database, its first start writes a copy of it into
+`snapshots` in Shijhon's volume, checked like a backup. Its name gives the schema it
+holds, the time (in UTC) and a number that counts snapshots up, for example
+`shijhon-schema37-20261112T153000Z-4.sqlite3`. A new installation needs none. Only once
+the new snapshot is complete are older ones removed: Shijhon keeps the newest snapshot of
+the schema it upgrades from and the newest of the highest other schema, which is normally
+the one the previous upgrade took. A start that is tried again on the same schema replaces
+that schema's snapshot with a newer one, never the previous upgrade's. After a restore of
+an older snapshot, the highest other schema can be a newer one than the restored
+database's.
+
+When the snapshot cannot be written, because there is not enough free space, the folder
+cannot be written or the database is damaged, Shijhon upgrades the database and starts
+without it, as versions before snapshots did. It removes no snapshot to make room, and it
+leaves nothing half written. Its log says why (`docker compose logs shijhon` in `packaging/`), with how
+much space the snapshot needed. Administrators see a line at the top of every dashboard
+page that says from which schema to which the database was upgraded, when, and why, until
+one of them dismisses it, and when notification addresses are set, it is reported once
+([notifications](../configuration.md#notifications)). Free some space, or make the folder
+writable, so that the next upgrade can take its snapshot, and make a backup now with
+`shijhon backup` ([backups](../deployment.md#backups)). When the reason is a
+database that did not pass SQLite's integrity check, the line says so first: the database
+may be damaged, and `shijhon backup` refuses to copy it until it passes, so restore an
+earlier backup if you have one. `upgrade_snapshots = false` in the configuration (or
+`SHIJHON_UPGRADE_SNAPSHOTS=false`) migrates without a snapshot, and then nothing is shown or
+reported.
+
+### What each schema changed
+
+The first start at schema 24 also lists the catalog albums already in the library that no
+account's records explain (many were added before Shijhon recorded who caused them); they
+are in no account's library. To give them to one account's Shijhon library (and so its
+**All**), run `shijhon carry-over --account <name>` once after that start, with the
+account's Navidrome user name. It can run while Shijhon runs; other accounts never get them
+(`--replace` gives them to another account instead), and `shijhon carry-over` alone shows
+them and who has them.
+
+Schema 33 adds `collection_revisions`, counters kept by triggers on the tables that decide
+what a library selection holds, and an index for checking covers. The first start applies
+it in a moment even on a large library. Older versions refuse this schema, so going back
+means the coordinated recovery below. `collection-queries/` beside the database is a cache:
+its old lists are replaced as they are used.
+
+This release's database is at schema 45. Up to schema 31, playlists, collections, music
+imports and agent access add tables, discovery mixes remember their creation requests,
+agents' playlist requests keep the permissions they were made with, discarded import
+uploads are deleted through recorded steps, placeholders and track links gain release
+indexes, and cached album matches gain a matching revision and an owned-metadata
+fingerprint, so existing negative matches are checked again when an album is next
+considered by a view or the library pass. Schema 32 stores each add-on's fixed key, so
+that renaming an add-on keeps its catalog. Schema 33 is described above. Schemas 34 and
+35 turn the add-ons' earlier routing settings into the add-on plan, with its steps and step times.
+Schema 36 records the artist pictures Shijhon sets, schema 37 the artist lists it
+finds and writes, with what undoes them, schema 38 which agent started a discovery mix
+or a playlist import, so that revoking the agent stops that work. Schemas 39 to 45 add
+the states that notifications report, the artists and releases of the accounts that follow
+new releases, when each added release's track list was last read, the additions a daily
+cap counts, the albums filled from another release with the song IDs of the release they
+had, the albums agents were asked to add, and the record of an upgrade that went on
+without its snapshot. The first start's
+snapshot keeps Shijhon's database from before the upgrade. Keep a backup of Navidrome's
+database from the same time and, with music imports enabled, the complete imports
+directory, including private retained originals. Older application versions refuse the
+newer schema; rollback requires coordinated recovery and review of activity since the
+backup ([restoring a backup](advanced-deployment.md#restoring-a-backup)). To
+undo an import's removal, use its **Restore** instead. A pre-upgrade backup is a rollback
+option only before newer library, playlist, import or history activity; after that,
+reconcile the current data instead of restoring an older snapshot over it.
+
+On first start, import jobs are rebound using their verified library and imports root,
+including jobs blocked by earlier limit or local mount-path changes. Frozen reviews
+remain approvable. Migration `0029_import_received_cleanup.sql` records deletion of
+unpublished uploads; migrations 0030–0031 record cleanup refusals and visible destination
+names. Startup finishes pending deletions; the worker cleans other eligible stopped or
+finished jobs. Refused files retain their reservation and a recorded reason.
+
+Before upgrading, stop Shijhon and back up the entire imports root; the first start's
+snapshot holds the database that matches it. Deleted unpublished uploads require that
+backup to recover. To roll back before newer activity, restore the paired backup and its
+previous settings; older versions cannot use the converted bindings or newer schema.
+
+Upgrading from 0.1.0b1: apps show each account's **All**
+  ([Your collection](../collection.md)): catalog albums that 0.1.0b1 added only because a
+  song was played or put in an app's playlist are in it again once the account plays
+  them or acts on them, and **Add whole album** on the Collection page adds them.
+
+## Backups in detail
+
+The overview is in [the deployment guide](../deployment.md#backups).
+
+`shijhon backup` copies the database with SQLite's online backup, so that the copy is
+consistent even while Shijhon writes, and checks it with SQLite's integrity check. Run the
+command as the user Shijhon runs as (in the container it is). That user must be able to
+write to the database's folder, also when the backup goes elsewhere: SQLite makes the files
+it needs to read a database in WAL mode consistently beside the database. The command
+refuses to run as root on a database another user owns.
 
 ## Restoring a backup
 

@@ -1,132 +1,88 @@
 # Playlists
 
-To preserve an existing ordered track list, including repeated songs, use
-[Import a playlist](playlist-imports.md). Paste artist/title lines or upload a CSV,
-review matched and unresolved entries, then explicitly publish the reviewed selection.
+To keep an existing ordered track list as it is, including repeated songs,
+[import it](playlist-imports.md): paste artist/title lines or upload a playlist file,
+review the matches, then publish.
 
 ## Agents
 
-AI agents connected over MCP can make and change playlists
-([agent access](agent-access.md)). The rest of this page covers the dashboard's own tools.
+The main way to make playlists is your own AI agent, connected over MCP
+([agent access](agent-access.md)). It chooses the songs itself, from a request such as
+"make a calm evening playlist from my library", publishes them to Navidrome, and can
+refresh or change the playlist later. It needs no AI connection on the server.
+
+The rest of this page covers the dashboard's own tools: discovery mixes from your
+listening history, described playlists made by [server AI](#server-ai), which is
+optional, and preparing a playlist's audio. The [detailed rules](reference/playlists.md)
+cover how these choose, publish and retry.
 
 ## Describe a playlist
 
-Open **Playlists → Describe a playlist** in the dashboard. Signing in already connects
-your Navidrome account (after you disconnect, connect it again on **Playlists**). It
-needs [server AI](#server-ai); Last.fm is optional. Enter the
-instructions, track count (1–100) and maximum tracks per artist (1–10), then choose
-**Create playlist**. Publication is included. The **Review a preview before
-publication** option, under **Advanced**, stops before publication until you choose
-**Publish playlist**.
+Open **Playlists → Describe a playlist** in the dashboard. It needs
+[server AI](#server-ai); Last.fm is optional. Enter the instructions, the number of
+tracks (1–100) and the most tracks per artist (1–10), then choose **Create playlist**.
+The playlist is published to Navidrome right away. To look at it first, check **Review a
+preview before publication** under **Advanced**, and nothing is published until you choose
+**Publish playlist**. Signing in connects your Navidrome account. If you disconnect it,
+connect it again on **Playlists**.
 
-The playlist name is optional: leave it blank to choose a short title from your
-instructions and the selected music, or enter a name to keep it exactly as supplied.
-Automatic naming uses the existing final ordering call. The name and selection are
-saved together before preview or publication, so retries, restarts and refreshes keep
-the first title.
+The name is optional. Left blank, Shijhon chooses a short title from your instructions
+and the chosen music, and refreshes keep that title. A name you enter is kept exactly.
 
-With [AudioMuse-AI](sound-analysis.md) connected, facts about how songs sound are one more
-hint for the AI, beside its own knowledge of the music.
+Shijhon asks the AI for artists and titles, looks them up in your library and the
+catalog, and has the AI choose and order only songs it found. An album or version named
+in the instructions has to match: a version that cannot be verified fails rather than
+taking a different remaster. If too few songs fit the count and the artist limit, the
+request fails and says so instead of ignoring your instructions. When the instructions
+ask for flow, the AI is asked for an order that uses tempo, key and energy where they are
+known. With [AudioMuse-AI](sound-analysis.md) connected, facts about how songs sound are
+one more hint beside the AI's own knowledge of the music.
 
-Listening-history and library-context influences are independent and off by default.
-History needs a configured profile and application key. When enabled, AI receives
-up to 100 aggregated artist/title listening counts, without a timeline. Library
-context shares a bounded sample of up to 100 artist/title/album entries; library
-membership does not establish that you listened to a track. With both off, AI sees
-your instructions, its attempted suggestions, the recordings resolved for this request
-with their [facts](#facts-as-hints), and the songs of [references](#reference-playlists-and-songs)
-named in this request. Exact recording lookup still checks your accessible library to
-reuse music; that lookup does not feed unrelated library contents into AI.
-
-Shijhon asks for bounded artist/title suggestions, looks them up in your library and
-the configured catalog, then asks AI to choose and order only resolved candidates.
-An explicit album or recording-version qualifier must match, including during
-publication and recovery. Version text must be evidenced in the resolved title;
-a version that cannot be verified fails rather than accepting a different remaster.
-Ambiguous or unavailable recordings are skipped. There are at most three suggestion rounds and at most the
-configured candidate limit (capped at 300) attempted suggestions. The final selection
-must have the exact count, no repeated recording and the requested artist limit. AI
-also checks the free-text instructions; those semantic judgments depend on the model.
-An invalid or insufficient selection fails clearly instead of silently ignoring the
-instructions. Track selection and release effects are frozen before native publication.
-
-The final call also returns a one-sentence goal and, for each song, a short reason and
-whether it meets, partly meets or misses the instructions. When some songs do not fully
-meet them and unused candidates remain, Shijhon asks once more for a revised selection,
-with those songs flagged. The revision is used when it passes the same checks; otherwise
-the first selection stays. The ratings are shown with the result and never reject songs
-by themselves. The AI is asked for a coherent order that uses tempo, key and energy,
-where they are known, when the instructions ask for flow.
+Two options, **Use my listening history** and **Use my library as context**, are off by
+default. History gives the AI up to 100 artist/title listening counts, without a timeline,
+and needs the Last.fm connection described under [discovery
+playlists](#discovery-playlists). Library context shares a sample of up to 100 songs from
+your library. With both off, the AI sees your instructions, its own suggestions, the songs
+found for this request with their [facts](#facts-as-hints), and the songs of any
+[references](#reference-playlists-and-songs).
 
 The request's page shows what the AI worked with and what it chose:
 
-- the references it was compared with, each marked as chosen or found by name in your
-  instructions, with a short profile (typical energy and tempo, years, genres, tags) and
-  how many suggested songs were left out because they are already in a chosen reference;
-- the goal sentence, and whether the selection was revised or checked once more;
-- for each song: the AI's reason, whether it fits, partly fits or doesn't fit, where it
-  comes from (your files, added by Shijhon or from the catalog), whether sound analysis
+- the references it compared with, each with a short profile (typical energy and tempo,
+  years, genres, tags);
+- a one-sentence goal for the playlist;
+- for each song, the AI's reason, whether it fits, partly fits or doesn't fit, where it
+  comes from (your files, added by Shijhon or the catalog), whether sound analysis
   suggested it, and its year, genres, tags and key;
-- with sound facts: each song's energy as a bar with the reference's typical energy
-  marked, its tempo beside the reference's, and how many of the songs had sound facts or
-  Last.fm tags. Energy is a percentile in your library.
+- with sound facts, each song's energy and tempo beside the reference's. Energy is a
+  percentile in your library.
 
-A request with explicit tracks, and songs without facts, show only what they have.
+When an administrator has set a [daily cap on
+adding](how-it-works.md#the-daily-cap-on-adding), a playlist is published without the
+songs whose releases would pass your cap, and its page says how many were left out.
 
-When an administrator has set a
-[daily cap on adding](how-it-works.md#the-daily-cap-on-adding), a playlist is published
-without the songs whose releases would pass your cap, and its page says how many were
-left out. The cap's room goes to the releases in the order of the playlist's songs. This
-holds for described playlists, discovery mixes and agents' explicit tracks alike; songs
-already in the library are never left out for it. A scheduled refresh that would have no
-song left is put off instead of failing: the playlist keeps its songs, refreshes stay
-enabled, and the next one tries again.
-
-Requests are one-off by default. Their instructions and run state remain in private
-state for status and recovery, but no schedule is enabled. **Save these instructions for
-reuse** also allows an explicit manual refresh from the request page. Daily or weekly
-refreshes require that checkbox, an explicit cadence and usable saved AI; they start
-after verified publication. Pause stops future refreshes. An agent-created playlist can be paused, and its preview
-discarded, in the dashboard even after the agent connection is revoked. Retry reuses a frozen selection and reconciles an uncertain native write
-rather than choosing different music or blindly creating a second playlist. A selection
-interrupted before it was frozen can be regenerated.
+Requests are one-off by default. Check **Save these instructions for reuse** to refresh
+the playlist by hand from its page. With that box checked, a **Regular refresh** every
+day or every week also works, starting after the first publication. **Pause refreshes**
+stops future refreshes. On the dashboard, you can pause a playlist an agent created and
+discard its preview, even after the agent's connection is revoked. A retry
+publishes the same selection again instead of choosing different music or creating a
+second playlist.
 
 ### Reference playlists and songs
 
 A description can relate to music you already have: "like my Velvet Orbit playlist but
-more energetic". Requests accept up to three Navidrome playlist IDs
-(`reference_playlists`) and up to 50 song IDs (`reference_songs`) that your account can
-read. Without them, Shijhon looks for your own playlists whose names the instructions
-mention: whole words, ignoring case, longer names first, at most three. Names shorter
-than four letters and names of only general words, such as "Chill Mix", are ignored;
-a one-word name counts only in quotes or next to "playlist" or "mix" (`"Driftwood"`,
-`my Driftwood playlist`). Of several playlists with the same name, the most recently
-changed one is used, and a refreshed playlist is never its own reference. The request
+more energetic". In the dashboard, **Compare with your playlists** lists your own
+Navidrome playlists; choose up to three. Without a choice there, a playlist named in the
+instructions is used, such as `my Driftwood playlist` or a name in quotes. The request
 shows the references used and whether they were found by name.
 
-In the dashboard, **Compare with your playlists** lists your own Navidrome playlists by
-name (the first 500); choose up to three. **Leave out songs already in the reference** is checked by
-default (`exclude_reference`). With no playlist chosen there, a playlist named in the
-instructions is used as described above.
-
-References are read through your Navidrome account each time the playlist is generated,
-so refreshes follow their current songs. An explicit reference that cannot be read fails
-the run with its ID; a playlist found by name that cannot be read is skipped. Shijhon
-keeps up to 200 reference songs, your listed songs first, and shows the AI an even
-sample of up to 100 with their facts and a short profile: typical energy, tempo and mood
-percentiles, common tags and genres, and the range of years. By default
-(`exclude_reference`) every song of the references you chose is left out of the new
-playlist; turn it off to allow them. Songs of a playlist found by name are not removed
-automatically: the AI is asked to avoid repeating them unless the instructions ask for
-them. References need a description; explicit tracks cannot use them.
-
-Agents need the library permission for references. A request with chosen references is
-refused without it. For a request an agent created, playlist names in the instructions
-are looked up only if the submitting token included the library permission and the
-agent's connection still grants it, checked again at every generation and scheduled
-refresh: without it, no playlist is listed or read and the result shows no reference. If
-the permission is removed while a playlist found by name is in use, that generation
-stops. Your own requests from the dashboard always look up names.
+**Leave out songs already in the reference** is checked by default and keeps the songs of
+the playlists you chose out of the new one. Songs of a playlist found by name are not
+removed, but the AI is asked to avoid repeating them unless the instructions ask for
+them. References are read again at every refresh, so refreshes follow their current
+songs. The [detailed rules](reference/playlists.md#references) cover how names are
+matched, how many songs are read and what agents need.
 
 ### Facts as hints
 
@@ -139,272 +95,140 @@ For reference songs and candidates, the AI also sees a few facts in case they he
 - where the song comes from: your own files, added to the library by Shijhon, or the
   catalog (not in the library yet).
 
-The AI is told that facts are approximate hints, that many songs have none and that its
-own knowledge of the music comes first; percentiles compare songs within this library.
-A missing fact never excludes a song. An unavailable or slow source means fewer facts
-for that run and never fails the playlist; the result records how many selected songs
-had sound facts and tags, and which sources were unavailable.
-
-Last.fm tags come from `track.getTopTags`, or `artist.getTopTags` when Last.fm has no
-tags for the song. Shijhon sends the artist, title and your API key, not your Last.fm
-username or listening history. Tags are kept for 30 days and shared by all accounts.
-A generation makes at most 120 Last.fm requests, four at a time with short timeouts;
-failed requests are not remembered. The tools of [connected agents](agent-access.md) look
-tags up the same way for the songs they are asked about, with at most 40 requests and
-about five seconds a call.
-
-With [sound analysis](sound-analysis.md) set up and the library-context option on, the
-AI may also describe the wanted sound in a short text, with words to emphasize or avoid.
-Shijhon then adds up to the requested number of library songs that match that
-description and, when there are reference songs, as many that sound like them (never the
-reference songs themselves). They are labelled as suggested by sound analysis and go
-through the same choice and checks as the AI's own suggestions. Without the
-library-context option, no songs found by sound join and no library songs that nobody
-named reach the AI.
+Facts are approximate, many songs have none, and the AI's own knowledge of the music comes
+first. A missing fact never excludes a song, and an unavailable source never fails the
+playlist. With sound analysis set up and **Use my library as context** on, the AI can also
+describe the sound it wants. Library songs that match that description, or sound like the
+reference songs, then join the candidates, labeled as suggested by sound analysis.
 
 ### Your edits to a refreshed playlist
 
-Before each refresh, Shijhon compares the playlist in Navidrome with what it last
-published there. Songs you removed are remembered for that playlist and left out of its
-later refreshes, matched by song ID and by artist and title; the AI is told you removed
-them, so it can avoid similar choices. Songs you added are shown to the AI as examples of
-what you want. Adding a removed song back counts as adding it, and a song that left the
-library does not count as removed. Shijhon keeps the latest 200 of each per playlist and
-shows the AI the latest 100. Your edits teach only that playlist's refreshes.
+Songs you remove from a refreshed playlist stay out of its later refreshes,
+and the AI is told you removed them, so it can avoid similar choices. Songs you add are
+shown to the AI as examples of what you want, but the refresh replaces them too. Your
+edits teach only that playlist's refreshes, and each refresh's result shows what it
+learned. A comment or visibility you set stays.
 
-The refresh then replaces the songs, including those you added; a comment or
-visibility you set stays. Renaming the playlist in Navidrome stops the next refresh: give
-it its earlier name, or pause its refreshes to keep the new name. Each refresh's result
-shows what it learned and how many suggestions it left out.
+Renaming the playlist in Navidrome stops the next refresh: give it its earlier name, or
+pause its refreshes to keep the new name.
 
 The request page of a described playlist and the page of a discovery mix list the songs
-Shijhon remembers. **Forget learned edits** (also the agents' `forget_edits` refresh
-action) clears them for that playlist: removed songs can be suggested again and added
-songs stop guiding the AI. Your playlist in Navidrome does not change, and edits made
-since its last refresh are learned again at the next one.
+Shijhon remembers from your edits. **Forget learned edits** (also the agents'
+`forget_edits` refresh action) clears them for that playlist: removed songs can be
+suggested again and added songs stop guiding the AI. Your playlist in Navidrome does not
+change, and edits made since its last refresh are learned again at the next one.
 
 ## Discovery playlists
 
-Open **Playlists** in the dashboard. Signing in already connects your Navidrome account
-here; after you disconnect, connect again with your password under **Connection and AI
-settings** (open at the top until you connect). A Last.fm username, entered there, is
-required for history discovery. By default, Shijhon reuses the Last.fm application API
-key configured in Navidrome, which it reads with your Navidrome password when you save
-the username. If that key is unavailable, choose **Enter an API key**
-and provide your own. Shijhon obtains a reusable
-Navidrome authorization token; it does not retain your password. Changing the password
-invalidates that authorization, so sign in or reconnect afterward.
+A discovery mix is a playlist of songs similar to what you listen to, from your Last.fm
+history. Open **Playlists** in the dashboard and, under **Connection and AI settings**,
+enter your Last.fm username. By default, Shijhon reads the Last.fm API key configured in
+Navidrome. To read it, Shijhon uses the Navidrome password you enter when you save the
+username. If that key is unavailable, set **Last.fm API key source** to **An API key**
+and enter your own.
 
-Navidrome does not expose the username of its linked Last.fm account, so enter that
-username separately; Shijhon does not verify it against the linked account. Reading
-public history does not need the personal scrobbling session or a new Last.fm login.
-The temporary native login and callback token used while reading Navidrome's API key
-are discarded. On later saves, a blank Navidrome password keeps the saved key; enter
-the password again to pick up a changed key. Switching key sources requires a new
-manual key or a password to read Navidrome's key.
+Signing in already connects your Navidrome account. After you disconnect, connect again
+there with your password. Changing the Navidrome password ends that authorization, so
+sign in or reconnect afterward.
 
-The same key adds Last.fm's lists to a
-[radio from a catalog item](how-it-works.md#radio-from-catalog-items) in your apps: the
-similar songs and similar artists of music that is not in your library. ListenBrainz's
-lists are there without a key, unless an administrator turned ListenBrainz off. For those
-requests Shijhon sends Last.fm an artist's name, or an artist and a title, with the key.
-It sends neither your Last.fm username nor anything about what you listened to.
+In apps, the same key adds Last.fm's lists to
+[radio and similar artists](how-it-works.md#radio-from-catalog-items) for music that is not
+in your library. ListenBrainz's lists need no key, and are used unless an administrator
+turned ListenBrainz off.
 
-Fill in **New discovery mix** and choose **Create and publish**, then listen and review
-the playlist in your music app.
-Publication can add whole releases as placeholders or missing tracks to a matched album;
-it does not download audio. Track and release details are available on the dashboard
-under **Track and release details**.
+Fill in **New discovery mix** and choose **Create and publish**, then listen to the
+playlist in your music app. Publishing can add whole releases as
+[placeholders](how-it-works.md#placeholders), or missing tracks to a matched album, but it
+does not download audio. **Track and release details**
+on the mix's page lists them.
 
-For dashboard approval first, open **Advanced settings** (which also holds the
-unfamiliar share, per-artist limit and the windows that leave out recent music) and
-select **Review before publishing**. Creation, rule saves, manual generation and scheduled refreshes then stop
-at a preview. Choose **Publish playlist** to continue. Previewing adds no library files;
-one waiting preview blocks further generations of that mix until published or discarded.
-**Generate preview** always stops at a preview, even if the mix rules were changed in
-another tab.
+The defaults are 30 tracks, at least 70% unfamiliar music and two tracks per artist.
+Music you listened to in the last 14 days is left out, and so are this mix's tracks from
+the last 28 days. **Advanced settings** holds the unfamiliar share, the artist limit and
+those two periods.
+"Unfamiliar" means absent from your imported history, not that you have never heard a
+track. A brief such as "melodic, adventurous music for an evening walk" needs **Use AI
+curation** and [server AI](#server-ai). The first import covers 90 days of Last.fm history
+by default, and later imports add new listens.
+
+Candidates are songs that Last.fm lists as similar to the songs you played most, and
+songs that ListenBrainz lists as listened together with them (unless an administrator
+turned ListenBrainz off). If too few recordings meet the rules, the run fails, and you can
+adjust the rules before generating again.
+
+To approve each selection first, select **Review before publishing** under **Advanced
+settings**. New selections and scheduled refreshes then wait on the mix's page until you
+choose **Publish playlist**, and **Generate preview** always stops at a preview.
 
 Regular refreshes are optional. Choose every day or every week and check **Enable regular
-refreshes after publishing**, or enable them later on the mix page. Leaving it unchecked
-keeps a new or paused mix paused. Saving rules shows the current refresh choice, to keep or
-change; manual generation preserves it. Daily and weekly refreshes run 24 hours
-or seven days after the last successful publication; the service must be running. After
-downtime, one overdue refresh runs, without replaying every missed interval. Pause also
-cancels a pending request to enable refreshes. A scheduled selection still choosing tracks
-stops when paused; an already-started publication finishes its verification.
+refreshes after publishing**, or enable them later on the mix's page. A refresh runs a day
+or a week after the last publication, while Shijhon is running, and keeps the playlist's
+ID. Songs you remove from or add to the playlist teach its next refresh, as for
+[described playlists](#your-edits-to-a-refreshed-playlist), and renaming the playlist
+stops the next refresh.
 
-The defaults are 30 tracks, at least 70% unfamiliar music, two tracks per artist,
-excluding the last 14 days of listening and the last 28 days of this mix's tracks.
-These rules can be changed. Saving generates and publishes a new selection, or creates
-a preview when **Review before publishing** is selected. Refreshes wait for that publication.
-A brief such as “melodic, adventurous music for an evening walk” requires AI curation.
-
-The initial import covers 90 days of Last.fm history by default. Later imports add new
-listens and overlap seven days to pick up delayed scrobbles. “Unfamiliar” means absent
-from the imported history, not that you have never heard a track. Your library's contents
-and placeholder files do not count as listening history. Last.fm's similar songs and
-ListenBrainz's songs listened together (unless an administrator turned ListenBrainz off)
-supply candidates: those listed as similar to the twelve songs you played most, recently
-weighing more. A song both list scores for both and comes first. Shijhon sends
-ListenBrainz the artists and titles of those twelve songs, without your name or account.
-ListenBrainz is optional here: it is asked beside Last.fm and waited for at most ten
-seconds after Last.fm's last answer, and when it fails the mix is made from Last.fm's
-songs. Shijhon checks recording titles, versions, artists and available duration,
-album and recording identifiers. Ambiguous matches are skipped. If too few recordings
-meet the rules, the run fails, and the rules can be adjusted before generating again.
-
-When a local album has a current match, discovery prefers that edition when the
-recording's ISRC and details agree. The saved selection records the edition that will actually
-be added. Changed or ambiguous matches are skipped. A saved match whose local files
-have disappeared does not block adding the catalog release. Album-merge
-checks still apply, and preparation errors identify the blocked step.
-
-Publishing reuses accessible library
-recordings first. Selected catalog songs use the existing library commit path: adding
-one can add its **whole release as placeholders**, or missing tracks in a matched album.
-It does not download audio. Playback and download rules still apply. If track
-preparation fails, some releases may already have been added; Shijhon does not delete
-them automatically to undo a playlist failure.
-
-Each mix owns a native Navidrome playlist. Refreshing keeps that playlist's ID and replaces
-its ordered entries in one request. Shijhon checks every native song and reads the
-playlist back before reporting success. It refuses to replace a playlist owned by another
-user, including when its connection belongs to an admin. Songs you remove from or add to
-the playlist teach its next refresh, as for
-[described playlists](#your-edits-to-a-refreshed-playlist); with AI curation off, removed
-songs are only left out. Renaming the playlist stops the next refresh. Navidrome offers no
-conditional replacement API, so a simultaneous edit between the final check and write
-can still race with a refresh.
-
-Selections and publication intent are saved before publication. A retry uses the same
-selection. An uncertain creation is checked using a unique provisional name and the
-owner; Shijhon does not blindly create another playlist. A provisional name can briefly
-appear in clients until the verified new playlist is renamed. Failed direct publications
-and scheduled runs pause the mix. Choose **Retry publication** to use its frozen selection
-where possible. Re-enable refreshes if needed; an explicit pause stays in effect on retry.
+A failed publication or scheduled run pauses the mix. Choose **Retry publication** to
+publish the same selection, and enable refreshes again if needed.
 
 ## Prepare a playlist's audio
 
 After publication, open **Downloads** to prepare the audio of a native playlist in the
-server library. This also works for other native playlists owned by your connected
-account. Shijhon can reuse a valid discovery connection, or connect separately with a
-Navidrome password and a chosen playlist. It saves a reusable authorization
-token, not the password; reconnect if the password changes.
-Preparing audio does not edit the playlist, add releases or choose new recordings.
-Owned and already downloaded songs need no add-on fetch. A playlist can have as many
-entries as a playlist import (`[playlists] import_max_entries`, 50,000 by default).
+server library, so its songs are ready before anyone plays them. This works for any native
+playlist your account owns. The page can use your discovery connection, or connect
+separately with your Navidrome password and the playlist you choose. Reconnect if the
+password changes. Preparing audio does not edit the playlist, add releases or choose new
+recordings. Songs you own or that are already downloaded need nothing fetched. A playlist
+can have as many entries as a playlist import (50,000 by default).
 
-The page shows each song's progress and failures, with the first 50 songs listed.
-Songs wait for their turn at the add-ons, also while an add-on is rate limited
-([details](add-ons.md#downloads-and-playlist-preparation)). Refresh to read current
-progress; cancel stops queued and waiting songs and lets transfers under way finish;
-completed library files remain.
-After a restart, unfinished preparation is paused: review it and choose **Resume**.
-A retry uses the saved playlist selection rather than creating a fresh discovery mix. Disconnecting
-forgets this preparation connection; it does not remove a discovery connection, history,
-native playlists or audio.
+The page shows each song's progress and failures, with the first 50 songs listed. Songs
+wait for their turn at the add-ons, also while an add-on is rate limited. Refresh the
+page to read current progress. **Cancel** stops queued and waiting songs and lets
+transfers under way finish. Completed files remain. After a restart, unfinished
+preparation is paused: review it and choose **Resume**.
 
-An app's standard `download` requests use the same configurable scheduling automatically.
-No playlist batch detection is needed. Ordinary streams, including offline saves that
-an app sends as streams, continue to use playback rules. Native archive downloads do
-not start playlist preparation; prepare the playlist first when it has placeholders.
-
-These actions prepare files on the server. They do not push device copies: use the app's
-own offline-save feature afterward. Catalog search only shows tracks, and publishing a
-discovery playlist can add silent library placeholders without fetching their audio.
-The default limits and shared-account controls are explained in [Add-ons](add-ons.md#downloads-and-playlist-preparation).
+This prepares files on the server and does not put copies on your devices: use your
+app's own offline-save feature afterward. The limits, and how apps' own downloads are
+handled, are in [Add-ons](add-ons.md#downloads-and-playlist-preparation).
 
 ## Server AI
 
-Server AI is AI that Shijhon runs itself. Playlists described on the dashboard and their
-scheduled refreshes need it. It can also curate discovery mixes; without it, Shijhon
-chooses their songs from listening and similarity evidence. An agent you connect works
-without it. With it, the brief, candidate artists/titles/albums, familiarity
-flags and similarity scores are sent to the selected model. Account credentials and the
-raw listening timeline are excluded. Shijhon validates the model's candidate IDs, track
-count, unfamiliar share and artist limits. An AI failure stops the run; it does not
-silently substitute a mix that ignores the brief.
+Server AI is an optional AI model that Shijhon calls itself, on your machine or through
+a remote API. Playlists described on the dashboard and their scheduled refreshes need it,
+and it can curate discovery mixes. Without it, Shijhon chooses a mix's songs from
+listening and similarity evidence. An agent you connect works without it. The brief and
+the candidate songs are sent to the model, never account credentials or your listening
+timeline. An AI failure stops the run instead of publishing a mix that ignores the brief.
 
-The shared administrator-configured service is the default for new accounts. In
-**Connection and AI settings → Server AI**, each account can disable AI, follow the administrator's
-default model, or select an additional administrator-approved model. This preference
-applies across that account's devices and affects described playlists, discovery
-curation and future refreshes. History settings and playlist instructions remain
-personal.
+Each account chooses in **Connection and AI settings → Server AI**: no AI, the
+administrator's default model, or another model the administrator approved. The choice
+applies on all of that account's devices, to described playlists, discovery curation and
+future refreshes.
 
-Administrators configure the connection in the same section: API URL and key,
-default model and up to 50 additional approved model names (one per line). The default
-model is always approved. Saving host settings changes the shared service for all
-accounts; selecting **No AI** disables it. Approve models whose access and cost the
-installation can support. Executables, runner login, network permissions, deadlines
-and other installation limits remain administrator-controlled. Personal choices and
-agent tools cannot change them or change another account's model.
+Administrators configure the connection in the same section: the API base URL and key,
+the default model and up to 50 other models people can choose (one per line). Saving
+changes the shared service for all accounts, and **No AI** turns it off. Approve only
+models whose access and cost the installation can support.
 
-API connections require a URL and default model. Ordinary users see approved model names without the
-endpoint or credentials. Removing a selected model stops future model requests until
-the user chooses another approved model or the administrator's default. Shijhon
-checks current account credentials, administrator status for private connections,
-shared-service availability and the approved model before **every** model request,
-including retries and final ordering. A request already sent cannot be recalled;
-subsequent requests are checked again. Disabling shared AI stops new shared requests.
-
-Existing private administrator connections, personal history and schedules are
-retained. A demoted administrator's private connection cannot run or be edited;
-the account can select the shared service instead. Sharing or disabling the host
-service does not rewrite those private connections. Ordinary users cannot supply
-an endpoint, key, executable or arbitrary model name. The forms show relevant
-fields for each backend and work without JavaScript.
-
-The API has to accept `POST <base>/chat/completions` with
-`response_format: json_schema`, which most providers and local AI servers do. Use a base
-such as `https://your-endpoint.example/v1`. Public addresses need HTTPS. For AI on this
-machine or your network, an administrator turns on **Allow AI on this machine or
-your network** (`playlists.allow_private_api`). With Docker, the machine itself is
+The API has to accept `POST <base>/chat/completions` with `response_format: json_schema`,
+which most providers and local AI servers do. Use a base such as
+`https://your-endpoint.example/v1`. Public addresses need HTTPS. For AI on this machine or
+your network, an administrator turns on **Allow AI on this machine or your network**
+(`playlists.allow_private_api`). With Docker, the machine itself is
 `host.docker.internal`, such as `http://host.docker.internal:11434/v1`, and the AI service
-has to listen on more than `127.0.0.1` for the container to reach it. Redirects are
-refused, and metadata and link-local addresses stay blocked.
+has to listen on more than `127.0.0.1` for the container to reach it.
 
 The connection can also be Codex CLI or Claude Code on the server. They need more setup
-([local AI runners](reference/local-ai-runners.md)).
-
-The installation configuration also sets the limits:
-
-```toml
-[playlists]
-history_days = 90
-history_pages = 100
-candidate_limit = 160
-run_seconds = 900
-ai_seconds = 180
-```
-
-The history page limit bounds one complete import (200 listens per page).
-Increase it for very busy histories. An incomplete import never advances its saved
-cursor. Increase the run deadline if the selected catalog is slow; requests and model
-calls also have individual deadlines.
-
-See the [Last.fm history API](https://www.last.fm/api/show/user.getRecentTracks) for its
-contract.
+([local AI runners](reference/local-ai-runners.md)). History and run time limits are set
+in the configuration file ([limits](reference/playlists.md#limits)).
 
 ## Privacy and current scope
 
-Connections, imported history, definitions and run evidence are scoped to the immutable
-Navidrome user ID, not shared between dashboard accounts. They are held in Shijhon's
-private SQLite state and its backups. The authorization token and API keys are reusable
-secrets protected by the state's filesystem permissions; they are not encrypted in the
-database. Secret fields are write-only in the dashboard. Blank secret inputs retain their
-saved value for the same key source; changing the API URL clears the old API key unless
-you enter a new one. Choosing a different AI connection removes the API URL and key.
-**Forget my playlist settings and history** forgets that account's connections, history,
-definitions and runs, while its native playlists and library files remain. It also clears
-the saved Downloads authorization, which pauses unfinished preparation until you reconnect on
-**Downloads** and choose **Resume**.
-
-Ordinary Navidrome users with access to Shijhon's configured library can manage their
-own playlists, imports, requests, preparation jobs, history profile and appearance.
-Sign-in refreshes reusable Subsonic authorization without keeping the password; a second
-sign-in or history/AI setup is unnecessary for library reads and native playlists.
-A deleted/recreated username inherits none of the former user's personal records.
-
-Personal model choices are scoped to immutable Navidrome user IDs and are removed on
-disconnect. The administrator's shared AI configuration survives a personal disconnect.
+Playlist connections, imported history, requests and their results belong to your
+Navidrome account and are not shared with other accounts. Shijhon keeps a reusable
+authorization, never your password, and secret fields are never shown again once saved.
+**Forget my playlist settings and history** forgets that account's connections and
+history, and the settings and runs of its Shijhon playlists. Its Navidrome playlists and
+library files remain. It also clears
+the saved Downloads authorization, which pauses unfinished preparation until you reconnect
+on **Downloads** and choose **Resume**. The [detailed
+rules](reference/playlists.md#privacy-and-storage) say how this is stored.

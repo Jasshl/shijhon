@@ -106,6 +106,33 @@ Deliveries and reverts keep song IDs and need no addition. A catalog track remai
 audio. No selection moves files, changes native IDs, edits playlists or queues, or
 deletes favorites and listening history.
 
+## Collection rules
+
+These less common rules add to [Your collection](../collection.md).
+
+A playlist counts once it is published; a **Recheck** that publishes an imported
+playlist again replaces the songs it counts in Original imported library. Songs you add
+to the playlist yourself count as an app's playlist addition only when you add them
+through Shijhon.
+
+When Shijhon first recorded who brought music in (the upgrade to schema 24), the catalog
+albums already in the library that no account's record explains - many were added before
+Shijhon recorded who caused them - went into no library. The server's operator can give
+them to one account's Shijhon library ([upgrades](../deployment.md#upgrades)); remove them
+there if you do not want them. Otherwise **Show → Everything on the server** lists them,
+to add by hand.
+
+The Collection page reads the library index above; each account sees in it what
+Navidrome lets that account access. **Refresh music** updates it at once, in bounded
+background pages. Browsing continues on the last complete index if a refresh is
+interrupted. Personal library choices survive metadata cleanup and adding the music back.
+Original and catalog origin are tracked per song, including partly filled albums;
+downloading a catalog track does not turn it into an original import.
+
+Explicitly saved catalog music, and catalog songs an active import is linked to, keep
+their library metadata from unused-release cleanup. Downloaded and kept audio (**Saved
+audio** on the Cleanup page) has separate retention settings.
+
 ## Reads covered by the adapters
 
 | Surface | Selected library behavior |

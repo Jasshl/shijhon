@@ -66,44 +66,35 @@ The agent never gets the password. Each account's connected agents are listed on
 ## Agent capabilities
 
 What an agent can do depends on the [permissions](#permissions) it was given at sign-in.
+With the right ones, an agent can:
 
-- An agent can create a playlist from songs it chooses in the library and the catalog.
-  Songs not yet in the library are added as placeholders.
-- An agent can replace a playlist's songs while the playlist keeps its ID. Shijhon doesn't
-  start this on its own. An agent app's scheduled tasks can run it regularly.
-- An agent can remove songs from a playlist and change their order. Songs removed from a
-  playlist in a music app stay out of later versions.
-- An agent can list the account's Shijhon playlists, including those made on the dashboard
-  or by another agent. Reading the songs of a playlist it didn't make needs the library
-  permission, and the history permission when listening history chose them.
-- An agent can create and manage discovery mixes, which are songs similar to the Last.fm
-  listening history ([discovery playlists](playlists.md#discovery-playlists)).
-- An agent can import a playlist from a pasted list, review the matches, publish it and
-  complete missing songs later ([import a playlist](playlist-imports.md)).
-- An agent can create a preview, then publish or discard it.
-- An agent can read facts about songs as hints: year, genres, Last.fm tags and, with
-  [sound analysis](sound-analysis.md), tempo, key and energy.
-- An agent can ask which songs people listen to together with up to five songs, from the
-  library or named by artist and title. The answer comes from ListenBrainz, which needs
-  no setup unless an administrator turned it off, and from Last.fm when the account has a
-  Last.fm key. It is a list of names with the sources that list each; only names are sent
-  to them. This needs the library permission.
-- An agent can read the new releases of the artists the account follows, once the
-  account turned that on ([new releases](how-it-works.md#new-releases)).
-- An agent can prepare a playlist's audio on the server
-  ([prepare a playlist's audio](playlists.md#prepare-a-playlists-audio)).
-- An agent can search the catalog and add albums from it to the account's library, or a
-  limited number of an artist's releases. Each album is added whole and joins the
-  account's Shijhon library, as an album the account rated or put into a playlist does
-  ([what brings music in](collection.md#what-brings-music-in)). This needs the add
-  permission.
-- An agent of a Navidrome administrator can list the albums in the Library's review list
-  and settle them one at a time: fill an album from one of the releases offered, keep it
-  as it is, or match it again. This needs the server administration permission.
-- An agent of a Navidrome administrator can read a summary of the server's status: the
-  versions, whether Navidrome and the catalog answer, each add-on's state, how many albums
-  wait for review, the cleanup's state and whether saved settings wait for a restart. It
-  changes nothing, and it needs the server administration permission.
+- make playlists from songs it chooses in the library and the catalog, and later replace,
+  reorder or remove their songs while each playlist keeps its ID. Songs not yet in the
+  library join it. Shijhon never refreshes these playlists on its own,
+  but an agent app's scheduled tasks can. Songs removed in a music app stay out of later
+  versions.
+- list all the account's Shijhon playlists, including those made on the dashboard or by
+  another agent, and publish or discard previews. Reading the songs of a playlist it
+  didn't make needs the library permission, and the history permission when listening
+  history chose them.
+- create and manage [discovery mixes](playlists.md#discovery-playlists), and
+  [import playlists](playlist-imports.md) and complete their missing songs later.
+- read facts about songs as hints: year, genres, Last.fm tags and, with
+  [sound analysis](sound-analysis.md), tempo, key and energy. It can also ask which songs
+  people listen to together with up to five songs. ListenBrainz answers that (unless an
+  administrator turned it off), and so does Last.fm when the account has a Last.fm key.
+  Song and artist names are sent to them, and what else each service receives is listed
+  under [privacy and security](privacy-and-security.md#network).
+- read the [new releases](how-it-works.md#new-releases) of the artists the account
+  follows, once the account turned that on.
+- [prepare a playlist's audio](playlists.md#prepare-a-playlists-audio) on the server.
+- search the catalog and add whole albums from it to the account's library, or a limited
+  number of an artist's releases. They join the account's Shijhon library like an album
+  the account rated or put into a playlist
+  ([what brings music in](collection.md#what-brings-music-in)).
+- for a Navidrome administrator, settle the albums in the Library's review list one at a
+  time (fill an album from a release offered, keep it as it is, or match it again), and
+  read a summary of the server's status without changing anything.
 
 ## Permissions
 
@@ -126,30 +117,23 @@ for it.
 Adding to the library and server administration change more than playlists do. Adding
 writes whole albums into the library, which can use the server's disk once their audio is
 played or prepared. Server administration acts for everyone who uses the installation.
-The sign-in page therefore shows both cleared, also when the agent app asks for them, and
-grants them only when you select them. An agent that was connected before these
-permissions existed does not have them until it is connected again and they are selected.
-
-Server administration is offered only to an account that is a Navidrome administrator when
-it signs in. It also works only for one: Shijhon asks Navidrome at every call, so an agent
-of an account that is no longer an administrator is refused, whatever was granted.
+The sign-in page therefore leaves both unselected, even when the agent app asks for them,
+and grants them only when you select them. Server administration is offered only to a
+Navidrome administrator. If the account later stops being one, its agents are refused
+server administration.
 
 When an administrator has set a [daily cap on adding](how-it-works.md#the-daily-cap-on-adding),
-the albums an agent adds count for its account like the account's own additions. The agent
-is told how many were added and how many the limit left out.
+the albums an agent adds count for its account like the account's own additions.
 
 ## Revoking an agent
 
-An agent is revoked on **Playlists**. That stops its unfinished work, including the matching
-and publication of imports it started and the scheduled refreshes of playlists and discovery
-mixes it made. Albums it was still adding are not added, and a review-list action it
-started changes nothing more: a fill ends before it writes anything further, and a keep or
-a match again that was still waiting leaves the album's match as it was. What it already
-added or settled stays.
-Playlists it already published stay, and can still be paused on the dashboard,
-where their previews can also be discarded. What you do on the dashboard with an agent's
-import or discovery mix, such as publishing it or asking for a new selection, is your own
-work and goes on after the agent is revoked.
+An agent is revoked on **Playlists**. That stops its unfinished work: imports it started,
+the scheduled refreshes of playlists and discovery mixes it made, albums it was still
+adding and review-list actions it started. What it already published, added or settled
+stays. Its published playlists can still be paused on the dashboard, where their previews
+can also be discarded. If you publish an agent's import or discovery mix on the dashboard,
+or ask for a new selection of it, that is your own work. It goes on after the agent is
+revoked.
 
-[Agent tools](reference/agent-tools.md) describes each tool, its limits and how requests
-recover after a lost answer.
+The [detailed rules](reference/agent-tools.md) cover each tool, its limits and how
+requests recover after a lost answer.

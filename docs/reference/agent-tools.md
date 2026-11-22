@@ -299,7 +299,8 @@ newly requested ones. Clear a permission to remove it deliberately. The `add` an
 permissions are the exception: the form shows them cleared until the connection has them,
 so a client that asks for every permission does not get them unless the person selects
 them, and `admin` is on the form only for an account that is a Navidrome administrator
-at that moment. Authorizing
+at that moment. An agent that was connected before these permissions existed does not
+have them until it is connected again and they are selected. Authorizing
 additional permissions for the same OAuth client/account preserves the connection and
 its requests. Removing a permission takes effect on outstanding credentials too. Client
 registration describes possible scopes; only browser consent grants access to the user's

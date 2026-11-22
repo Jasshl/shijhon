@@ -1666,7 +1666,7 @@ def test_at_a_terminal_the_running_navidrome_is_asked_for(setup: Setup) -> None:
         reply("Your Navidrome's data folder, or its Docker volume", "nowhere_volume")
         reply("Your Navidrome's data folder, or its Docker volume", "navidrome_data")
         reply("The port your apps connect to", str(setup.port))
-        reply("For example, the", "")  # (the adapter question follows the example)
+        reply("To install one anyway", "")  # (the adapter question follows the example)
         reply("The address AI agents connect to", "")
         read_until("Try again? (yes/no)")
         setup.set_state(running={**setup.state["running"], "reachable": True})

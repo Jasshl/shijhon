@@ -319,6 +319,44 @@ The usage export is created again. Don't start the Compose installation again on
 data, because two copies of Shijhon must not share one state. To go back, copy the data
 back the same way.
 
+## From the earlier NixOS service
+
+The service in Shijhon 0.4.0 and earlier ran only Shijhon, with its own configuration
+file. To move to this one:
+
+- `configDirectory` is gone. Put the settings from its `shijhon.toml` into `settings`, its
+  secrets into `environmentFile`, and the service account's password file into
+  `navidrome.passwordFile`.
+- `usageDirectory` is now `usageExport.directory`. Set it to the folder you had.
+- `placeholderPath` is now only needed for a placeholder folder outside the library.
+- The default `port` is now 4533. Set `port = 8765;` to keep your reverse proxy's target.
+- For a Navidrome you run yourself, set `navidrome.manage = false`, `navidrome.url`,
+  `navidrome.passwordFile` and `navidrome.group`, and for the usage export
+  `usageExport.enable = true`, `usageExport.navidromeDataDirectory` and
+  `usageExport.user`.
+- If that Navidrome is a `services.navidrome`, the module can set it up instead
+  ([you already run `services.navidrome`](../nixos.md#you-already-run-servicesnavidrome)).
+  Leave out `navidrome.passwordFile`, and before the first switch copy the service
+  account's password to where the module keeps it:
+
+  ```sh
+  sudo install -m 600 -o shijhon -g shijhon /path/to/navidrome-password /var/lib/shijhon/navidrome-password
+  ```
+
+The earlier service wrote files that only its own user could read, and the export now runs
+as Navidrome's user. Before the first switch, stop both services, make the placeholder
+folder readable and remove the old export files:
+
+```sh
+sudo systemctl stop shijhon shijhon-usage-export
+sudo chown -R shijhon:navidrome /srv/music/_shijhon
+sudo find /srv/music/_shijhon -type d -exec chmod 2755 {} + -o -type f -exec chmod 644 {} +
+sudo rm -f /var/lib/shijhon-usage/usage.sqlite3*
+```
+
+Replace `shijhon`, `navidrome`, `/srv/music/_shijhon` and `/var/lib/shijhon-usage` with
+your service's user, Navidrome's group, your placeholder folder and your usage folder.
+
 ## The package alone
 
 ```sh

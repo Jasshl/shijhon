@@ -53,7 +53,8 @@ nothing.
 
 `[agents] public_url` (empty): the canonical public HTTPS origin, without a path.
 Set it and restart to enable OAuth and Streamable HTTP MCP at `/shijhon/mcp`.
-An empty value disables MCP; HTTP is accepted only on loopback. The environment
+An empty value disables MCP. HTTP is accepted only on loopback, or on a home network with
+`[agents] private_http` ([agent access](../agent-access.md#turn-on-agent-access)). The environment
 variable is `SHIJHON_AGENTS__PUBLIC_URL`. [Agent setup](../agent-access.md) lists the
 required reverse-proxy routes and feature prerequisites.
 
@@ -66,7 +67,7 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 | Setting | What it sets |
 |---|---|
 | `state_dir` (`var`) | Shijhon's database, the snapshots taken before upgrades (`snapshots`), backups made with `shijhon backup` (`backups`), downloads under way and the cover cache |
-| `upgrade_snapshots` (on) | Before a start migrates the database to a newer schema, a checked copy of it goes into `snapshots` in `state_dir`, named for the schema it holds. Once it is complete, the newest snapshot of that schema and of the highest other schema are kept and older ones removed. When the copy cannot be written, the start migrates and starts without it and removes no snapshot to make room. The log says why, administrators see it on the dashboard until one dismisses it, and the notifications report it once ([upgrades](../deployment.md#upgrades)). Off: the database is migrated without a copy, and nothing is shown or reported. In the file or the environment only (`SHIJHON_UPGRADE_SNAPSHOTS`) |
+| `upgrade_snapshots` (on) | Before a start migrates the database to a newer schema, a checked copy of it goes into `snapshots` in `state_dir` ([upgrades](../deployment.md#upgrades), [in detail](advanced-deployment.md#snapshots-before-an-upgrade)). Off: the database is migrated without a copy, and nothing is shown or reported. In the file or the environment only (`SHIJHON_UPGRADE_SNAPSHOTS`) |
 | `log_level` (`INFO`), `log_debug` (`[]`) | The log level (`CRITICAL`, `FATAL`, `ERROR`, `WARNING`, `WARN`, `INFO`, `DEBUG` or `NOTSET`; case and surrounding spaces ignored); loggers logged at debug level whatever it says, e.g. `["shijhon.covers"]`: one line per catalog cover request |
 | `[server] host` (`127.0.0.1`), `port` (8765) | Where Shijhon listens; port 1–65535 |
 | `[server] dashboard` (on) | Off: `/shijhon/` goes to Navidrome like any other path |
@@ -74,11 +75,24 @@ Defaults in brackets. 0 switches a limit off where the table says so.
 | `[server] reverse_proxy_user_header` (`Remote-User`), `reverse_proxy_auth` (off) | Sign-in by a header from the reverse proxy ([advanced deployment](advanced-deployment.md#sign-in-by-the-reverse-proxy)) |
 | `[server] credential_cache_seconds` (60) | How long an accepted login is reused; finite and at least 0 (0 disables reuse) |
 | `[server] max_parsed_body_bytes` (1 MiB) | How much of a request body that is no form Shijhon reads; a larger one streams through to Navidrome. At least 0 (0 passes non-form bodies through) |
+| `[navidrome] socket` | Navidrome's Unix socket (its `Address = "unix:<path>"`), an absolute path, when Shijhon reaches it there. `url` must then be an `http://` address that names no machine to reach, such as `"http://navidrome.invalid"`: it gives the `Host` header of Shijhon's own requests (apps' requests keep theirs). With `ExtAuth.TrustedSources = "@"`, Navidrome trusts only that socket |
+| `[navidrome] artist_participations` (`false`) | Match Navidrome's `Subsonic.ArtistParticipations` setting for artist album counts in personal library views. Set both to `true` if artists should include albums on which they perform as a track artist. Artist indexes still list album artists, as Navidrome does |
 | `[navidrome] database_path` | Navidrome's database, read by the cleanup instead of the usage export ([advanced deployment](advanced-deployment.md#reading-navidromes-database-directly)). With both set, the export is read |
 | `[navidrome] purge_missing` | Set to `"never"` when Navidrome hides its configuration ([deployment.md](../deployment.md#what-shijhon-needs-from-navidrome)) |
 | `[navidrome] timeout_seconds` (30), `client_name` (`shijhon`) | Shijhon's own requests to Navidrome; timeout finite and greater than 0 |
 | `[placeholders] folder` (`_shijhon`) | The placeholder folder inside the library: a folder of its own, not the library itself |
 | `[placeholders] real_audio_accounts` (`[]`) | Navidrome user names (letter case does not matter) of accounts that see only songs whose audio is in the library, for a sound analyzer such as AudioMuse-AI ([how it works](../how-it-works.md#accounts-for-sound-analyzers)). Applies after a restart; `SHIJHON_PLACEHOLDERS__REAL_AUDIO_ACCOUNTS='["audiomuse"]'` in the environment |
+
+### Music imports
+
+The `[music_imports]` limits are in bytes, seconds or counts: `max_file_bytes`,
+`max_job_bytes`, `max_job_files`, `max_owner_jobs`, `max_owner_bytes`,
+`max_global_bytes`, `min_free_bytes`, `max_uploads`, `upload_seconds` and
+`validation_seconds` ([their defaults](../music-imports.md#bounds)). These settings are
+configured in TOML or the environment and take effect on restart. Existing files in the
+imports folder stay in place; the personal library setup records which account imported
+them and preserves other existing users' selections. Disabling uploads does not reset
+ownership or existing collection choices.
 
 ### `[delivery]`
 
@@ -119,6 +133,52 @@ account quotas; configure the limits to suit the account.
 | `dash_segments_at_once` (4) | A DASH song's segments fetched at the same time |
 | `dash_joins_at_once` (3) | DASH songs fetched or joined at the same time, for all listeners together. The songs being played never wait; more of the others wait their turn |
 | `dash_cache_mb` (1024) | DASH songs kept for seeks and later plays; past this size the least recently used go first. The newest is always kept |
+| `dash_quality_from` (`"any"`), `dash_quality_to` (`"lossless"`) | Of the qualities a DASH manifest offers, the highest in this range: `"128"`, `"192"`, `"256"`, `"320"` (kbit/s) or `"lossless"`; the lower end may also be `"any"`, and may not be above the upper. On the Playback page |
+| `keep_streamed_audio` (false) | Set as [configuration.md](../configuration.md#delivery) says. Off, a song's audio that Shijhon received in full while an app streamed it is only held for the play's seeks |
+
+### Audio quality in detail
+
+For a listener with a minimum quality
+([choosing it](../configuration.md#audio-quality)):
+
+- A song whose file is below it - an owned or imported file, or a catalog song's
+  downloaded audio - plays from the add-ons under its own ID when they have the recording
+  (found as any catalog song is: its ISRC, else its title, artist and length). An add-on
+  whose audio tells a quality below the minimum too (an MP3's bitrate, say) is passed
+  over for the next one, in the add-ons' usual order and time; when none has it well
+  enough, the file plays. A file that meets the minimum plays as it is, with nothing
+  asked. While no one has a minimum (`quality_default` is "any" and no one chose
+  another), a song with its own file is Navidrome's as before, without even a credential
+  check - unless a play of it from the add-ons that began earlier is under way; otherwise
+  its stream checks the listener's credentials once. A play from the add-ons keeps their
+  audio for its later ranges, also when the file changes meanwhile (an upgrade) or the
+  minimum does, to none too; the next play from the start follows the minimum as it is
+  then.
+- Through the OpenSubsonic transcoding extension, Navidrome decides from the file as
+  always. When the app asks for the song as it is, with no bitrate limit, and Navidrome
+  answers with direct play, the stream is the add-ons' audio, in a format the app plays
+  as it is by its profile (FLAC for an app that plays only MP3 is passed over). A decision
+  with a bitrate limit, or one that converts, plays the file. A later range of such a
+  stream keeps the add-ons' audio with the decision it began with (also after an upgrade,
+  and whatever decisions the app asks for afterwards: they decide its next plays) or with
+  another one Navidrome accepts for the same app profile; any other token is Navidrome's
+  to answer.
+- A file below it does not play for a catalog song (a placeholder an owned recording
+  plays for, or a catalog song not in the library yet): the add-ons do, and the file only
+  when they have nothing. A download or conversion of such a catalog song puts the
+  add-ons' audio in the library instead of a copy of that file.
+- Accounts that get real audio only (`[placeholders] real_audio_accounts`) always get the
+  files.
+- Share links and the jukebox play the file: a share link is opened by someone without an
+  account, so no one's minimum applies, and the jukebox plays on the server's own speakers
+  straight from the library's files.
+
+The quality of a file is Navidrome's (its format, bitrate, sample rate and bit depth); a
+file whose quality Navidrome does not know is never passed over. The add-ons' audio is
+taken as good enough unless its first bytes tell otherwise (an M4A's bitrate is not read).
+An upgrade of an imported song fetches the add-ons' audio as the play was, passing over
+audio below the person's minimum
+([music-imports.md](../music-imports.md#upgrading-your-imported-songs)).
 
 ### `[catalog]` and `[search]`
 
@@ -133,6 +193,7 @@ set in the file or the environment.
 | `cover_sizes` | Covers are fetched at the next of these sizes up from the one asked for. Empty: the exact size |
 | `prefetch_covers` (50), `prefetch_parallel` (4), `prefetch_burst_pages` (4), `prefetch_burst_seconds` (10) | The covers of the first catalog items of an artist page or search result are fetched ahead, this many at a time. An app shown that many pages within that time gets none meanwhile. 0 covers: off |
 | `new_releases_most_played` (25), `new_releases_artists_per_day` (150) | For people who turned [new releases](../how-it-works.md#new-releases) on: how many of their most played artists are followed besides the artists of their favorites (0: their favorites alone), and how many artists one person's daily check asks the catalog about. Both apply at once |
+| `artist_lists_catalogs` (none) | More catalogs asked for the lists of `artist_lists`, after the catalog in use: installed catalog adapters by name, such as `["musicbrainz"]`. Each is built with its adapter's default settings, used for these lists only and asked at the library pass's pace; one that is not installed or cannot be built is logged at startup and passed over ([how it works](../how-it-works.md#each-artist-of-a-joined-credit)). Applies after a restart. Under Advanced settings |
 | `[search] min_query_length` (3) | Shorter searches get only Navidrome's answer |
 | `[search] artist_pages` (on) | Catalog releases on your library's artist pages |
 | `[search] discography_max_age_days` (7) | Saved artist discographies, top songs and the lists of radios from catalog items are refreshed in the background after this |
@@ -140,6 +201,13 @@ set in the file or the environment.
 | `[search] guard_searches` (60), `guard_window_seconds` (20), `guard_pause_seconds` (60) | An app that sends this many different searches within the window gets only the library's answers for the pause |
 | `[search] song_only_additions` (on), `song_settle_seconds` (0.15) | Catalog results for searches that ask for songs only, and how long such a search waits before the catalog is asked |
 | `[search] song_burst_searches` (4), `song_burst_seconds` (0.5), `song_burst_pause_seconds` (2) | This many different song-only searches within this time are a burst, answered from the library until the app has been quiet for the pause |
+
+With `SHIJHON_ARTIST_LISTS_REPORT=1` in Shijhon's environment, `artist_lists` logs once
+a start what it would at most write, by source, and why other songs are left; nothing is
+written or recorded, the credit repair asks the other catalogs and the add-on catalogs
+nothing, and music imports are published as they are (what an earlier stop left half done
+is still put right). It is meant for a look before the first writes; remove it to let them
+run.
 
 ### `[fill]`
 
@@ -159,13 +227,26 @@ environment, `SHIJHON_NOTIFICATIONS__URLS` holds the addresses, separated by spa
 notification has 20 seconds at its addresses, and one is sent at a time. Shijhon uses
 Apprise as a library: the addresses are passed to it directly, with no Apprise
 configuration files, no attachments and no plugins loaded from disk, and Apprise keeps
-nothing on disk. Several states that begin together, in imports or playlist refreshes,
-arrive as one notification, and at most 256 wait to be sent at once.
+nothing on disk. `shijhon saved` hides the addresses. An address Apprise cannot use is
+refused when it is saved or read, and the message names its place in the list, not the
+address.
+
+What lasts is kept in Shijhon's database, so a restart sends nothing again. Nothing is
+sent when a state ends. A state that began while no address was set is not sent later.
+Imports and playlist refreshes are looked at once a minute, and several that begin
+together arrive as one notification; at most 256 wait to be sent at once. An upgrade
+without its snapshot is looked at when Shijhon starts, so one that
+`shijhon fills-undo --apply` made is sent at the next start. Its notification names the
+schemas and why, such as how much space the snapshot needed, and no path.
 
 ### `[listenbrainz]`
 
 Also on the ListenBrainz page; the settings are listed in
-[configuration.md](../configuration.md#listenbrainz). They apply at once. Shijhon sends
+[configuration.md](../configuration.md#listenbrainz), except `timeout_seconds` (4): the
+longest one request to ListenBrainz may take, its wait for a turn and its answer together.
+They apply at once. A radio for a person with Last.fm never waits for ListenBrainz at all.
+The token is hidden by `shijhon saved`, and a token ListenBrainz refuses is said once in
+the log, without the token itself. Shijhon sends
 ListenBrainz at most one request a second, for radio, discovery mixes and agents
 together, as ListenBrainz asks of applications. `timeout_seconds` bounds a request's wait
 for its turn and its answer together; a request that cannot get its turn in time is given
@@ -192,7 +273,7 @@ not known yet is saved under its plain key; its ListenBrainz part, added in the 
 (two lists at a time), is saved under the key ending in `:both`, which such a person is
 shown from then on; that background work asks the catalog at background urgency and is not
 started, nor goes on to the catalog, while the radio or the catalog rests after a failure
-or the client syncs or is in a burst. A list made again with Last.fm alone forgets its
+or the app syncs or is in a burst. A list made again with Last.fm alone forgets its
 `:both` list, a `:both` list is not saved from an answer found while the token was refused,
 and a changed token (noted in the saved mark `radio:listenbrainz:token`, so also across
 restarts) forgets every radio list made with ListenBrainz. A discovery mix asks about its twelve seed songs in one lookup and then
@@ -202,7 +283,36 @@ Last.fm's last answer.
 ### `[audiomuse]`
 
 Also on the Sound analysis page. [Sound analysis](../sound-analysis.md) says what it adds and how to
-set it up; the settings are listed in [configuration.md](../configuration.md#audiomuse).
+set it up; the main settings are listed in
+[configuration.md](../configuration.md#audiomuse). Its token goes only to the host
+(scheme, host and port) it was set up with: one in the file or the environment to the
+file's or environment's `url`, one saved on the dashboard to the address it was entered
+for. When the address in use is on another host, the token is not used until it is
+entered again.
+
+| Setting | What it sets |
+|---|---|
+| `timeout_seconds` (20) | The longest one request to it may take |
+| `sync_hours` (6) | How often Shijhon reads which songs are analyzed, and their analysis (it also does once after starting, if the last time was longer ago) |
+
 Shijhon asks AudioMuse-AI for the songs it has analyzed 1000 at a time, and for their
 analysis 100 at a time with two requests at once; with the requests for playlists, at most
 four are under way together.
+
+## The dashboard and the command line in detail
+
+- On the Library page, ticking several albums, or all a list holds under the search,
+  fills them from their most likely release, keeps them or matches them again in one go:
+  the albums are done one after another in the background, the page shows how far it is,
+  and stopping leaves the others as they are. Such an action takes the albums as the page
+  showed them: one whose match has changed since is left alone and counted, and a page
+  loaded more than half an hour ago is loaded anew first.
+- `shijhon matches` reads only Shijhon's database, so it also lists albums of other
+  catalogs and regions, and ones no longer in the library.
+- `shijhon navidrome-accounts` tries again for `--wait` seconds what goes wrong for a
+  moment (Navidrome starting, refusing logins briefly); it then exits with status 1, and
+  with 2 for what needs changing first. The NixOS service runs it before Shijhon.
+- `shijhon carry-over --account <name>` gives the albums once: running it again for the
+  same account changes nothing, and another account needs `--replace`. It needs Navidrome
+  (to look the account up) and a database this Shijhon has started on, and can run while
+  Shijhon runs.
